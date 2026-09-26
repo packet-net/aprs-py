@@ -481,7 +481,7 @@ def _position(s: str, destination: str, ctx: Ctx) -> AprsData:
         else:
             ctx.fail(C.MALFORMED_TIMESTAMP)
     p = read_position(s, pos, ctx)
-    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx, report="position")
+    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx)
     return PositionReport(timestamp=timestamp, messaging=messaging, **fields)
 
 
@@ -504,7 +504,7 @@ def _compressed_cs(p: Pos, ctx: Ctx, fields: dict[str, Any]) -> str | None:
     return "course"
 
 
-def positioned_rest(s: str, pos: int, p: Pos, ctx: Ctx, *, report: str, name: str | None = None) -> dict[str, Any]:
+def positioned_rest(s: str, pos: int, p: Pos, ctx: Ctx) -> dict[str, Any]:
     """Everything after the position: data extension, weather, comment elements."""
     fields: dict[str, Any] = {
         "latitude": p.lat,
@@ -665,7 +665,7 @@ def _object(s: str, destination: str, ctx: Ctx) -> AprsData:
     else:
         ctx.defect(C.OBJECT_WITHOUT_TIMESTAMP)
     p = read_position(s, pos, ctx)
-    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx, report="object", name=name)
+    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx)
     return ObjectReport(name=name, killed=killed, timestamp=timestamp, **fields)
 
 
@@ -683,7 +683,7 @@ def _item(s: str, destination: str, ctx: Ctx) -> AprsData:
     killed = s[mark] == "_"
     pos = mark + 1
     p = read_position(s, pos, ctx)
-    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx, report="item", name=name)
+    fields = positioned_rest(s, pos + (13 if p.compressed else 19), p, ctx)
     return ItemReport(name=name, killed=killed, **fields)
 
 
@@ -889,10 +889,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx,
         symbol=p.symbol,
         late_extensions=ext_kind not in ("phg", "range", "dfs"),
-        mic_e=True,
     )
-    if parts.altitude_feet is not None:
-        pass
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(
         mic_e_message=MicEMessage(message),

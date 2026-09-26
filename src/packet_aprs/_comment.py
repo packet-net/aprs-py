@@ -283,20 +283,11 @@ def lift_comment(
     symbol: Symbol | None,
     late_extensions: bool = True,
     area: object = None,
-    mic_e: bool = False,
-    weather: bool = False,
-    positionless: bool = False,
 ) -> CommentParts:
     """Lift the structured elements out of a comment; see the module docstring for the order."""
     parts = CommentParts()
-    if positionless:
-        if text[:1] in (" ", "/"):
-            text = text[1:]
-        parts.comment = text
-        return parts
     text = lift_telemetry_dao(text, parts)
-    if not weather:
-        text = _lift_rest(text, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
+    text = _lift_rest(text, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
     if text[:1] in (" ", "/"):
         text = text[1:]
     parts.comment = text
@@ -322,43 +313,42 @@ def _lift_rest(
     text: str, ctx: Ctx, parts: CommentParts, *, symbol: Symbol | None, late_extensions: bool, area: object
 ) -> str:
     """Lift the altitude, braces, a late data extension and a voice frequency."""
-    if True:
-        if "/A=" in text:
-            m = _ALTITUDE.search(text)
+    if "/A=" in text:
+        m = _ALTITUDE.search(text)
+        if m:
+            value = int(m.group(1))
+            parts.fields["altitude_feet"] = value
+            parts.altitude_feet = value
+            text = text[: m.start()] + text[m.end() :]
+    if "{" in text and symbol is not None:
+        is_signpost = symbol.is_alternate and symbol.code == "m"
+        is_line = isinstance(area, AreaObject) and area.shape in (
+            AreaShape.LINE_DOWN_RIGHT,
+            AreaShape.LINE_DOWN_LEFT,
+        )
+        if is_signpost or is_line:
+            m = _BRACES.search(text)
             if m:
-                value = int(m.group(1))
-                parts.fields["altitude_feet"] = value
-                parts.altitude_feet = value
-                text = text[: m.start()] + text[m.end() :]
-        if "{" in text and symbol is not None:
-            is_signpost = symbol.is_alternate and symbol.code == "m"
-            is_line = isinstance(area, AreaObject) and area.shape in (
-                AreaShape.LINE_DOWN_RIGHT,
-                AreaShape.LINE_DOWN_LEFT,
-            )
-            if is_signpost or is_line:
-                m = _BRACES.search(text)
-                if m:
-                    content = m.group(1)
-                    if is_signpost:
-                        parts.fields["signpost"] = content
-                        text = text[: m.start()] + text[m.end() :]
-                    elif content.isascii() and content.isdigit() and isinstance(area, AreaObject):
-                        parts.fields["area"] = AreaObject(
-                            area.shape, area.color, area.lat_offset, area.lon_offset, int(content)
-                        )
-                        text = text[: m.start()] + text[m.end() :]
-        if late_extensions:
-            late = _late_extension(text)
-            if late is not None and ctx.tolerates(C.DATA_EXTENSION_IN_COMMENT):
-                ctx.warn(C.DATA_EXTENSION_IN_COMMENT)
-                key, late_value, start, end = late
-                parts.fields[key] = late_value
-                text = text[:start] + text[end:]
-        freq = _frequency(text)
-        if freq is not None:
-            parts.fields["frequency"] = freq[0]
-            text = text[freq[1] :]
+                content = m.group(1)
+                if is_signpost:
+                    parts.fields["signpost"] = content
+                    text = text[: m.start()] + text[m.end() :]
+                elif content.isascii() and content.isdigit() and isinstance(area, AreaObject):
+                    parts.fields["area"] = AreaObject(
+                        area.shape, area.color, area.lat_offset, area.lon_offset, int(content)
+                    )
+                    text = text[: m.start()] + text[m.end() :]
+    if late_extensions:
+        late = _late_extension(text)
+        if late is not None and ctx.tolerates(C.DATA_EXTENSION_IN_COMMENT):
+            ctx.warn(C.DATA_EXTENSION_IN_COMMENT)
+            key, late_value, start, end = late
+            parts.fields[key] = late_value
+            text = text[:start] + text[end:]
+    freq = _frequency(text)
+    if freq is not None:
+        parts.fields["frequency"] = freq[0]
+        text = text[freq[1] :]
     return text
 
 

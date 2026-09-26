@@ -34,7 +34,7 @@ class Device:
 
     @property
     def class_description(self) -> str:
-        """The device class in words, e.g. ``"Hand-held radio"``' shown name ``"HT"``."""
+        """The device class as the database shows it, e.g. ``"HT"`` or ``"Mobile app"``."""
         return _db.CLASSES.get(self.device_class, "")
 
     def __str__(self) -> str:
