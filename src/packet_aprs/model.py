@@ -576,7 +576,7 @@ class Beam:
     @property
     def heading_degrees(self) -> int | None:
         c = self.heading_code
-        if c.isdigit():
+        if "0" <= c <= "9":
             return int(c) * 10
         if "A" <= c <= "Z":
             return (ord(c) - ord("A") + 10) * 10

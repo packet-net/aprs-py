@@ -7,7 +7,6 @@ when they are not UTF-8 (``non-utf8-text``).
 
 from __future__ import annotations
 
-import contextlib
 import re
 from typing import Any, NoReturn
 
@@ -1036,7 +1035,7 @@ def _directed_query(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
     return DirectedQuery(addressee, qtype, target)
 
 
-_COEFF = re.compile(r"\s*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\Z")
+_COEFF = re.compile(r" *(-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?) *\Z")
 
 
 def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
@@ -1082,7 +1081,7 @@ def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
 
 
 def _number(text: str) -> float:
-    if re.fullmatch(r"-?\d+", text):
+    if re.fullmatch(r"-?[0-9]+", text):
         return int(text)
     return float(text)
 
@@ -1138,7 +1137,7 @@ def _status_locator(body: str) -> tuple[str, Symbol, int] | None:
 
 # ------------------------------------------------------------------ telemetry
 
-_TELEMETRY_NUMBER = re.compile(r"\s*(-?(?:\d+\.?\d*|\.\d+))\s*\Z")
+_TELEMETRY_NUMBER = re.compile(r" *(-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)) *\Z")
 
 
 def _telemetry(s: str, destination: str, ctx: Ctx) -> AprsData:
@@ -1271,10 +1270,12 @@ def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
     return NmeaSentence(sentence, has_checksum, **values)
 
 
+_DECIMAL = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+
+
 def _nmea_float(fields: list[str], i: int, key: str, values: dict[str, Any]) -> None:
-    if len(fields) > i and fields[i]:
-        with contextlib.suppress(ValueError):
-            values[key] = float(fields[i])
+    if len(fields) > i and _DECIMAL.match(fields[i]):
+        values[key] = float(fields[i])
 
 
 def _nmea_time(fields: list[str], i: int, values: dict[str, Any]) -> None:
@@ -1294,11 +1295,10 @@ def _nmea_position(fields: list[str], i: int, values: dict[str, Any]) -> None:
     if len(fields) <= i + 3:
         return
     lat, ns, lon, ew = fields[i : i + 4]
-    try:
-        lat_value = float(lat)
-        lon_value = float(lon)
-    except ValueError:
+    if not (_DECIMAL.match(lat) and _DECIMAL.match(lon)):
         return
+    lat_value = float(lat)
+    lon_value = float(lon)
     if ns not in ("N", "S") or ew not in ("E", "W"):
         return
     la = int(lat_value // 100) + (lat_value % 100) / 60

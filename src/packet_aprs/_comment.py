@@ -343,7 +343,7 @@ def _lift_rest(
                     if is_signpost:
                         parts.fields["signpost"] = content
                         text = text[: m.start()] + text[m.end() :]
-                    elif content.isdigit() and isinstance(area, AreaObject):
+                    elif content.isascii() and content.isdigit() and isinstance(area, AreaObject):
                         parts.fields["area"] = AreaObject(
                             area.shape, area.color, area.lat_offset, area.lon_offset, int(content)
                         )

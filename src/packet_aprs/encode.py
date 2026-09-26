@@ -87,6 +87,17 @@ _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
 
 
+def _same_number(text: str, value: float) -> bool:
+    """Whether a number kept as sent still says ``value``, so it can be written back."""
+    stripped = text.strip(" ")
+    if not stripped or not all(c in "0123456789.-+eE" for c in stripped):
+        return False
+    try:
+        return _util.number_equal(float(stripped), float(value))
+    except ValueError:
+        return False
+
+
 def _refuse(why: str) -> EncodeError:
     return EncodeError(why)
 
@@ -566,7 +577,11 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     if w.rain_raw is not None:
         out.append("#" + num(w.rain_raw, 3))
     for extra in w.extra:
-        if len(extra.letter) != 1 or not extra.letter.isalpha() or extra.letter in "cgtrpPhbLls":
+        if (
+            len(extra.letter) != 1
+            or not (extra.letter.isascii() and extra.letter.isalpha())
+            or extra.letter in "cgtrpPhbLls"
+        ):
             raise _refuse(f"weather extra field letter {extra.letter!r}")
         out.append(extra.letter + extra.value)
     if w.software is not None or w.unit is not None:
@@ -687,6 +702,15 @@ _MESSAGE_BITS: dict[MicEMessage, tuple[str, int]] = {
 
 def mic_e_destination(data: MicEReport) -> str:
     """The destination address a Mic-E report's latitude, message and flags go into."""
+    try:
+        return _mic_e_destination(data)
+    except EncodeError:
+        raise
+    except (ValueError, OverflowError) as e:
+        raise _refuse(f"cannot encode the Mic-E destination: {e}") from e
+
+
+def _mic_e_destination(data: MicEReport) -> str:
     if data.mic_e_message not in _MESSAGE_BITS:
         raise _refuse("a Mic-E message that mixes standard and custom bits has no defined meaning")
     if not -90 <= data.latitude <= 90 or not -180 <= data.longitude <= 180:
@@ -915,7 +939,7 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
             raise _refuse("EQNS. carries 1-15 coefficients")
         texts = data.coefficients_text
         if len(texts) != len(data.coefficients) or any(
-            not _util.number_equal(float(t), float(v)) for t, v in zip(texts, data.coefficients, strict=False)
+            not _same_number(t, v) for t, v in zip(texts, data.coefficients, strict=False)
         ):
             texts = tuple(_util.number_text(v) for v in data.coefficients)
         body = "EQNS." + ",".join(texts)
@@ -988,7 +1012,7 @@ def _telemetry(data: TelemetryReport) -> bytes:
         t = texts[i] if i < len(texts) else None
         if v is None:
             values.append("")
-        elif t is not None and t.strip() and _util.number_equal(float(t), float(v)):
+        elif t is not None and _same_number(t, v):
             values.append(t)
         elif isinstance(v, int) or float(v).is_integer():
             iv = int(v)
@@ -1158,7 +1182,13 @@ def encode_info(data: AprsData) -> bytes:
     encoder = _ENCODERS.get(type(data))
     if encoder is None:
         raise _refuse(f"{type(data).__name__} cannot be encoded")
-    return encoder(data)
+    try:
+        return encoder(data)
+    except EncodeError:
+        raise
+    except (ValueError, OverflowError) as e:
+        # a value no packet can hold, such as a NaN latitude
+        raise _refuse(f"cannot encode {type(data).__name__}: {e}") from e
 
 
 def build_packet(
