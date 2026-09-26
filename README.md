@@ -3,26 +3,16 @@
 [![CI](https://github.com/packet-net/aprs-py/actions/workflows/ci.yml/badge.svg)](https://github.com/packet-net/aprs-py/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/packet-aprs)](https://pypi.org/project/packet-aprs/)
 
-An APRS (Automatic Packet Reporting System) decoder and encoder for Python, checked against the
-language-neutral conformance vectors in [packet-net/aprs-vectors](https://github.com/packet-net/aprs-vectors).
+An APRS (Automatic Packet Reporting System) decoder and encoder for Python, checked against the language-neutral conformance vectors in [packet-net/aprs-vectors](https://github.com/packet-net/aprs-vectors).
 
-- Decodes TNC2 / APRS-IS lines (`str` or `bytes`), AX.25 UI frames and KISS frames, into a packet
-  with its header, the raw information field, the decoded data and diagnostics.
-- Every data type in the APRS 1.2 specification: positions (plain, compressed, with timestamps,
-  weather, DF, storms, area objects), Mic-E, objects, items, messages, acks, bulletins, telemetry
-  and its metadata, status, queries, capabilities, NMEA, raw weather, third-party, user-defined.
-- Lenient by default, strict on request, and every tolerable defect can be accepted or rejected on
-  its own.
-- An encoder for every type that writes only what the specification allows, and a `Station`
-  builder for the packets an application typically sends.
-- Every symbol by name, and device identification from the
-  [aprs-deviceid](https://github.com/aprsorg/aprs-deviceid) database.
+- Decodes TNC2 / APRS-IS lines (`str` or `bytes`), AX.25 UI frames and KISS frames, into a packet with its header, the raw information field, the decoded data and diagnostics.
+- Every data type in the APRS 1.2 specification: positions (plain, compressed, with timestamps, weather, DF, storms, area objects), Mic-E, objects, items, messages, acks, bulletins, telemetry and its metadata, status, queries, capabilities, NMEA, raw weather, third-party, user-defined.
+- Lenient by default, strict on request, and every tolerable defect can be accepted or rejected on its own.
+- An encoder for every type that writes only what the specification allows, and a `Station` builder for the packets an application typically sends.
+- Every symbol by name, and device identification from the [aprs-deviceid](https://github.com/aprsorg/aprs-deviceid) database.
 - Pure Python 3.10+, no dependencies, fully typed.
 
-It is one of several independent implementations that cross-check each other: Packet.Aprs (C#,
-in [packet-net/packet.net](https://github.com/packet-net/packet.net)) and packet-aprs for Rust
-([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)) pass the same vectors and agree
-with this one on every packet of a 6.9-million-packet APRS-IS capture.
+It is one of several independent implementations that cross-check each other: Packet.Aprs (C#, in [packet-net/packet.net](https://github.com/packet-net/packet.net)) and packet-aprs for Rust ([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)) pass the same vectors and agree with this one on every packet of a 6.9-million-packet APRS-IS capture.
 
 ## Install
 
@@ -48,9 +38,7 @@ Open Source APRSdroid
 
 ```
 
-Fields keep the units APRS sends, with the unit in the name (`speed_knots`, `altitude_feet`,
-`temperature_f`). `packet.data` is always there: when nothing could be decoded it is an
-`Unrecognized`, and the diagnostics say why.
+Fields keep the units APRS sends, with the unit in the name (`speed_knots`, `altitude_feet`, `temperature_f`). `packet.data` is always there: when nothing could be decoded it is an `Unrecognized`, and the diagnostics say why.
 
 ```python
 >>> packet = aprs.decode("N0CALL>APZ001:@092345z4903.50N/07201.75W_220/004g005t-07r000p000P000h50b09900wRSW")
@@ -60,8 +48,7 @@ Fields keep the units APRS sends, with the unit in the name (`speed_knots`, `alt
 
 ```
 
-Mic-E reports carry half their position in the destination address; the device that sent one is
-identified by its type code and suffix:
+Mic-E reports carry half their position in the destination address; the device that sent one is identified by its type code and suffix:
 
 ```python
 >>> packet = aprs.decode("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
@@ -83,9 +70,7 @@ M0LTE-9>APZ001,M0LTE-1*,WIDE2-1:>hello
 
 ## Defects: lenient, strict, or in between
 
-Real packets have defects. By default the decoder accepts every defect it can make sense of,
-with a warning; a strict decoder rejects the packet instead. Each defect has a code from the
-vectors' `codes.json`, and each tolerable one can be accepted or rejected on its own.
+Real packets have defects. By default the decoder accepts every defect it can make sense of, with a warning; a strict decoder rejects the packet instead. Each defect has a code from the vectors' `codes.json`, and each tolerable one can be accepted or rejected on its own.
 
 ```python
 >>> line = "N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95n/07243.20w#phg6230/ Easthampton MA"
@@ -105,9 +90,7 @@ A header that cannot be read at all raises `HeaderError`, whose `diagnostics` sa
 
 ## Building packets
 
-A `Station` holds what stays the same from packet to packet, and has a method for each kind of
-packet an application typically sends. Each returns an encoded `Packet`: `str(packet)` is its
-TNC2 line, `packet.to_kiss()` its KISS frame.
+A `Station` holds what stays the same from packet to packet, and has a method for each kind of packet an application typically sends. Each returns an encoded `Packet`: `str(packet)` is its TNC2 line, `packet.to_kiss()` its KISS frame.
 
 ```python
 >>> from packet_aprs import Station, Symbol
@@ -134,15 +117,11 @@ M0LTE-13>APZ001::M0LTE-13 :PARM.Battery,Temp
 
 ```
 
-The destination defaults to `APZ001`, the experimental tocall; give your application's own with
-`Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet,
-and for weather mph, degrees Fahrenheit, inches and millibars.
+The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars.
 
 ## Encoding
 
-Any decoded or constructed data can be encoded. The encoder writes only what the specification
-allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a
-comment that would read back as something else gets a `/` delimiter, or is refused.
+Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused.
 
 ```python
 >>> from packet_aprs import PositionReport, encode_info
@@ -160,13 +139,11 @@ packet_aprs.errors.EncodeError: message text is over 67 characters
 
 ```
 
-`build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E
-report's destination.
+`build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E report's destination.
 
 ## Symbols
 
-Every symbol the APRS symbol tables define is available by name, with its description; the
-names match Packet.Aprs's.
+Every symbol the APRS symbol tables define is available by name, with its description; the names match Packet.Aprs's.
 
 ```python
 >>> Symbol.CAR, Symbol.WEATHER_STATION, Symbol.DIGIPEATER
@@ -182,8 +159,7 @@ Symbol('/f')
 
 ## The neutral form
 
-`packet_aprs.neutral` converts data to and from the conformance vectors' neutral form: plain
-dicts and lists, ready for JSON.
+`packet_aprs.neutral` converts data to and from the conformance vectors' neutral form: plain dicts and lists, ready for JSON.
 
 ```python
 >>> from packet_aprs.neutral import to_neutral
@@ -194,23 +170,16 @@ dicts and lists, ready for JSON.
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check
-their README defines for every case, one parametrised test per check with the case id as the
-test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and
-the encode cases. All 5,508 checks pass. A check that should be skipped goes in
-`tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and the encode cases. All 5,594 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
-`tools/diff_dump.py` decodes a whole capture and writes the JSONL that the vectors'
-`tools/compare.py` reads, spread over all cores (a 6.9-million-line capture takes about two
-minutes):
+`tools/diff_dump.py` decodes a whole capture and writes the JSONL that the vectors' `tools/compare.py` reads, spread over all cores (a 6.9-million-line capture takes about two minutes):
 
 ```sh
 python3 tools/diff_dump.py lines.hex.gz py.jsonl.gz
 python3 vectors/tools/compare.py py.jsonl.gz rs.jsonl.gz --names Python Rust --lines lines.hex.gz
 ```
 
-On the 6,879,893-packet APRS-IS capture the other implementations were compared on, this one
-agrees with both on every packet: lenient and strict decoding and re-encoding.
+On the 6,879,893-packet APRS-IS capture the other implementations were compared on, this one agrees with both on every packet: lenient and strict decoding and re-encoding.
 
 ## Development
 
@@ -228,5 +197,4 @@ mypy
 
 ## Licence
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). The device identification data comes from the
-aprs-deviceid database, under CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+AGPL-3.0-or-later; see [LICENSE](LICENSE). The device identification data comes from the aprs-deviceid database, under CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
