@@ -8,7 +8,7 @@ nothing is converted. A field that was not sent is ``None`` (or ``""``, ``()`` o
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
@@ -75,6 +75,21 @@ __all__ = [
     "Weather",
     "WeatherExtra",
 ]
+
+
+def _compact_repr(self: object) -> str:
+    """The class name and the fields that differ from their defaults."""
+    parts = []
+    for f in fields(self):  # type: ignore[arg-type]
+        if not f.repr:
+            continue
+        value = getattr(self, f.name)
+        if f.default is not MISSING and value == f.default and type(value) is type(f.default):
+            continue
+        if f.default_factory is not MISSING and value == f.default_factory():
+            continue
+        parts.append(f"{f.name}={value!r}")
+    return f"{type(self).__name__}({', '.join(parts)})"
 
 
 class _Enum(str, Enum):
@@ -262,6 +277,9 @@ class Timestamp:
 
     def __str__(self) -> str:
         return self.text
+
+    def __repr__(self) -> str:
+        return f"Timestamp({self.text!r})"
 
     @classmethod
     def dhm(cls, day: int, hour: int, minute: int, *, zulu: bool = True) -> Timestamp:
@@ -464,9 +482,11 @@ class DfBearing:
     quality: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Storm:
     """Storm data (APRS12c ch. 12)."""
+
+    __repr__ = _compact_repr
 
     type: StormType
     sustained_wind_knots: int | None = None
@@ -494,7 +514,7 @@ class CommentTelemetry:
     digital: int | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class VoiceFrequency:
     """A voice frequency in a comment (APRS12c ch. 18): ``146.520MHz T100 -060 R25m``.
 
@@ -502,6 +522,8 @@ class VoiceFrequency:
     kilometres when ``range_km``. ``narrow`` is set by a lower-case tone letter.
     ``ten_khz_resolution`` records the ``FFF.FF MHz`` form.
     """
+
+    __repr__ = _compact_repr
 
     mhz: float
     tone: ToneType | None = None
@@ -521,9 +543,11 @@ class WeatherExtra:
     value: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Weather:
     """Weather data, in the units sent. A field left ``None`` was not sent, or sent as unknown."""
+
+    __repr__ = _compact_repr
 
     wind_direction_degrees: int | None = None
     wind_speed_mph: float | None = None
@@ -571,14 +595,16 @@ class Footprint:
 # ---------------------------------------------------------------- data types
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class AprsData:
     """Base class of every decoded data type. ``kind`` is the neutral form's ``type``."""
 
     kind: ClassVar[str] = ""
 
+    __repr__ = _compact_repr
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+
+@dataclass(frozen=True, slots=True, kw_only=True, repr=False)
 class PositionedData(AprsData):
     """The fields positions, Mic-E reports, objects and items share.
 
@@ -612,7 +638,7 @@ class PositionedData(AprsData):
     comment: str = ""
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, slots=True, kw_only=True, repr=False)
 class PositionReport(PositionedData):
     """A position report (``!``, ``=``, ``/``, ``@``). ``messaging``: the station can message."""
 
@@ -621,7 +647,7 @@ class PositionReport(PositionedData):
     messaging: bool = False
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, slots=True, kw_only=True, repr=False)
 class MicEReport(PositionedData):
     """A Mic-E report, whose position is split between the destination and the information.
 
@@ -641,7 +667,7 @@ class MicEReport(PositionedData):
     destination_ssid: int = 0
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, slots=True, kw_only=True, repr=False)
 class ObjectReport(PositionedData):
     """An object report (``;``). ``killed``: the object has been removed."""
 
@@ -651,7 +677,7 @@ class ObjectReport(PositionedData):
     timestamp: Timestamp | None = None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, slots=True, kw_only=True, repr=False)
 class ItemReport(PositionedData):
     """An item report (``)``). ``killed``: the item has been removed."""
 
@@ -660,7 +686,7 @@ class ItemReport(PositionedData):
     killed: bool = False
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Message(AprsData):
     """A message to one station. ``message_id`` asks for an ack; ``reply_ack`` is the
     reply-ack for the other station's message (``""``: reply-ack capable, nothing to ack)."""
@@ -672,7 +698,7 @@ class Message(AprsData):
     reply_ack: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Ack(AprsData):
     """An acknowledgement of message ``acked_id``."""
 
@@ -682,7 +708,7 @@ class Ack(AprsData):
     reply_ack: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Reject(AprsData):
     """A rejection of message ``rejected_id``."""
 
@@ -692,7 +718,7 @@ class Reject(AprsData):
     reply_ack: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Bulletin(AprsData):
     """A bulletin, announcement or group bulletin (addressee ``BLN...``)."""
 
@@ -716,7 +742,7 @@ class Bulletin(AprsData):
         return self.identifier.isalpha() and not self.group
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class NwsBulletin(AprsData):
     """A National Weather Service bulletin (addressee ``NWS-...``)."""
 
@@ -726,7 +752,7 @@ class NwsBulletin(AprsData):
     message_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TelemetryNames(AprsData):
     """Telemetry parameter names (``PARM.``), sent as a message to the telemetry station."""
 
@@ -736,7 +762,7 @@ class TelemetryNames(AprsData):
     message_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TelemetryUnits(AprsData):
     """Telemetry units and labels (``UNIT.``)."""
 
@@ -746,7 +772,7 @@ class TelemetryUnits(AprsData):
     message_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TelemetryCoefficients(AprsData):
     """Telemetry equation coefficients (``EQNS.``): a, b, c for each analog channel in turn.
 
@@ -761,7 +787,7 @@ class TelemetryCoefficients(AprsData):
     coefficients_text: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TelemetryBits(AprsData):
     """Telemetry bit sense and project title (``BITS.``)."""
 
@@ -772,7 +798,7 @@ class TelemetryBits(AprsData):
     message_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class DirectedQuery(AprsData):
     """A query sent as a message to one station (``?APRSP``, ``?APRSHN0QBF``...)."""
 
@@ -782,7 +808,7 @@ class DirectedQuery(AprsData):
     target: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class StatusReport(AprsData):
     """A status report (``>``), optionally with a timestamp, or a grid locator and symbol."""
 
@@ -794,7 +820,7 @@ class StatusReport(AprsData):
     beam: Beam | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TelemetryReport(AprsData):
     """A telemetry report (``T#``). ``analog`` values are ``None`` for an empty channel.
 
@@ -810,7 +836,7 @@ class TelemetryReport(AprsData):
     analog_text: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class PositionlessWeather(AprsData):
     """A positionless weather report (``_``), with its month/day/hour/minute timestamp."""
 
@@ -820,7 +846,7 @@ class PositionlessWeather(AprsData):
     comment: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class RawWeather(AprsData):
     """Raw weather station data, kept as text (obsolete formats)."""
 
@@ -829,7 +855,7 @@ class RawWeather(AprsData):
     data: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class NmeaSentence(AprsData):
     """A raw NMEA sentence (``$``), without the ``$``, and what could be read from it."""
 
@@ -846,7 +872,7 @@ class NmeaSentence(AprsData):
     waypoint: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class MaidenheadBeacon(AprsData):
     """A Maidenhead locator beacon (``[IO91SX]``, obsolete)."""
 
@@ -855,7 +881,7 @@ class MaidenheadBeacon(AprsData):
     comment: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Query(AprsData):
     """A general query (``?APRS?``), optionally limited to a footprint."""
 
@@ -864,7 +890,7 @@ class Query(AprsData):
     footprint: Footprint | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Capabilities(AprsData):
     """Station capabilities (``<``): ``(token,)`` or ``(token, value)`` pairs, in order."""
 
@@ -872,7 +898,7 @@ class Capabilities(AprsData):
     capabilities: tuple[tuple[str, ...], ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ThirdParty(AprsData):
     """A third-party packet (``}``): another packet, carried inside this one."""
 
@@ -880,7 +906,7 @@ class ThirdParty(AprsData):
     packet: Packet
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class UserDefined(AprsData):
     """User-defined data (``{``). ``data`` holds one code point (U+0000-U+00FF) per byte."""
 
@@ -890,15 +916,16 @@ class UserDefined(AprsData):
     data: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TestData(AprsData):
     """Invalid or test data (``,``)."""
 
     kind: ClassVar[str] = "test"
+    __test__: ClassVar[bool] = False  # not a pytest test class
     data: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class AgreloDf(AprsData):
     """An Agrelo DFJr / MicroFinder bearing (``%nnn/q``)."""
 
@@ -907,7 +934,7 @@ class AgreloDf(AprsData):
     quality: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Unrecognized(AprsData):
     """Nothing could be decoded; ``reason`` says why and the diagnostics say what."""
 

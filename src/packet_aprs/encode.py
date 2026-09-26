@@ -254,7 +254,7 @@ def _base91(value: int, width: int) -> str:
 def _course_speed(course: float, knots: float) -> str:
     if not 0 <= course <= 360:
         raise _refuse(f"course {course} is not 0-360")
-    c = round(course / 4) % 90
+    c = math.floor(course / 4 + 0.5) % 90
     s = round(math.log(knots + 1) / math.log(1.08)) if knots > 0 else 0
     if not 0 <= s <= 90:
         raise _refuse(f"speed {knots} knots is too high for the compressed format")

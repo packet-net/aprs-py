@@ -1,0 +1,3 @@
+{
+  "_comment": "Conformance checks to skip, as \"<case id>::<check>\": \"<reason>\", where the check is lenient, strict, tolerance, reencode or encode. A case believed wrong is listed here with evidence rather than edited. There are none."
+}

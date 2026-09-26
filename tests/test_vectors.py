@@ -9,7 +9,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conformance import CHECKS, checks_for, load_cases, load_known_differences
+from conformance import CHECKS, VECTORS, checks_for, load_cases, load_known_differences
+
+if not (VECTORS / "cases").is_dir():
+    pytest.skip("the vectors submodule is not checked out (git submodule update --init)", allow_module_level=True)
 
 CASES = load_cases()
 KNOWN = load_known_differences()

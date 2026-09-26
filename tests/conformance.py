@@ -31,7 +31,13 @@ VECTORS = ROOT / "vectors"
 KNOWN_DIFFERENCES = Path(__file__).resolve().parent / "known_differences.json"
 
 TOLERABLE = frozenset(
-    c["id"] for c in json.loads((VECTORS / "codes.json").read_text(encoding="utf-8"))["codes"] if c["tolerable"]
+    c["id"]
+    for c in (
+        json.loads((VECTORS / "codes.json").read_text(encoding="utf-8"))["codes"]
+        if (VECTORS / "codes.json").exists()
+        else []
+    )
+    if c["tolerable"]
 )
 
 

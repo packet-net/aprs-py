@@ -48,7 +48,7 @@ packages = ["src/packet_aprs"]
 include = ["src/packet_aprs", "tests", "tools", "README.md", "CHANGELOG.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "README.md"]
+testpaths = ["tests", "src", "README.md"]
 pythonpath = ["tests"]
 addopts = "--doctest-glob=README.md --doctest-modules"
 doctest_optionflags = ["NORMALIZE_WHITESPACE"]

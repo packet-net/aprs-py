@@ -9,7 +9,10 @@
 from __future__ import annotations
 
 from ._decode import decode_ax25, decode_kiss, decode_tnc2
+from .builder import Station
+from .devices import Device
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
+from .encode import build_packet, encode_info, mic_e_destination
 from .errors import AprsError, EncodeError, HeaderError
 from .model import (
     Ack,
@@ -94,6 +97,7 @@ __all__ = [
     "CompressionType",
     "Dao",
     "DaoPrecision",
+    "Device",
     "DfBearing",
     "Dfs",
     "Diagnostic",
@@ -126,6 +130,7 @@ __all__ = [
     "RawWeatherFormat",
     "Reject",
     "Severity",
+    "Station",
     "StatusReport",
     "Storm",
     "StormType",
@@ -147,8 +152,11 @@ __all__ = [
     "Weather",
     "WeatherExtra",
     "__version__",
+    "build_packet",
     "decode",
     "decode_ax25",
     "decode_kiss",
     "decode_tnc2",
+    "encode_info",
+    "mic_e_destination",
 ]

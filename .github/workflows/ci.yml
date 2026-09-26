@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --upgrade pip ruff mypy
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+      - name: mypy --strict
+        run: mypy --strict src/packet_aprs
+
+  test:
+    name: Test (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e . pytest
+      - name: pytest (conformance vectors, unit tests, doctests)
+        run: python -m pytest -q
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --upgrade pip build twine
+      - run: python -m build
+      - run: python -m twine check --strict dist/*

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .diagnostics import Diagnostic, Severity
+from .errors import EncodeError
 
 if TYPE_CHECKING:
     from .devices import Device
@@ -100,5 +101,39 @@ class Packet:
         """The packet as a TNC2 / APRS-IS line (without a line terminator)."""
         return self.header.encode("ascii") + b":" + self.info
 
+    def to_ax25(self) -> bytes:
+        """The packet as an AX.25 UI frame without flags or FCS (a KISS payload).
+
+        Every address must be a valid AX.25 address (1-6 upper-case letters and digits, SSID
+        0-15), so an APRS-IS path with a q-construct cannot be written.
+        """
+        path = self.path
+        if len(path) > 8:
+            raise EncodeError("an AX.25 frame has at most 8 digipeaters")
+        frame = bytearray(_ax25_address(self.destination, command=True))
+        frame += _ax25_address(self.source, last=not path)
+        for i, entry in enumerate(path):
+            frame += _ax25_address(entry.call, last=i == len(path) - 1, repeated=entry.used)
+        frame += b"\x03\xf0" + self.info
+        return bytes(frame)
+
+    def to_kiss(self, port: int = 0) -> bytes:
+        """The packet as a KISS data frame, with ``FEND`` delimiters, for a KISS TNC."""
+        if not 0 <= port <= 15:
+            raise ValueError("a KISS port is 0-15")
+        body = self.to_ax25().replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc")
+        return b"\xc0" + bytes([port << 4]) + body + b"\xc0"
+
     def __str__(self) -> str:
         return self.to_tnc2().decode("utf-8", "backslashreplace")
+
+
+def _ax25_address(name: str, *, last: bool = False, command: bool = False, repeated: bool = False) -> bytes:
+    call, _, ssid_text = name.partition("-")
+    if not 1 <= len(call) <= 6 or not all("A" <= c <= "Z" or "0" <= c <= "9" for c in call):
+        raise EncodeError(f"{name!r} is not an AX.25 address: 1-6 upper-case letters and digits")
+    if ssid_text and not (ssid_text.isascii() and ssid_text.isdigit() and int(ssid_text) <= 15):
+        raise EncodeError(f"{name!r} is not an AX.25 address: the SSID is 0-15")
+    ssid = int(ssid_text) if ssid_text else 0
+    flag = 0x80 if (command or repeated) else 0
+    return bytes(ord(c) << 1 for c in call.ljust(6)) + bytes([0x60 | flag | (ssid << 1) | (1 if last else 0)])
