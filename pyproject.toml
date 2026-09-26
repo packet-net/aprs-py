@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "packet-aprs"
+dynamic = ["version"]
+description = "APRS (Automatic Packet Reporting System) decoder and encoder, checked against language-neutral conformance vectors"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Tom Fanning, M0LTE", email = "tom@fann.ing" }]
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["aprs", "ax25", "ham-radio", "amateur-radio", "packet-radio", "mic-e", "kiss"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Ham Radio",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/packet-net/aprs-py"
+Source = "https://github.com/packet-net/aprs-py"
+Issues = "https://github.com/packet-net/aprs-py/issues"
+Changelog = "https://github.com/packet-net/aprs-py/blob/main/CHANGELOG.md"
+"Conformance vectors" = "https://github.com/packet-net/aprs-vectors"
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.10", "ruff>=0.6", "pyyaml>=6"]
+
+[tool.hatch.version]
+path = "src/packet_aprs/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/packet_aprs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/packet_aprs", "tests", "tools", "README.md", "CHANGELOG.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "README.md"]
+pythonpath = ["tests"]
+addopts = "--doctest-glob=README.md --doctest-modules"
+doctest_optionflags = ["NORMALIZE_WHITESPACE"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["vectors"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "N", "C4", "PIE", "PT", "RET", "TC"]
+ignore = ["RET505", "SIM108", "TC001", "TC003"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/packet_aprs/_deviceid_data.py" = ["E501", "RUF001"]
+
+[tool.ruff.format]
+exclude = ["src/packet_aprs/_deviceid_data.py"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+files = ["src/packet_aprs"]
