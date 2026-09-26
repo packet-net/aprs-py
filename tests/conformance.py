@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packet_aprs import (
+from pdn_aprs import (
     DiagnosticCode,
     EncodeError,
     HeaderError,
@@ -23,8 +23,8 @@ from packet_aprs import (
     decode_ax25,
     decode_tnc2,
 )
-from packet_aprs.encode import encode_info, mic_e_destination
-from packet_aprs.neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
+from pdn_aprs.encode import encode_info, mic_e_destination
+from pdn_aprs.neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
 
 ROOT = Path(__file__).resolve().parent.parent
 VECTORS = ROOT / "vectors"

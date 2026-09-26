@@ -26,9 +26,9 @@ from collections.abc import Iterator
 from multiprocessing import Pool
 from typing import Any
 
-from packet_aprs import EncodeError, HeaderError, MicEReport, Packet, ParseOptions, Unrecognized, decode_tnc2
-from packet_aprs.encode import encode_info, mic_e_destination
-from packet_aprs.neutral import packet_to_neutral, to_neutral
+from pdn_aprs import EncodeError, HeaderError, MicEReport, Packet, ParseOptions, Unrecognized, decode_tnc2
+from pdn_aprs.encode import encode_info, mic_e_destination
+from pdn_aprs.neutral import packet_to_neutral, to_neutral
 
 LENIENT = ParseOptions.lenient()
 STRICT = ParseOptions.strict()

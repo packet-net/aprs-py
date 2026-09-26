@@ -11,7 +11,7 @@ import random
 import pytest
 from conformance import VECTORS, load_cases, raw_info
 
-import packet_aprs as aprs
+import pdn_aprs as aprs
 
 if not (VECTORS / "cases").is_dir():
     pytest.skip("the vectors submodule is not checked out", allow_module_level=True)

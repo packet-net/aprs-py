@@ -2,10 +2,10 @@
 
 A :class:`Station` holds what stays the same from packet to packet (the callsign, the
 digipeater path, the destination, whether the station can message, its usual symbol), and
-has one method per kind of packet. Each returns a :class:`~packet_aprs.Packet`, already
+has one method per kind of packet. Each returns a :class:`~pdn_aprs.Packet`, already
 encoded; ``str(packet)`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame.
 
->>> from packet_aprs import Station, Symbol
+>>> from pdn_aprs import Station, Symbol
 >>> m0lte = Station("M0LTE-9", via="WIDE1-1", symbol=Symbol.CAR)
 >>> print(m0lte.position(51.45, -0.98, course=88, speed=36, comment="Mobile"))
 M0LTE-9>APZ001,WIDE1-1:!5127.00N/00058.80W>088/036Mobile

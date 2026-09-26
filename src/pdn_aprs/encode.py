@@ -5,8 +5,8 @@ otherwise. Free text is checked by decoding what was written: a comment that wou
 as something else (an altitude, a data extension, a leading delimiter...) gets a ``/`` delimiter
 in front, and is refused if even that does not read back.
 
->>> from packet_aprs import PositionReport, Symbol
->>> from packet_aprs.encode import encode_info
+>>> from pdn_aprs import PositionReport, Symbol
+>>> from pdn_aprs.encode import encode_info
 >>> encode_info(PositionReport(latitude=51.5, longitude=-0.11666666666666667, symbol=Symbol.CAR,
 ...                            messaging=True, course_degrees=88, speed_knots=36, comment="Mobile"))
 b'=5130.00N/00007.00W>088/036Mobile'

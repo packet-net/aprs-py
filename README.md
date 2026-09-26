@@ -1,7 +1,7 @@
-# packet-aprs
+# pdn-aprs
 
 [![CI](https://github.com/packet-net/aprs-py/actions/workflows/ci.yml/badge.svg)](https://github.com/packet-net/aprs-py/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/packet-aprs)](https://pypi.org/project/packet-aprs/)
+[![PyPI](https://img.shields.io/pypi/v/pdn-aprs)](https://pypi.org/project/pdn-aprs/)
 
 An APRS (Automatic Packet Reporting System) decoder and encoder for Python, checked against the language-neutral conformance vectors in [packet-net/aprs-vectors](https://github.com/packet-net/aprs-vectors).
 
@@ -12,20 +12,20 @@ An APRS (Automatic Packet Reporting System) decoder and encoder for Python, chec
 - Every symbol by name, and device identification from the [aprs-deviceid](https://github.com/aprsorg/aprs-deviceid) database.
 - Pure Python 3.10+, no dependencies, fully typed.
 
-It is one of several independent implementations that cross-check each other: Packet.Aprs (C#, in [packet-net/packet.net](https://github.com/packet-net/packet.net)) and packet-aprs for Rust ([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)) pass the same vectors and agree with this one on every packet of a 6.9-million-packet APRS-IS capture.
+It is one of several independent implementations that cross-check each other: Packet.Aprs (C#, in [packet-net/packet.net](https://github.com/packet-net/packet.net)) and pdn-aprs for Rust ([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)) pass the same vectors and agree with this one on every packet of a 6.9-million-packet APRS-IS capture.
 
 ## Install
 
 ```sh
-pip install packet-aprs
+pip install pdn-aprs
 ```
 
-The import name is `packet_aprs`.
+The import name is `pdn_aprs`.
 
 ## Decoding
 
 ```python
->>> import packet_aprs as aprs
+>>> import pdn_aprs as aprs
 >>> packet = aprs.decode("M0LTE-9>APDR16,WIDE1-1,qAR,M0LTE-10:=5127.00N/00058.80W>088/036/A=000123Mobile")
 >>> packet.source, packet.destination, packet.q_construct
 ('M0LTE-9', 'APDR16', QConstruct(construct='qAR', station='M0LTE-10'))
@@ -93,7 +93,7 @@ A header that cannot be read at all raises `HeaderError`, whose `diagnostics` sa
 A `Station` holds what stays the same from packet to packet, and has a method for each kind of packet an application typically sends. Each returns an encoded `Packet`: `str(packet)` is its TNC2 line, `packet.to_kiss()` its KISS frame.
 
 ```python
->>> from packet_aprs import Station, Symbol
+>>> from pdn_aprs import Station, Symbol
 >>> m0lte = Station("M0LTE-9", via="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
 >>> print(m0lte.position(51.45, -0.98, course=88, speed=36, comment="Mobile"))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1:=5127.00N/00058.80W>088/036Mobile
@@ -124,18 +124,18 @@ The destination defaults to `APZ001`, the experimental tocall; give your applica
 Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused.
 
 ```python
->>> from packet_aprs import PositionReport, encode_info
+>>> from pdn_aprs import PositionReport, encode_info
 >>> report = PositionReport(latitude=49.0583333, longitude=-72.0291667, symbol=Symbol.HOUSE, comment="123/456")
 >>> encode_info(report)
 b'!4903.50N/07201.75W-/123/456'
 >>> encode_info(PositionReport(latitude=49.0583333, longitude=-72.0291667, symbol=Symbol.HOUSE, comment="/A=001234"))
 Traceback (most recent call last):
     ...
-packet_aprs.errors.EncodeError: the text '/A=001234' would not read back as written
+pdn_aprs.errors.EncodeError: the text '/A=001234' would not read back as written
 >>> encode_info(aprs.Message("N0CALL", "x" * 68))
 Traceback (most recent call last):
     ...
-packet_aprs.errors.EncodeError: message text is over 67 characters
+pdn_aprs.errors.EncodeError: message text is over 67 characters
 
 ```
 
@@ -159,10 +159,10 @@ Symbol('/f')
 
 ## The neutral form
 
-`packet_aprs.neutral` converts data to and from the conformance vectors' neutral form: plain dicts and lists, ready for JSON.
+`pdn_aprs.neutral` converts data to and from the conformance vectors' neutral form: plain dicts and lists, ready for JSON.
 
 ```python
->>> from packet_aprs.neutral import to_neutral
+>>> from pdn_aprs.neutral import to_neutral
 >>> to_neutral(aprs.decode("N0CALL>APZ001::WU2Z     :Testing{003").data)
 {'type': 'message', 'addressee': 'WU2Z', 'text': 'Testing', 'message_id': '003'}
 

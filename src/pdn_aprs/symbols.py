@@ -1,6 +1,6 @@
 """APRS symbols: a table (or overlay) character and a symbol code, and every defined symbol by name.
 
->>> from packet_aprs import Symbol
+>>> from pdn_aprs import Symbol
 >>> Symbol.CAR
 Symbol('/>')
 >>> str(Symbol.CAR), Symbol.CAR.description

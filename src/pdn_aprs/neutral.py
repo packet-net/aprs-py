@@ -5,8 +5,8 @@ lists are left out (except ``reply_ack``, where ``""`` says the sender supports 
 booleans are written only when true, enumerations are kebab-case strings, timestamps and
 symbols are written as on air.
 
->>> from packet_aprs import decode
->>> from packet_aprs.neutral import to_neutral
+>>> from pdn_aprs import decode
+>>> from pdn_aprs.neutral import to_neutral
 >>> to_neutral(decode("N0CALL>APZ001:>Net Control Center").data)
 {'type': 'status', 'text': 'Net Control Center'}
 """

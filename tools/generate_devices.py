@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate src/packet_aprs/_deviceid_data.py from the aprs-deviceid database.
+"""Generate src/pdn_aprs/_deviceid_data.py from the aprs-deviceid database.
 
   python3 tools/generate_devices.py path/to/aprs-deviceid/tocalls.yaml
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-OUT = Path(__file__).resolve().parent.parent / "src" / "packet_aprs" / "_deviceid_data.py"
+OUT = Path(__file__).resolve().parent.parent / "src" / "pdn_aprs" / "_deviceid_data.py"
 KEEP = ("vendor", "model", "class", "os", "features")
 
 

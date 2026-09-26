@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-import packet_aprs as aprs
-from packet_aprs import (
+import pdn_aprs as aprs
+from pdn_aprs import (
     DiagnosticCode,
     EncodeError,
     HeaderError,
@@ -20,7 +20,7 @@ from packet_aprs import (
     Timestamp,
     TimestampKind,
 )
-from packet_aprs.neutral import from_neutral, to_neutral
+from pdn_aprs.neutral import from_neutral, to_neutral
 
 
 def _round_trip(packet: aprs.Packet) -> aprs.Packet:

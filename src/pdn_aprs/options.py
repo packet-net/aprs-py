@@ -18,7 +18,7 @@ class ParseOptions:
     A lenient decoder (the default) accepts every tolerable defect with a warning; a strict one
     accepts none. In between, each tolerance can be turned on or off on its own:
 
-    >>> from packet_aprs import DiagnosticCode, ParseOptions
+    >>> from pdn_aprs import DiagnosticCode, ParseOptions
     >>> options = ParseOptions.lenient().without(DiagnosticCode.UNPADDED_ADDRESSEE)
     >>> options.tolerates(DiagnosticCode.UNPADDED_ADDRESSEE)
     False

@@ -1,7 +1,7 @@
 """APRS (Automatic Packet Reporting System) decoding and encoding.
 
->>> import packet_aprs
->>> packet = packet_aprs.decode("M0LTE-9>APZ001,WIDE1-1:!5130.00N/00007.00W>088/036Mobile")
+>>> import pdn_aprs
+>>> packet = pdn_aprs.decode("M0LTE-9>APZ001,WIDE1-1:!5130.00N/00007.00W>088/036Mobile")
 >>> packet.data.latitude, packet.data.course_degrees, packet.data.comment
 (51.5, 88, 'Mobile')
 """

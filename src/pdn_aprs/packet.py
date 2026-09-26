@@ -55,7 +55,7 @@ class Packet:
     """A decoded APRS packet.
 
     ``info`` is the information field exactly as received. ``data`` is what was decoded from
-    it: always present, an :class:`~packet_aprs.model.Unrecognized` when nothing could be.
+    it: always present, an :class:`~pdn_aprs.model.Unrecognized` when nothing could be.
     ``diagnostics`` lists everything the decoder noticed, header included.
     """
 

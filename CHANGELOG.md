@@ -17,7 +17,7 @@ First release.
 - `Station`, a builder for the packets an application typically sends, and `Packet.to_ax25()` and `Packet.to_kiss()`.
 - `Symbol`, with every defined symbol by name and description, and an overlay helper.
 - Device identification from the aprs-deviceid database (commit 845e3f8, 2026-09-18).
-- `packet_aprs.neutral`: the conformance vectors' neutral data form.
+- `pdn_aprs.neutral`: the conformance vectors' neutral data form.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 

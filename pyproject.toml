@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "packet-aprs"
+name = "pdn-aprs"
 dynamic = ["version"]
 description = "APRS (Automatic Packet Reporting System) decoder and encoder, checked against language-neutral conformance vectors"
 readme = "README.md"
@@ -39,13 +39,13 @@ Changelog = "https://github.com/packet-net/aprs-py/blob/main/CHANGELOG.md"
 dev = ["pytest>=8", "mypy>=1.10", "ruff>=0.6", "pyyaml>=6"]
 
 [tool.hatch.version]
-path = "src/packet_aprs/__init__.py"
+path = "src/pdn_aprs/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/packet_aprs"]
+packages = ["src/pdn_aprs"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/packet_aprs", "tests", "tools", "README.md", "CHANGELOG.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]
+include = ["src/pdn_aprs", "tests", "tools", "README.md", "CHANGELOG.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src", "README.md"]
@@ -63,14 +63,14 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "N", "C4", "PIE", "PT", "
 ignore = ["RET505", "SIM108", "TC001", "TC003"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/packet_aprs/_deviceid_data.py" = ["E501", "RUF001"]
-"src/packet_aprs/diagnostics.py" = ["E501"]
+"src/pdn_aprs/_deviceid_data.py" = ["E501", "RUF001"]
+"src/pdn_aprs/diagnostics.py" = ["E501"]
 "tools/*" = ["E501"]
 
 [tool.ruff.format]
-exclude = ["src/packet_aprs/_deviceid_data.py"]
+exclude = ["src/pdn_aprs/_deviceid_data.py"]
 
 [tool.mypy]
 strict = true
 python_version = "3.10"
-files = ["src/packet_aprs"]
+files = ["src/pdn_aprs"]
