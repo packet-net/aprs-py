@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import _util
 from .diagnostics import DiagnosticCode
@@ -43,9 +43,7 @@ _DFS = re.compile(r"DFS([0-9])([0-~])([0-9])([0-9])")
 _CSE_SPD = re.compile(r"([0-9]{3}|\.\.\.|   )/([0-9]{3}|\.\.\.|   )")
 _AREA = re.compile(r"([0-9])([0-9 ]{2})(/[0-9]|1[0-5])([0-9 ]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
-_STORM = re.compile(
-    r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?"
-)
+_STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
 _BRACES = re.compile(r"\{([^{}]{1,3})\}")
 
@@ -101,7 +99,7 @@ def _opt_int(text: str | None) -> int | None:
 
 def parse_extension(
     rest: str, symbol: Symbol, ctx: Ctx, *, mic_e: bool = False
-) -> tuple[str, int, dict[str, object]] | None:
+) -> tuple[str, int, dict[str, Any]] | None:
     """A data extension at the start of ``rest``: its kind, length and fields."""
     if not mic_e:
         if symbol.is_alternate and symbol.code == "l":
@@ -118,7 +116,7 @@ def parse_extension(
                 return "area", 7, {"area": area}
         m = _CSE_SPD.match(rest)
         if m:
-            values: dict[str, object] = {}
+            values: dict[str, Any] = {}
             course = _opt_int(m.group(1))
             speed = _opt_int(m.group(2))
             if course is not None:
@@ -168,7 +166,7 @@ def parse_extension(
 class CommentParts:
     """What a comment held: lifted fields, a DAO and its extra minutes, and the free text."""
 
-    fields: dict[str, object] = field(default_factory=dict)
+    fields: dict[str, Any] = field(default_factory=dict)
     dao: Dao | None = None
     dao_lat: float = 0.0
     dao_lon: float = 0.0
@@ -238,7 +236,7 @@ def _frequency(text: str) -> tuple[VoiceFrequency, int] | None:
         mhz = MICROWAVE_BASE[digits[0]] + float(digits[1:])
     else:
         mhz = float(digits)
-    values: dict[str, object] = {"mhz": mhz, "ten_khz_resolution": ten_khz}
+    values: dict[str, Any] = {"mhz": mhz, "ten_khz_resolution": ten_khz}
     i = m.end()
 
     def field_at(pattern: re.Pattern[str]) -> re.Match[str] | None:
@@ -275,7 +273,7 @@ def _frequency(text: str) -> tuple[VoiceFrequency, int] | None:
         i = rm.end()
     if text[i : i + 1] == " ":
         i += 1
-    return VoiceFrequency(**values), i  # type: ignore[arg-type]
+    return VoiceFrequency(**values), i
 
 
 def lift_comment(
@@ -354,8 +352,8 @@ def _lift_rest(
             late = _late_extension(text)
             if late is not None and ctx.tolerates(C.DATA_EXTENSION_IN_COMMENT):
                 ctx.warn(C.DATA_EXTENSION_IN_COMMENT)
-                key, value, start, end = late
-                parts.fields[key] = value
+                key, late_value, start, end = late
+                parts.fields[key] = late_value
                 text = text[:start] + text[end:]
         freq = _frequency(text)
         if freq is not None:

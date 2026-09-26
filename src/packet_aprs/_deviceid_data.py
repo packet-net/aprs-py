@@ -7,7 +7,6 @@ Vendor and model names are copied verbatim.
 """
 
 # fmt: off
-# ruff: noqa: E501, RUF001
 
 Entry = tuple[str, str, str, str, tuple[str, ...]]
 """vendor, model, class, os, features"""

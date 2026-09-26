@@ -7,8 +7,9 @@ when they are not UTF-8 (``non-utf8-text``).
 
 from __future__ import annotations
 
+import contextlib
 import re
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from . import _util
 from ._comment import CommentParts, lift_comment, lift_telemetry_dao, parse_extension
@@ -22,7 +23,6 @@ from .model import (
     Beam,
     Bulletin,
     Capabilities,
-    CommentTelemetry,
     CompressionType,
     DirectedQuery,
     Footprint,
@@ -36,8 +36,8 @@ from .model import (
     NmeaSource,
     NwsBulletin,
     ObjectReport,
-    PositionReport,
     PositionlessWeather,
+    PositionReport,
     Query,
     RawWeather,
     RawWeatherFormat,
@@ -67,7 +67,7 @@ _DIAG: dict[tuple[Severity, DiagnosticCode], Diagnostic] = {
 }
 
 
-class Rejected(Exception):
+class RejectedError(Exception):
     """Raised inside the decoder when a packet (or header) cannot be decoded."""
 
 
@@ -89,7 +89,7 @@ class Ctx:
 
     def fail(self, code: DiagnosticCode) -> NoReturn:
         self.diags.append(_DIAG[(Severity.ERROR, code)])
-        raise Rejected
+        raise RejectedError
 
     def defect(self, code: DiagnosticCode) -> None:
         """A tolerable defect: a warning when tolerated, else an error that rejects."""
@@ -289,7 +289,7 @@ def decode_info(info: bytes, destination: str, ctx: Ctx) -> AprsData:
         if ctx.non_utf8:
             ctx.defect(C.NON_UTF8_TEXT)
         return data
-    except Rejected:
+    except RejectedError:
         return Unrecognized(UnrecognizedReason.MALFORMED)
 
 
@@ -301,7 +301,7 @@ def _other(s: str, destination: str, ctx: Ctx) -> AprsData:
         trial = ctx.trial()
         try:
             data = _position(s[bang:], destination, trial)
-        except Rejected:
+        except RejectedError:
             pass
         else:
             if not isinstance(data, Unrecognized):
@@ -350,7 +350,7 @@ def _coordinate(text: str, degree_digits: int, ambiguity: int | None) -> tuple[f
     """
     if len(text) != degree_digits + 5 or text[degree_digits + 2] != ".":
         return None
-    digits = text[:degree_digits + 2] + text[degree_digits + 3 :]
+    digits = text[: degree_digits + 2] + text[degree_digits + 3 :]
     # blanked digits: trailing spaces, at most 4 (hundredths, tenths, minutes units, tens)
     n = len(digits)
     blanks = 0
@@ -399,7 +399,7 @@ def _uncompressed(s: str, pos: int, ctx: Ctx) -> Pos:
         latitude = -latitude
     if ehemi in "Ww":
         longitude = -longitude
-    return Pos(latitude + 0.0, longitude + 0.0, Symbol(table, code), ambiguity, False, None)
+    return Pos(latitude, longitude, Symbol(table, code), ambiguity, False, None)
 
 
 def _compressed(s: str, pos: int, ctx: Ctx) -> Pos:
@@ -429,7 +429,7 @@ def _compressed(s: str, pos: int, ctx: Ctx) -> Pos:
     return Pos(lat, lon, Symbol(table, code), 0, True, cs)
 
 
-def read_position(s: str, pos: int, ctx: Ctx) -> Pos:
+def read_position(s: str, pos: int, ctx: Ctx) -> Pos:  # noqa: RET503
     """The position at ``pos``: uncompressed if it starts with a digit, else compressed."""
     first = s[pos : pos + 1]
     if not first:
@@ -445,7 +445,7 @@ def _position_decodes(s: str, pos: int, ctx: Ctx) -> bool:
     trial = ctx.trial()
     try:
         read_position(s, pos, trial)
-    except Rejected:
+    except RejectedError:
         return False
     return True
 
@@ -480,7 +480,7 @@ def _position(s: str, destination: str, ctx: Ctx) -> AprsData:
     return PositionReport(timestamp=timestamp, messaging=messaging, **fields)
 
 
-def _compressed_cs(p: Pos, ctx: Ctx, fields: dict[str, object]) -> str | None:
+def _compressed_cs(p: Pos, ctx: Ctx, fields: dict[str, Any]) -> str | None:
     """Interpret a compressed position's cs and type bytes into ``fields``.
 
     Returns what the cs bytes held: ``"course"``, ``"range"``, ``"altitude"`` or None.
@@ -499,11 +499,9 @@ def _compressed_cs(p: Pos, ctx: Ctx, fields: dict[str, object]) -> str | None:
     return "course"
 
 
-def positioned_rest(
-    s: str, pos: int, p: Pos, ctx: Ctx, *, report: str, name: str | None = None
-) -> dict[str, object]:
+def positioned_rest(s: str, pos: int, p: Pos, ctx: Ctx, *, report: str, name: str | None = None) -> dict[str, Any]:
     """Everything after the position: data extension, weather, comment elements."""
-    fields: dict[str, object] = {
+    fields: dict[str, Any] = {
         "latitude": p.lat,
         "longitude": p.lon,
         "symbol": p.symbol,
@@ -540,7 +538,7 @@ def positioned_rest(
     return fields
 
 
-def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, object]) -> None:
+def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) -> None:
     """Put the elements lifted out of a comment into the fields, applying a DAO's precision."""
     for key, value in parts.fields.items():
         fields[key] = value
@@ -549,8 +547,8 @@ def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, object
         if p.ambiguity:
             ctx.defect(C.DAO_WITH_AMBIGUITY)
         elif not p.compressed and (parts.dao_lat or parts.dao_lon):
-            lat = float(fields["latitude"])  # type: ignore[arg-type]
-            lon = float(fields["longitude"])  # type: ignore[arg-type]
+            lat = float(fields["latitude"])
+            lon = float(fields["longitude"])
             fields["latitude"] = lat + (parts.dao_lat / 60 if lat >= 0 else -parts.dao_lat / 60)
             fields["longitude"] = lon + (parts.dao_lon / 60 if lon >= 0 else -parts.dao_lon / 60)
     fields["comment"] = ctx.text(parts.comment)
@@ -568,9 +566,9 @@ def _wind_value(text: str) -> int | None:
     return int(text)
 
 
-def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[str, object]) -> None:
+def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[str, Any]) -> None:
     """A position or object with the weather symbol: wind, weather fields, maybe text."""
-    wind: dict[str, object] = {}
+    wind: dict[str, Any] = {}
     wind_sent = False
     if held == "course" and p.cs is not None:
         c, sp, _ = p.cs
@@ -615,7 +613,7 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
     if text[:1] in (" ", "/"):
         text = text[1:]
     parts.comment = text
-    fields["weather"] = Weather(**weather)  # type: ignore[arg-type]
+    fields["weather"] = Weather(**weather)
     _apply_parts(parts, p, ctx, fields)
 
 
@@ -652,9 +650,11 @@ def _object(s: str, destination: str, ctx: Ctx) -> AprsData:
         if not timestamp.is_valid:
             ctx.defect(C.INVALID_TIMESTAMP)
         pos += 7
-    elif len(ts) == 7 and (
-        (ts[:6].isdigit() and ts[:6].isascii()) or ts[6] in "z/h"
-    ) and _position_decodes(s, pos + 7, ctx):
+    elif (
+        len(ts) == 7
+        and ((ts[:6].isdigit() and ts[:6].isascii()) or ts[6] in "z/h")
+        and _position_decodes(s, pos + 7, ctx)
+    ):
         ctx.defect(C.MALFORMED_TIMESTAMP)
         pos += 7
     else:
@@ -787,7 +787,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     dc = ord(s[5]) - 28
     se = ord(s[6]) - 28
     code, table = s[7], s[8]
-    if not (0 <= d <= 179 and 0 <= m <= 59 and 0 <= h <= 99 and 0 <= sp and 0 <= dc and 0 <= se):
+    if not (0 <= d <= 179 and 0 <= m <= 59 and 0 <= h <= 99 and sp >= 0 and dc >= 0 and se >= 0):
         ctx.fail(C.INVALID_MIC_E_INFORMATION)
     if not (sp <= 99 and dc <= 99 and se <= 99):
         ctx.fail(C.INVALID_MIC_E_INFORMATION)
@@ -821,9 +821,9 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx.fail(C.INVALID_MIC_E_INFORMATION)
     if west:
         lon = -lon
-    fields: dict[str, object] = {
-        "latitude": lat + 0.0,
-        "longitude": lon + 0.0,
+    fields: dict[str, Any] = {
+        "latitude": lat,
+        "longitude": lon,
         "symbol": Symbol(table, code),
     }
     if ambiguity:
@@ -893,7 +893,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         device_suffix=suffix,
         locator=locator,
         destination_ssid=ssid,
-        **fields,  # type: ignore[arg-type]
+        **fields,
     )
 
 
@@ -1119,9 +1119,13 @@ def _status_locator(body: str) -> tuple[str, Symbol, int] | None:
         if len(body) >= 8 and _util.is_symbol_table(body[6]) and _util.is_symbol_code(body[7]):
             return body[:6].upper(), Symbol(body[6], body[7]), 8
         return None
-    if len(body) >= 6 and _util.is_locator4(body[:4]):
-        if _util.is_symbol_table(body[4]) and _util.is_symbol_code(body[5]):
-            return body[:4].upper(), Symbol(body[4], body[5]), 6
+    if (
+        len(body) >= 6
+        and _util.is_locator4(body[:4])
+        and _util.is_symbol_table(body[4])
+        and _util.is_symbol_code(body[5])
+    ):
+        return body[:4].upper(), Symbol(body[4], body[5]), 6
     return None
 
 
@@ -1187,7 +1191,7 @@ def _positionless_weather(s: str, destination: str, ctx: Ctx) -> AprsData:
     text = weather_tail(result.text, ctx, result.values)
     if text[:1] in (" ", "/"):
         text = text[1:]
-    return PositionlessWeather(timestamp, Weather(**result.values), ctx.text(text))  # type: ignore[arg-type]
+    return PositionlessWeather(timestamp, Weather(**result.values), ctx.text(text))
 
 
 def _raw_weather(s: str, fmt: RawWeatherFormat, start: int, ctx: Ctx) -> AprsData:
@@ -1235,7 +1239,7 @@ def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
         body = sentence[:star]
     fields = body.split(",")
     kind = fields[0][-3:]
-    values: dict[str, object] = {}
+    values: dict[str, Any] = {}
     if kind == "GGA":
         _nmea_time(fields, 1, values)
         _nmea_position(fields, 2, values)
@@ -1261,18 +1265,16 @@ def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
         _nmea_position(fields, 1, values)
         if len(fields) > 5 and fields[5]:
             values["waypoint"] = fields[5]
-    return NmeaSentence(sentence, has_checksum, **values)  # type: ignore[arg-type]
+    return NmeaSentence(sentence, has_checksum, **values)
 
 
-def _nmea_float(fields: list[str], i: int, key: str, values: dict[str, object]) -> None:
+def _nmea_float(fields: list[str], i: int, key: str, values: dict[str, Any]) -> None:
     if len(fields) > i and fields[i]:
-        try:
+        with contextlib.suppress(ValueError):
             values[key] = float(fields[i])
-        except ValueError:
-            pass
 
 
-def _nmea_time(fields: list[str], i: int, values: dict[str, object]) -> None:
+def _nmea_time(fields: list[str], i: int, values: dict[str, Any]) -> None:
     if len(fields) <= i:
         return
     t = fields[i]
@@ -1285,7 +1287,7 @@ def _nmea_time(fields: list[str], i: int, values: dict[str, object]) -> None:
         values["time"] = text
 
 
-def _nmea_position(fields: list[str], i: int, values: dict[str, object]) -> None:
+def _nmea_position(fields: list[str], i: int, values: dict[str, Any]) -> None:
     if len(fields) <= i + 3:
         return
     lat, ns, lon, ew = fields[i : i + 4]
@@ -1389,7 +1391,7 @@ def _third_party(s: str, destination: str, ctx: Ctx) -> AprsData:
     inner = Ctx(ctx.options)
     try:
         source, dest, path = parse_tnc2_header(header, inner, error=C.INVALID_THIRD_PARTY)
-    except (Rejected, HeaderError):
+    except (RejectedError, HeaderError):
         ctx.fail(C.INVALID_THIRD_PARTY)
     info = body[colon + 1 :].encode("latin-1")
     data = decode_info(info, dest, inner)

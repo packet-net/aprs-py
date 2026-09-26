@@ -298,4 +298,3 @@ class Diagnostic:
         if not sep:
             raise ValueError(f"not severity:code: {text!r}")
         return cls(Severity(severity), DiagnosticCode(code))
-

@@ -12,10 +12,17 @@ if TYPE_CHECKING:
     from .devices import Device
     from .model import AprsData
 
-__all__ = ["Packet", "PathEntry", "QConstruct"]
+__all__ = ["Packet", "PathEntry", "QConstruct", "tnc2_path"]
 
 Q_CONSTRUCTS = frozenset({"qAC", "qAX", "qAU", "qAo", "qAO", "qAS", "qAr", "qAR", "qAZ", "qAI"})
 """The APRS-IS q-constructs, including ``qAr`` and ``qAo`` beside ``qAR`` and ``qAO``."""
+
+
+def tnc2_path(path: tuple[PathEntry, ...]) -> str:
+    """A path as TNC2 writes it: a ``*`` after the last entry used, which implies the ones
+    before it."""
+    last = max((i for i, p in enumerate(path) if p.used), default=-1)
+    return ",".join(p.call + ("*" if i == last else "") for i, p in enumerate(path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +88,8 @@ class Packet:
     @property
     def header(self) -> str:
         """The TNC2 header, ``SOURCE>DEST,PATH``."""
-        return ">".join((self.source, ",".join([self.destination, *map(str, self.path)])))
+        path = tnc2_path(self.path)
+        return f"{self.source}>{self.destination}" + ("," + path if path else "")
 
     def to_tnc2(self) -> bytes:
         """The packet as a TNC2 / APRS-IS line (without a line terminator)."""

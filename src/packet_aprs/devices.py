@@ -9,7 +9,7 @@ CC BY-SA 2.0; ``DATABASE_VERSION`` says which commit this copy was generated fro
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import TYPE_CHECKING
 
 from . import _deviceid_data as _db
@@ -46,7 +46,7 @@ def _device(entry: _db.Entry) -> Device:
     return Device(vendor, model, device_class, os, features)
 
 
-@lru_cache(maxsize=None)
+@cache
 def mic_e_suffixes(type_code: str) -> tuple[str, ...]:
     """The device suffixes the database knows after this Mic-E type code, longest first."""
     if type_code in ("`", "'"):
@@ -72,8 +72,8 @@ def identify_mic_e(type_code: str | None, suffix: str | None) -> Device | None:
 def _matches(pattern: str, call: str) -> bool:
     if pattern.endswith("*"):
         stem = pattern[:-1]
-        return len(call) >= len(stem) and all(p in ("?", c) for p, c in zip(stem, call))
-    return len(pattern) == len(call) and all(p in ("?", c) for p, c in zip(pattern, call))
+        return len(call) >= len(stem) and all(p in ("?", c) for p, c in zip(stem, call, strict=False))
+    return len(pattern) == len(call) and all(p in ("?", c) for p, c in zip(pattern, call, strict=False))
 
 
 @lru_cache(maxsize=4096)

@@ -49,8 +49,8 @@ from .model import (
     NwsBulletin,
     ObjectReport,
     Phg,
-    PositionReport,
     PositionlessWeather,
+    PositionReport,
     Query,
     RawWeather,
     RawWeatherFormat,
@@ -77,7 +77,12 @@ from .model import (
 from .packet import Packet, PathEntry
 from .symbols import Symbol
 
-__all__ = ["from_neutral", "header_to_neutral", "packet_to_neutral", "to_neutral"]
+__all__ = ["NeutralFormError", "from_neutral", "header_to_neutral", "packet_to_neutral", "to_neutral"]
+
+
+class NeutralFormError(ValueError):
+    """The neutral form holds something the data model cannot."""
+
 
 _SKIP = frozenset({"analog_text", "coefficients_text"})
 _KEEP_EMPTY = frozenset({"reply_ack"})
@@ -232,9 +237,7 @@ def _comment_telemetry(d: dict[str, Any]) -> CommentTelemetry:
 
 
 def _packet(d: dict[str, Any]) -> Packet:
-    path = tuple(
-        PathEntry(p.rstrip("*"), p.endswith("*")) for p in d.get("path", ())
-    )
+    path = tuple(PathEntry(p.rstrip("*"), p.endswith("*")) for p in d.get("path", ()))
     diagnostics = tuple(Diagnostic.parse(x) for x in d.get("diagnostics", ()))
     return Packet(d["source"], d["destination"], path, b"", from_neutral(d["data"]), diagnostics)
 
@@ -287,4 +290,7 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             kwargs[key] = value
     if cls is Message and "text" not in kwargs:
         kwargs["text"] = ""
-    return cls(**kwargs)
+    try:
+        return cls(**kwargs)
+    except TypeError as e:
+        raise NeutralFormError(f"{kind}: {e}") from None

@@ -79,7 +79,7 @@ __all__ = [
 
 class _Enum(str, Enum):
     def __str__(self) -> str:
-        return self.value
+        return str(self.value)
 
 
 # ---------------------------------------------------------------- enumerations

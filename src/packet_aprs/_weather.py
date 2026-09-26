@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .diagnostics import DiagnosticCode
 from .model import WeatherExtra
@@ -22,16 +22,23 @@ C = DiagnosticCode
 
 _Convert = Callable[[int], object]
 
+
+def _scaled(value: int, divisor: int) -> float:
+    """``value / divisor``, as an int when whole."""
+    whole, rest = divmod(value, divisor)
+    return whole if rest == 0 else value / divisor
+
+
 # letter: (field, width, conversion)
 _FIELDS: dict[str, tuple[str, int, _Convert]] = {
     "c": ("wind_direction_degrees", 3, int),
     "g": ("wind_gust_mph", 3, int),
     "t": ("temperature_f", 3, int),
-    "r": ("rain_1h_in", 3, lambda v: v / 100),
-    "p": ("rain_24h_in", 3, lambda v: v / 100),
-    "P": ("rain_midnight_in", 3, lambda v: v / 100),
+    "r": ("rain_1h_in", 3, lambda v: _scaled(v, 100)),
+    "p": ("rain_24h_in", 3, lambda v: _scaled(v, 100)),
+    "P": ("rain_midnight_in", 3, lambda v: _scaled(v, 100)),
     "h": ("humidity_percent", 2, lambda v: 100 if v == 0 else v),
-    "b": ("pressure_mbar", 5, lambda v: v / 10),
+    "b": ("pressure_mbar", 5, lambda v: _scaled(v, 10)),
     "L": ("luminosity_w_m2", 3, int),
     "l": ("luminosity_w_m2", 3, lambda v: v + 1000),
     "#": ("rain_raw", 3, int),
@@ -44,7 +51,7 @@ _EXTRA = re.compile(r"[0-9.-]+")
 
 @dataclass
 class WeatherFields:
-    values: dict[str, object] = field(default_factory=dict)
+    values: dict[str, Any] = field(default_factory=dict)
     text: str = ""
     wind_from_fields: bool = False
 
@@ -147,9 +154,7 @@ def parse_weather_fields(
             seen.add(key)
         if value is not None:
             converted = convert(value)
-            if key == "wind_direction_degrees" and value > 360:
-                ctx.defect(C.OUT_OF_RANGE_VALUE)
-            elif key == "humidity_percent" and value > 100:
+            if (key == "wind_direction_degrees" and value > 360) or (key == "humidity_percent" and value > 100):
                 ctx.defect(C.OUT_OF_RANGE_VALUE)
             else:
                 values[key] = converted
@@ -169,7 +174,7 @@ def parse_weather_fields(
     return result
 
 
-def weather_tail(rest: str, ctx: Ctx, values: dict[str, object]) -> str:
+def weather_tail(rest: str, ctx: Ctx, values: dict[str, Any]) -> str:
     """What follows the weather fields: the software type and unit, or else comment text
     (``weather-comment``), which is returned."""
     if not rest:

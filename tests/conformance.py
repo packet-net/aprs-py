@@ -24,7 +24,7 @@ from packet_aprs import (
     decode_tnc2,
 )
 from packet_aprs.encode import encode_info, mic_e_destination
-from packet_aprs.neutral import from_neutral, header_to_neutral, to_neutral
+from packet_aprs.neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
 
 ROOT = Path(__file__).resolve().parent.parent
 VECTORS = ROOT / "vectors"
@@ -75,7 +75,7 @@ def differences(expected: Any, actual: Any, path: str = "") -> list[str]:
         if len(expected) != len(actual):
             out.append(f"{path}: expected {expected!r}, got {actual!r}")
         else:
-            for i, (e, a) in enumerate(zip(expected, actual)):
+            for i, (e, a) in enumerate(zip(expected, actual, strict=False)):
                 out.extend(differences(e, a, f"{path}[{i}]"))
     elif isinstance(expected, bool) or isinstance(actual, bool):
         if expected is not actual:
@@ -256,8 +256,12 @@ def check_reencode(case: dict[str, Any]) -> list[str]:
 
 
 def check_encode(case: dict[str, Any]) -> list[str]:
-    data = from_neutral(case["input"]["encode"])
     expect = case["expect"]
+    try:
+        data = from_neutral(case["input"]["encode"])
+    except NeutralFormError as e:
+        # the data model cannot even hold this (an ack with its own message ID, say)
+        return [] if expect.get("refused") else [f"cannot represent: {e}"]
     try:
         written = encode_info(data)
         destination = mic_e_destination(data) if isinstance(data, MicEReport) else None

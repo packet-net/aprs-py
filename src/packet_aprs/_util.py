@@ -87,3 +87,9 @@ def number_text(value: float) -> str:
     if "e" in text or "E" in text:
         text = f"{value:.15f}".rstrip("0").rstrip(".")
     return text
+
+
+def number_equal(a: float, b: float) -> bool:
+    """Equal within 1e-9, relative to the larger magnitude (absolute below 1)."""
+    scale = max(abs(a), abs(b))
+    return abs(a - b) <= 1e-9 * (scale if scale >= 1 else 1)

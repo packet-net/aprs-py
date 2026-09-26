@@ -37,7 +37,9 @@ def main() -> int:
     try:
         commit = subprocess.run(
             ["git", "-C", str(source.parent), "log", "-1", "--format=%h %cs"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         commit = "unknown"
@@ -80,7 +82,9 @@ def main() -> int:
         lines.append(f"    {str(item['tocall'])!r}: {entry(item)!r},")
     lines.append("}")
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"wrote {OUT}: {len(db.get('mice', []))} mice, {len(db.get('micelegacy', []))} legacy, {len(db.get('tocalls', []))} tocalls")
+    print(
+        f"wrote {OUT}: {len(db.get('mice', []))} mice, {len(db.get('micelegacy', []))} legacy, {len(db.get('tocalls', []))} tocalls"
+    )
     return 0
 
 
