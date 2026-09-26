@@ -51,7 +51,7 @@ _FREQ_KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{3})[Mm][Hh][Zz]")
 _FREQ_10KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{2}) [Mm][Hh][Zz]")
 _TONE = re.compile(r"([TtCcDd])([0-9]{3})|([Tt])off|([1l])750")
 _OFFSET = re.compile(r"([+-])([0-9]{3})")
-_RANGE = re.compile(r"R([0-9]{2,3})([mk])")
+_RANGE = re.compile(r"R([0-9]{2})([mk])")
 
 MICROWAVE_BASE = {
     "A": 1200,

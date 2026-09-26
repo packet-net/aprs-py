@@ -1022,9 +1022,10 @@ def _nmea(data: NmeaSentence) -> bytes:
     s = data.sentence
     if not s or not _util.is_printable_ascii(s):
         raise _refuse("an NMEA sentence is printable ASCII")
-    star = s.find("*")
+    star = len(s) - 3
+    ends_with_checksum = star >= 0 and s[star] == "*" and all(c in "0123456789ABCDEFabcdef" for c in s[star + 1 :])
     if data.has_checksum:
-        if star < 0 or len(s) != star + 3:
+        if not ends_with_checksum:
             raise _refuse("the sentence has no *hh checksum")
         got = 0
         for ch in s[:star]:
@@ -1035,8 +1036,8 @@ def _nmea(data: NmeaSentence) -> bytes:
             raise _refuse("the checksum is not hexadecimal") from None
         if got != want:
             raise _refuse("the NMEA checksum does not match the sentence")
-    elif star >= 0:
-        raise _refuse("has_checksum is false but the sentence has a checksum")
+    elif ends_with_checksum:
+        raise _refuse("has_checksum is false but the sentence ends with a checksum")
     from ._decode import Ctx, decode_info
 
     raw = ("$" + s).encode("ascii")
@@ -1072,7 +1073,7 @@ def _capabilities(data: Capabilities) -> bytes:
         if not 1 <= len(cap) <= 2:
             raise _refuse("a capability is a token or a token and a value")
         token = cap[0]
-        if not token or not all(c.isascii() and (c.isalnum() or c in "_.-") for c in token):
+        if not token or any(c in " =," or c < " " or c == "\x7f" for c in token):
             raise _refuse(f"capability token {token!r} is free text")
         if len(cap) == 2:
             value = cap[1]

@@ -15,7 +15,12 @@ if TYPE_CHECKING:
 __all__ = ["Packet", "PathEntry", "QConstruct", "tnc2_path"]
 
 Q_CONSTRUCTS = frozenset({"qAC", "qAX", "qAU", "qAo", "qAO", "qAS", "qAr", "qAR", "qAZ", "qAI"})
-"""The APRS-IS q-constructs, including ``qAr`` and ``qAo`` beside ``qAR`` and ``qAO``."""
+"""The q-constructs the APRS-IS algorithm defines, ``qAr`` and ``qAo`` beside ``qAR`` and ``qAO``."""
+
+
+def is_q_construct(call: str) -> bool:
+    """``qA`` and a letter: a q-construct, whether or not the APRS-IS algorithm defines it."""
+    return len(call) == 3 and call.startswith("qA") and call[2].isascii() and call[2].isalpha()
 
 
 def tnc2_path(path: tuple[PathEntry, ...]) -> str:
@@ -64,7 +69,7 @@ class Packet:
     def q_construct(self) -> QConstruct | None:
         """The q-construct in the path, when the packet came through APRS-IS."""
         for i, entry in enumerate(self.path):
-            if entry.call in Q_CONSTRUCTS:
+            if is_q_construct(entry.call):
                 station = self.path[i + 1].call if i + 1 < len(self.path) else None
                 return QConstruct(entry.call, station)
         return None

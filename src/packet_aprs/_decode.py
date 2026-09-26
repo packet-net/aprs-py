@@ -110,6 +110,12 @@ class Ctx:
             self.non_utf8 = True
         return text
 
+    def flush_text(self) -> None:
+        """Raise ``non-utf8-text`` now, for a format that checks the text before its structure."""
+        if self.non_utf8:
+            self.non_utf8 = False
+            self.defect(C.NON_UTF8_TEXT)
+
     def trial(self) -> Ctx:
         """A scratch context for trying a reading without committing its diagnostics."""
         return Ctx(self.options)
@@ -304,7 +310,7 @@ def _other(s: str, destination: str, ctx: Ctx) -> AprsData:
         except RejectedError:
             pass
         else:
-            if not isinstance(data, Unrecognized):
+            if isinstance(data, PositionReport):
                 ctx.warn(C.POSITION_NOT_AT_START)
                 ctx.diags.extend(trial.diags)
                 ctx.non_utf8 = trial.non_utf8
@@ -771,10 +777,13 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
 
     lat, ambiguity, message, _north, offset, west, ssid = _mic_e_destination(destination, ctx)
     if len(s) < 9:
-        ctx.fail(C.TRUNCATED)
+        ctx.fail(C.INVALID_MIC_E_INFORMATION)
     d = ord(s[1]) - 28
     m = ord(s[2]) - 28
     h = ord(s[3]) - 28
+    # d+28 is 38-127, m+28 38-97, and the rest 28-127 (APRS12c ch. 10)
+    if not (10 <= d <= 99 and 10 <= m <= 69 and 0 <= h <= 99):
+        ctx.fail(C.INVALID_MIC_E_INFORMATION)
     if offset:
         d += 100
     if 180 <= d <= 189:
@@ -1044,8 +1053,6 @@ def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
             ctx.info(C.INVALID_TELEMETRY_METADATA)
             return None
         values = tuple(ctx.text(item) for item in items)
-        if values == ("",):
-            values = ()
         if kind == "PARM.":
             return TelemetryNames(addressee, values, msg_id)
         return TelemetryUnits(addressee, values, msg_id)
@@ -1189,8 +1196,6 @@ def _positionless_weather(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx.defect(C.INVALID_TIMESTAMP)
     result = parse_weather_fields(s[9:], ctx, positionless=True, wind_known=False, compressed=False)
     text = weather_tail(result.text, ctx, result.values)
-    if text[:1] in (" ", "/"):
-        text = text[1:]
     return PositionlessWeather(timestamp, Weather(**result.values), ctx.text(text))
 
 
@@ -1223,12 +1228,10 @@ def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
     if not _util.is_printable_ascii(sentence) or not re.match(r"[A-Z0-9]{3,}(,|\*|\Z)", sentence):
         ctx.fail(C.INVALID_NMEA)
     has_checksum = False
-    star = sentence.find("*")
     body = sentence
-    if star >= 0:
-        m = _NMEA_CHECKSUM.search(sentence)
-        if not m or m.start() != star:
-            ctx.fail(C.INVALID_NMEA)
+    m = _NMEA_CHECKSUM.search(sentence)
+    if m:
+        star = m.start()
         want = int(m.group(1), 16)
         got = 0
         for ch in sentence[:star]:
@@ -1318,12 +1321,13 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     for item in items:
         token, eq, value = item.partition("=")
         token = token.strip(" ")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", token):
+        if " " in token or not token:
             free = True
         if eq:
             caps.append((ctx.text(token), ctx.text(value.strip(" "))))
         else:
             caps.append((ctx.text(token),))
+    ctx.flush_text()
     if free:
         ctx.defect(C.FREE_TEXT_CAPABILITIES)
     return Capabilities(tuple(caps))
