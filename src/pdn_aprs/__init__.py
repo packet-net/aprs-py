@@ -76,7 +76,7 @@ from .options import ParseOptions
 from .packet import Packet, PathEntry, QConstruct
 from .symbols import Symbol
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 decode = decode_tnc2
 """Decode a TNC2 / APRS-IS line (``str`` or ``bytes``); see :func:`decode_tnc2`."""
