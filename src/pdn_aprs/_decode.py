@@ -1488,7 +1488,7 @@ def _third_party(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx.fail(C.INVALID_THIRD_PARTY)
     info = body[colon + 1 :].encode("latin-1")
     data = decode_info(info, dest, inner)
-    return ThirdParty(Packet(source, dest, path, info, data, tuple(inner.diags)))
+    return ThirdParty(Packet(source, dest, path, info, data, tuple(inner.diags), third_party=True))
 
 
 _HANDLERS = {

@@ -239,7 +239,7 @@ def _comment_telemetry(d: dict[str, Any]) -> CommentTelemetry:
 def _packet(d: dict[str, Any]) -> Packet:
     path = tuple(PathEntry(p.rstrip("*"), p.endswith("*")) for p in d.get("path", ()))
     diagnostics = tuple(Diagnostic.parse(x) for x in d.get("diagnostics", ()))
-    return Packet(d["source"], d["destination"], path, b"", from_neutral(d["data"]), diagnostics)
+    return Packet(d["source"], d["destination"], path, b"", from_neutral(d["data"]), diagnostics, third_party=True)
 
 
 _CONVERT: dict[str, Any] = {

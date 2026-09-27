@@ -56,7 +56,8 @@ class Packet:
 
     ``info`` is the information field exactly as received. ``data`` is what was decoded from
     it: always present, an :class:`~pdn_aprs.model.Unrecognized` when nothing could be.
-    ``diagnostics`` lists everything the decoder noticed, header included.
+    ``diagnostics`` lists everything the decoder noticed, header included. ``third_party`` is
+    true for the packet inside a third-party packet (``}``), whose path is kept as sent.
     """
 
     source: str
@@ -65,10 +66,14 @@ class Packet:
     info: bytes
     data: AprsData
     diagnostics: tuple[Diagnostic, ...] = ()
+    third_party: bool = False
 
     @property
     def q_construct(self) -> QConstruct | None:
-        """The q-construct in the path, when the packet came through APRS-IS."""
+        """The q-construct in the path, when the packet came through APRS-IS. It is only read in
+        an outer header: a third-party packet's path is kept as sent, and has none."""
+        if self.third_party:
+            return None
         for i, entry in enumerate(self.path):
             if is_q_construct(entry.call):
                 station = self.path[i + 1].call if i + 1 < len(self.path) else None

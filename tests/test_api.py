@@ -292,6 +292,19 @@ def test_directed_query_targets() -> None:
     assert written("FOO") == b":KH2Z     :?FOO N0QBF"
 
 
+def test_third_party_inner_packet_has_no_q_construct() -> None:
+    # a q-construct is only read in the outer header (vectors README, "Addresses and path")
+    packet = aprs.decode("N0CALL>APZ001:}N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello")
+    assert isinstance(packet.data, aprs.ThirdParty)
+    inner = packet.data.packet
+    assert [str(p) for p in inner.path] == ["WIDE2-1", "qAR", "N2CALL"]
+    assert inner.q_construct is None
+    again = from_neutral(to_neutral(packet.data))
+    assert isinstance(again, aprs.ThirdParty)
+    assert again.packet.q_construct is None
+    assert aprs.decode("N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello").q_construct == aprs.QConstruct("qAR", "N2CALL")
+
+
 def test_neutral_round_trip() -> None:
     packet = aprs.decode("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
     assert from_neutral(to_neutral(packet.data)) == packet.data

@@ -9,6 +9,7 @@ Brought into line with the rulings from two rounds of differential fuzzing of al
 ### Added
 
 - `NmeaSentence.comment`: text sent after the checksum (TinyTrack sends one), kept as sent, and written back after the checksum.
+- `Packet.third_party`: true for the packet inside a third-party packet. Its `q_construct` is now always None, since a q-construct is only read in the outer header and a third-party path is kept as sent; it used to report one found in the inner path.
 
 ### Changed
 
