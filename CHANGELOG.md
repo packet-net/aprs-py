@@ -10,6 +10,7 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 - `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
 
+- `tools/diff_dump.py` has an encode mode (`--encode`, neutral data from the vectors' `tools/generate.py`) and a build mode (`--build`, builder recipes), and its decode records carry the API view: the header, path and q-construct, the diagnostics accessors, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for.
 - `Station.position`, `object` and `mic_e` take `speed_kmh` and `altitude_m`, and `Station.weather` takes `temperature_c`, `rain_1h_mm`, `rain_24h_mm` and `rain_since_midnight_mm`, beside the units APRS sends; they are converted.
 
 ### Changed

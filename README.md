@@ -170,13 +170,15 @@ Symbol('/f')
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and the encode cases. All 6,015 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), and the encode cases. All 6,015 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
-`tools/diff_dump.py` decodes a whole capture and writes the JSONL that the vectors' `tools/compare.py` reads, spread over all cores (a 6.9-million-line capture takes about two minutes):
+`tools/diff_dump.py` writes the JSONL that the vectors' `tools/compare.py` reads, spread over all cores, in the three modes the vectors' README describes ("Comparing implementations"). Decode, the default, decodes a whole capture (a 6.9-million-line capture takes about two minutes) and records the lenient and strict results, the bytes the encoder writes again and the API view; `--encode` encodes neutral data from the vectors' `tools/generate.py`; `--build` builds packets from its recipes with the `Station` methods, and reports a recipe key they cannot express as unsupported:
 
 ```sh
 python3 tools/diff_dump.py lines.hex.gz py.jsonl.gz
-python3 vectors/tools/compare.py py.jsonl.gz rs.jsonl.gz --names Python Rust --lines lines.hex.gz
+python3 tools/diff_dump.py --encode data.jsonl.gz py-encode.jsonl.gz
+python3 tools/diff_dump.py --build recipes.jsonl.gz py-build.jsonl.gz
+python3 vectors/tools/compare.py py.jsonl.gz rs.jsonl.gz --names Python Rust --input lines.hex.gz
 ```
 
 On the 6,879,893-packet APRS-IS capture the other implementations were compared on, this one agrees with both on every packet: lenient and strict decoding and re-encoding.
