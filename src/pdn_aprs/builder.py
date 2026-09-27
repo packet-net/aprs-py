@@ -13,7 +13,9 @@ M0LTE-9>APZ001,WIDE1-1:!5127.00N/00058.80W>088/036Mobile
 M0LTE-9>APZ001,WIDE1-1::G4ABC    :Hello there{1
 
 Quantities are in the units APRS sends: degrees, knots, feet, miles, and for weather mph,
-degrees Fahrenheit, inches and millibars.
+degrees Fahrenheit, inches and millibars. Speed, altitude, temperature and rain can be given in
+metric units instead (``speed_kmh``, ``altitude_m``, ``temperature_c``, ``rain_1h_mm``...), and
+are converted.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from ._util import FEET_PER_METRE
 from .encode import DEFAULT_DESTINATION, build_packet
 from .model import (
     Ack,
@@ -71,6 +74,21 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     if hms:
         return Timestamp.hms(moment.hour, moment.minute, moment.second)
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
+
+
+KMH_PER_KNOT = 1.852
+"""Kilometres per hour in a knot: a nautical mile is exactly 1852 m."""
+
+MM_PER_INCH = 25.4
+
+
+def _either(value: float | None, metric: float | None, per_unit: float, what: str) -> float | None:
+    """A quantity given in APRS's unit or in a metric one, which is divided by ``per_unit``."""
+    if metric is None:
+        return value
+    if value is not None:
+        raise ValueError(f"give the {what} once, not in both units")
+    return metric / per_unit
 
 
 def _frequency(
@@ -133,6 +151,8 @@ class Station:
         course: int | None = None,
         speed: float | None = None,
         altitude: float | None = None,
+        speed_kmh: float | None = None,
+        altitude_m: float | None = None,
         timestamp: TimestampLike = None,
         compressed: bool = False,
         ambiguity: int = 0,
@@ -144,12 +164,14 @@ class Station:
         telemetry: CommentTelemetry | None = None,
         precise: bool = False,
     ) -> Packet:
-        """A position report. ``course`` in degrees, ``speed`` in knots, ``altitude`` in feet.
+        """A position report. ``course`` in degrees, ``speed`` in knots (or ``speed_kmh``),
+        ``altitude`` in feet (or ``altitude_m``).
 
         ``timestamp=True`` stamps it with the time now. ``precise`` adds a ``!DAO!`` for about
         a foot of precision. ``frequency`` (MHz, with ``tone`` in Hz and ``offset_khz``) is the
         voice frequency the station listens on.
         """
+        speed = _either(speed, speed_kmh, KMH_PER_KNOT, "speed")
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -159,7 +181,7 @@ class Station:
             comment=comment,
             course_degrees=course,
             speed_knots=speed,
-            altitude_feet=altitude,
+            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
             compressed=compressed,
             compression=CompressionType() if compressed and (course is not None or speed is not None) else None,
             ambiguity=ambiguity,
@@ -184,6 +206,8 @@ class Station:
         course: int | None = None,
         speed: float | None = None,
         altitude: float | None = None,
+        speed_kmh: float | None = None,
+        altitude_m: float | None = None,
         frequency: float | VoiceFrequency | None = None,
         tone: float | None = None,
         offset_khz: int | None = None,
@@ -205,8 +229,8 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             course_degrees=course,
-            speed_knots=speed,
-            altitude_feet=altitude,
+            speed_knots=_either(speed, speed_kmh, KMH_PER_KNOT, "speed"),
+            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
             frequency=_frequency(frequency, tone, offset_khz),
         )
         return self.send(data)
@@ -242,6 +266,8 @@ class Station:
         course: int | None = None,
         speed: float = 0,
         altitude: float | None = None,
+        speed_kmh: float | None = None,
+        altitude_m: float | None = None,
         comment: str = "",
     ) -> Packet:
         """A Mic-E report: the compact position format of trackers and radios. The destination
@@ -253,8 +279,8 @@ class Station:
             symbol=self._symbol(symbol),
             mic_e_message=message,
             course_degrees=course,
-            speed_knots=speed,
-            altitude_feet=altitude,
+            speed_knots=speed if speed_kmh is None else speed_kmh / KMH_PER_KNOT,
+            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
             comment=comment,
             type_code="`" if self.messaging else "'",
         )
@@ -281,21 +307,30 @@ class Station:
         timestamp: TimestampLike = None,
         software: str | None = None,
         unit: str | None = None,
+        temperature_c: float | None = None,
+        rain_1h_mm: float | None = None,
+        rain_24h_mm: float | None = None,
+        rain_since_midnight_mm: float | None = None,
     ) -> Packet:
         """A weather report: with a position, a complete weather report (``_`` symbol);
         without one, a positionless report (always timestamped, now by default).
 
-        Wind in degrees and mph, temperature in degrees Fahrenheit, rain in inches, humidity
-        in percent, pressure in millibars, luminosity in W/m2, snow in inches.
+        Wind in degrees and mph, temperature in degrees Fahrenheit (or ``temperature_c``), rain
+        in inches (or ``rain_1h_mm`` and so on), humidity in percent, pressure in millibars,
+        luminosity in W/m2, snow in inches.
         """
+        if temperature_c is not None:
+            if temperature is not None:
+                raise ValueError("give the temperature once, not in both units")
+            temperature = temperature_c * 9 / 5 + 32
         weather = Weather(
             wind_direction_degrees=wind_direction,
             wind_speed_mph=wind_speed,
             wind_gust_mph=gust,
             temperature_f=temperature,
-            rain_1h_in=rain_1h,
-            rain_24h_in=rain_24h,
-            rain_midnight_in=rain_since_midnight,
+            rain_1h_in=_either(rain_1h, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
+            rain_24h_in=_either(rain_24h, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
+            rain_midnight_in=_either(rain_since_midnight, rain_since_midnight_mm, MM_PER_INCH, "rain since midnight"),
             humidity_percent=humidity,
             pressure_mbar=pressure,
             luminosity_w_m2=luminosity,

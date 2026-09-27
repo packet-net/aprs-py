@@ -10,6 +10,8 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 - `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
 
+- `Station.position`, `object` and `mic_e` take `speed_kmh` and `altitude_m`, and `Station.weather` takes `temperature_c`, `rain_1h_mm`, `rain_24h_mm` and `rain_since_midnight_mm`, beside the units APRS sends; they are converted.
+
 ### Changed
 
 - The comment of a position, object or item is written in the order frequency, braces, altitude, free text, base-91 telemetry, `!DAO!`: the frequency goes first, where radios read it (APRS12c ch. 18), the altitude follows it and its fields straight on, and the free text follows after a space (`j006/058/146.520MHz/A=000889 Dayton Bound`; it used to write `/A=` before the frequency).

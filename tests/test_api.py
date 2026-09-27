@@ -88,6 +88,16 @@ def test_station_needs_a_symbol() -> None:
         Station("M0LTE").position(51.0, 0.0)
 
 
+def test_station_metric_units() -> None:
+    packet = STATION.position(51.45, -0.98, course=88, speed_kmh=100, altitude_m=30.48)
+    assert packet.info.endswith(b">088/054/A=000100")
+    assert STATION.mic_e(51.45, -0.98, speed_kmh=18.52).data == STATION.mic_e(51.45, -0.98, speed=10).data
+    weather = STATION.weather(49.05, -72.03, temperature_c=25, rain_1h_mm=25.4)
+    assert b"t077r100" in weather.info
+    with pytest.raises(ValueError, match="both units"):
+        STATION.position(51.45, -0.98, speed=10, speed_kmh=18.52)
+
+
 def test_station_path_forms() -> None:
     assert Station("M0LTE", via="WIDE1-1, WIDE2-1").path == ("WIDE1-1", "WIDE2-1")
     assert Station("M0LTE", via=["WIDE1-1"]).path == ("WIDE1-1",)
