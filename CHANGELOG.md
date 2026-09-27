@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0]
+
 Brought into line with the rulings from seven rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 159 new cases, and new rules in its README and interpretations.md). All 6,015 of the vectors' checks pass.
 
 ### Added
@@ -53,4 +55,7 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v0.1.0...HEAD [0.1.0]: https://github.com/packet-net/aprs-py/releases/tag/v0.1.0
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/packet-net/aprs-py/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/packet-net/aprs-py/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/packet-net/aprs-py/releases/tag/v0.1.0
