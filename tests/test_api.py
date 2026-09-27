@@ -286,6 +286,21 @@ def test_nmea_comment_after_checksum() -> None:
     assert from_neutral(to_neutral(packet.data)) == packet.data
 
 
+@pytest.mark.parametrize(("snow", "text"), [(0.32, "s.32"), (0.05, "s.05"), (1.5, "s1.5"), (12, "s012"), (0.3, "s0.3")])
+def test_snowfall_is_written_exactly(snow: float, text: str) -> None:
+    info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+    assert info.endswith(text.encode())
+    assert aprs.decode(b"N0CALL>APZ001:" + info).data == aprs.PositionlessWeather(
+        Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)
+    )
+
+
+@pytest.mark.parametrize("snow", [12.5, 0.325, 1000, -1])
+def test_snowfall_that_three_characters_cannot_hold_is_refused(snow: float) -> None:
+    with pytest.raises(EncodeError):
+        aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+
+
 def test_directed_query_targets() -> None:
     def written(query_type: str) -> bytes:
         return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))

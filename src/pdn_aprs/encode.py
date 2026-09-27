@@ -544,6 +544,16 @@ def _braces(data: PositionedData) -> str:
     return text
 
 
+def _snowfall_text(snow: float) -> str:
+    """Snowfall exactly in its three characters, with a decimal point where it needs one: 12 as
+    ``012``, 1.5 as ``1.5``, 0.32 as ``.32``. Refused when three characters cannot hold it."""
+    if snow >= 0:
+        for text in (f"{snow:03.0f}", f"{snow:3.1f}", f"{snow:.2f}".removeprefix("0")):
+            if len(text) == 3 and _util.number_equal(float(text), snow):
+                return text
+    raise _refuse(f"snowfall of {snow} inches cannot be written exactly in three characters")
+
+
 def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     """The weather fields: the wind first (unless compressed), the mandatory gust and
     temperature (dots when unknown), the rest when known, then software and unit."""
@@ -595,11 +605,7 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
         else:
             raise _refuse("luminosity is not 0-1999")
     if w.snow_24h_in is not None:
-        snow = w.snow_24h_in
-        text = f"{round(snow):03d}" if float(snow).is_integer() else f"{snow:.1f}"
-        if len(text) != 3:
-            raise _refuse("snowfall does not fit the weather format")
-        out.append("s" + text)
+        out.append("s" + _snowfall_text(w.snow_24h_in))
     if w.rain_raw is not None:
         out.append("#" + num(w.rain_raw, 3))
     for extra in w.extra:
