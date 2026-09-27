@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-Brought into line with the rulings from two rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 134 new cases, and new rules in its README and interpretations.md). All 5,942 of the vectors' checks pass.
+Brought into line with the rulings from two rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 135 new cases, and new rules in its README and interpretations.md). All 5,944 of the vectors' checks pass.
 
 ### Added
 
@@ -13,7 +13,7 @@ Brought into line with the rulings from two rounds of differential fuzzing of al
 ### Changed
 
 - NMEA: text after `$` must be an NMEA 0183 sentence, or it is `invalid-nmea`: printable ASCII, an address of five upper-case letters or digits (or `P` and three or more of them), then at least one field. The sentence ends at its first `*` and two hex digits, and the checksum is verified; a `*` that starts no checksum is `invalid-nmea`. The structure is checked before the checksum. Only GGA, GLL, RMC, VTG and WPL from a five-character address that does not start `P` are read. A coordinate needs a degree digit, minutes below 60 and a value in range, and a position needs both; the time must be exactly `hhmmss` in range; `fix` needs a status of `A` or `V`, or a one-digit GGA quality.
-- Mic-E: the 0x1C and 0x1D data type identifiers get an `obsolete-format` info, before anything else is checked. A PHG straight after the type code is read before an altitude is looked for later in the text, so `0PH}` in `PHG3330PH}` is not an altitude.
+- Mic-E: the 0x1C and 0x1D data type identifiers get an `obsolete-format` info, before anything else is checked. A destination whose ambiguity centres its latitude past 90 degrees (`90LLLL`) is `invalid-mic-e-destination`, and the encoder refuses an ambiguous position at 90 or 180 degrees. A PHG straight after the type code is read before an altitude is looked for later in the text, so `0PH}` in `PHG3330PH}` is not an altitude.
 - Positions: the latitude alone sets the ambiguity. A longitude place it blanks may hold a digit or a space; a space anywhere else is `invalid-longitude`.
 - `!DAO!`: a digit datum is only read with spaces for A and O, and a DAO is five bytes as sent, never joined across removed telemetry or a Mic-E altitude. The precision it adds stays south or west of 0 degrees: a Mic-E latitude of 0 degrees south with a DAO is now negative.
 - Only `\l` is an area object and only `\m` a signpost; with an overlay, `l` and `m` are ordinary symbols. A signpost is 1-3 printable ASCII characters. Base-91 comment telemetry's `digital` is the eight binary channels, 0-255.

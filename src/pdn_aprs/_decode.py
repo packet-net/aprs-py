@@ -771,10 +771,13 @@ def _mic_e_destination(destination: str, ctx: Ctx) -> tuple[float, int, str, boo
     kept = text.rstrip(" ") + "0" * blanks
     degrees = int(kept[:2])
     minutes = int(kept[2:4]) + int(kept[4:6]) / 100
-    if int(kept[2:4]) > 59 or degrees > 90 or (degrees == 90 and minutes > 0):
+    if int(kept[2:4]) > 59:
         ctx.fail(C.INVALID_MIC_E_DESTINATION)
     if blanks:
         minutes += _AMBIGUITY_UNIT[blanks] / 2
+    if degrees * 60 + minutes > 90 * 60:
+        # exactly 90 degrees is valid, but not an ambiguity whose centre is past the pole (90LLLL)
+        ctx.fail(C.INVALID_MIC_E_DESTINATION)
     lat = degrees + minutes / 60
     if any(std) and any(custom):
         message = MicEMessage.UNKNOWN.value

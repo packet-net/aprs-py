@@ -258,6 +258,8 @@ def _uncompressed(data: PositionedData, lat_units: int, lon_units: int) -> str:
     od, orr = divmod(lon_units, 6000)
     lat_digits = f"{ld:02d}{lr // 100:02d}{lr % 100:02d}"
     lon_digits = f"{od:03d}{orr // 100:02d}{orr % 100:02d}"
+    if amb and (ld == 90 or od == 180):
+        raise _refuse("an ambiguous position at 90 or 180 degrees would be centred past it")
     if amb:
         lat_digits = lat_digits[: 6 - amb] + " " * amb
         lon_digits = lon_digits[: 7 - amb] + " " * amb
@@ -737,6 +739,8 @@ def _mic_e_destination(data: MicEReport) -> str:
         raise _refuse("latitude out of range")
     deg, rem = divmod(lat_units, 6000)
     digits = f"{deg:02d}{rem // 100:02d}{rem % 100:02d}"
+    if data.ambiguity and deg == 90:
+        raise _refuse("an ambiguous latitude of 90 degrees would be centred past the pole")
     if data.ambiguity:
         digits = digits[: 6 - data.ambiguity] + " " * data.ambiguity
     kind, bits = _MESSAGE_BITS[data.mic_e_message]
