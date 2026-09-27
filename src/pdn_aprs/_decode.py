@@ -1421,10 +1421,12 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     return Capabilities(tuple(caps))
 
 
-_FOOTPRINT_DEGREES = r"( ?[0-9]+(?:\.[0-9]+)?|-[0-9]+(?:\.[0-9]+)?)"
+_FOOTPRINT_DEGREES = r"( ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))"
 _FOOTPRINT = re.compile(_FOOTPRINT_DEGREES + "," + _FOOTPRINT_DEGREES + r",([0-9]{4})\Z")
-"""A general query footprint: latitude and longitude in decimal degrees, where only a positive
-value may have a leading space (APRS12c ch. 15), and a radius of exactly 4 digits."""
+"""A general query footprint: latitude and longitude in decimal degrees, each a number as a
+telemetry value is (an optional ``-``, then digits with an optional decimal point, at least one
+digit), where only a positive value may have a leading space (APRS12c ch. 15); and a radius of
+exactly 4 digits."""
 
 
 def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
