@@ -52,7 +52,7 @@ _SNOWFALL = "snow_24h_in"
 
 _SOFTWARE_UNIT = re.compile(r"([A-Za-z])([A-Za-z0-9_-]{2,4})\Z")
 _EXTRA = re.compile(r"[0-9.-]+")
-_SNOW_VALUE = re.compile(r"[0-9.]{3}")
+_SNOW_VALUE = re.compile(r"[0-9.]{1,3}")
 
 
 @dataclass
@@ -117,22 +117,22 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
             if wind_as_fields and not result.speed_sent:
                 spec = _WIND_SPEED
             else:
-                # snowfall keeps its fixed width: three digits (a decimal point allowed) or dots,
-                # or, one or two dots short, an unknown value with a width warning
+                # snowfall keeps its width: three characters, digits with at most one decimal
+                # point, or dots. A value that holds a digit is a number, and only a run of dots
+                # (unknown) may be shorter, with a width warning.
                 if _SNOWFALL in seen:
                     break
-                chunk = text[i + 1 : i + 4]
-                dots = _dots(text, i + 1)
-                if dots >= 3:
-                    length = 3
-                elif len(chunk) == 3 and _SNOW_VALUE.fullmatch(chunk) and chunk.count(".") <= 1:
+                value_text = _SNOW_VALUE.match(text, i + 1)
+                chunk = value_text.group() if value_text else ""
+                if any("0" <= ch <= "9" for ch in chunk):
+                    if len(chunk) != 3 or chunk.count(".") > 1:
+                        break
                     values[_SNOWFALL] = float(chunk)
-                    length = 3
-                elif dots:
+                elif len(chunk) < 3:
+                    if not chunk:
+                        break
                     defects.append(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
-                    length = dots
-                else:
-                    break
+                length = len(chunk)
                 seen.add(_SNOWFALL)
                 i += 1 + length
                 continue

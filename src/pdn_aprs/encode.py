@@ -31,7 +31,6 @@ from .model import (
     Bulletin,
     Capabilities,
     CommentTelemetry,
-    CompressionType,
     DaoPrecision,
     DirectedQuery,
     ItemReport,
@@ -355,12 +354,22 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
             s = round(math.log(data.range_miles / 2) / math.log(1.08))
             if not 0 <= s <= 90:
                 raise _refuse("range too large for the compressed format")
+            step = 2 * 1.08**s
+            if not _util.number_equal(step, data.range_miles):
+                # interpretations.md lets an encoder round a range into the cs bytes or refuse:
+                # this one refuses, rather than write a different range
+                raise _refuse(
+                    f"a compressed range is 2 x 1.08^n miles, so {data.range_miles:g} miles cannot be written"
+                    f" exactly (the nearest step is {step:.2f} miles)"
+                )
             cs = "{" + chr(s + 33)
     if cs is None:
         if ctype is not None:
             raise _refuse("a compression type needs course/speed, range or altitude to go with it")
         return f"{table}{y}{x}{data.symbol.code} sT", altitude_text
-    ctype = ctype or CompressionType()
+    if ctype is None:
+        # the cs bytes always come with a compression type byte, which reads back as data
+        raise _refuse("compressed course and speed, range or wind need a compression type (the T byte)")
     return f"{table}{y}{x}{data.symbol.code}{cs}{chr(ctype.value + 33)}", altitude_text
 
 
