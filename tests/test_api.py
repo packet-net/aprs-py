@@ -301,6 +301,20 @@ def test_snowfall_that_three_characters_cannot_hold_is_refused(snow: float) -> N
         aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
 
 
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "info"),
+    [
+        (34.02, -117.15, b"?APRS? 34.02,-117.15,0200"),
+        (-34.02, 117.15, b"?APRS?-34.02, 117.15,0200"),
+    ],
+)
+def test_footprint_space_only_before_a_positive_value(latitude: float, longitude: float, info: bytes) -> None:
+    query = aprs.Query("APRS", aprs.Footprint(latitude, longitude, 200))
+    assert aprs.encode_info(query) == info
+    assert aprs.decode(b"N0CALL>APZ001:" + info).data == query
+    assert isinstance(aprs.decode("N0CALL>APZ001:?APRS? 34.02,- 17.15,0200").data, aprs.Unrecognized)
+
+
 def test_directed_query_targets() -> None:
     def written(query_type: str) -> bytes:
         return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))

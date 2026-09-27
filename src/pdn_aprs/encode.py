@@ -1151,7 +1151,11 @@ def _query(data: Query) -> bytes:
             raise _refuse("footprint radius is 0-9999 miles")
         if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
             raise _refuse("footprint latitude or longitude out of range")
-        text += f" {_util.number_text(f.latitude)},{_util.number_text(f.longitude)},{f.radius_miles:04d}"
+        # north and east are positive, "indicated by a leading space"; south and west have only
+        # the minus sign (APRS12c ch. 15)
+        lat, lon = (_util.number_text(v) for v in (f.latitude, f.longitude))
+        lat, lon = (v if v.startswith("-") else " " + v for v in (lat, lon))
+        text += f"{lat},{lon},{f.radius_miles:04d}"
     return _checked(data, text)
 
 

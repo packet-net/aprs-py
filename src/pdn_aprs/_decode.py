@@ -1421,7 +1421,10 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     return Capabilities(tuple(caps))
 
 
-_FOOTPRINT = re.compile(r" ?(-?\d+(?:\.\d+)?),(-? ?\d+(?:\.\d+)?),(\d{4})\Z")
+_FOOTPRINT_DEGREES = r"( ?[0-9]+(?:\.[0-9]+)?|-[0-9]+(?:\.[0-9]+)?)"
+_FOOTPRINT = re.compile(_FOOTPRINT_DEGREES + "," + _FOOTPRINT_DEGREES + r",([0-9]{4})\Z")
+"""A general query footprint: latitude and longitude in decimal degrees, where only a positive
+value may have a leading space (APRS12c ch. 15), and a radius of exactly 4 digits."""
 
 
 def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
@@ -1437,7 +1440,7 @@ def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
         m = _FOOTPRINT.match(rest)
         if not m:
             ctx.fail(C.INVALID_GENERAL_QUERY)
-        footprint = Footprint(float(m.group(1)), float(m.group(2).replace(" ", "")), int(m.group(3)))
+        footprint = Footprint(float(m.group(1)), float(m.group(2)), int(m.group(3)))
         if abs(footprint.latitude) > 90 or abs(footprint.longitude) > 180:
             # no such place: dropping the footprint would make the query one to every station
             ctx.fail(C.INVALID_GENERAL_QUERY)
