@@ -433,7 +433,7 @@ def _extension(data: PositionedData) -> str:
             if str(data.symbol) != "/\\":
                 raise _refuse("DF bearing needs the DF symbol /\\")
             b = data.df_bearing
-            if not (0 <= b.bearing_degrees <= 999 and all(0 <= v <= 9 for v in (b.number, b.range, b.quality))):
+            if not (0 <= b.bearing_degrees <= 360 and all(0 <= v <= 9 for v in (b.number, b.range, b.quality))):
                 raise _refuse("DF bearing or NRQ out of range")
             text += f"/{b.bearing_degrees:03d}/{b.number}{b.range}{b.quality}"
         text += _storm_text(data)
@@ -518,8 +518,8 @@ def _telemetry_text(t: CommentTelemetry | None) -> str:
 def _braces(data: PositionedData) -> str:
     text = ""
     if data.signpost is not None:
-        if not (data.symbol.is_alternate and data.symbol.code == "m"):
-            raise _refuse("a signpost needs the signpost symbol \\m")
+        if str(data.symbol) != "\\m":
+            raise _refuse("a signpost needs the signpost symbol \\m, without an overlay")
         sign = data.signpost
         if not 1 <= len(sign) <= 3 or not _util.is_printable_ascii(sign) or "{" in sign or "}" in sign:
             raise _refuse("a signpost is 1-3 printable ASCII characters other than braces")
@@ -775,6 +775,10 @@ def _mic_e_altitude(feet: float) -> str | None:
     return _util.base91_text(value, 3) + "}"
 
 
+_MIC_E_STATUS_START = "`'>] \x1d"
+"""What Mic-E status text cannot start with: a device type code, or 0x1D (obsolete telemetry)."""
+
+
 def _mic_e(data: MicEReport) -> bytes:
     _check_symbol(data)
     _check_text(data.comment, "comment")
@@ -863,6 +867,10 @@ def _mic_e(data: MicEReport) -> bytes:
         if locator and (after or comment):
             text += " "
         text += after + comment
+        if not legacy and not type_code and text and text[0] in _MIC_E_STATUS_START:
+            # status text must not start with a type code character or 0x1D (APRS12c ch. 10),
+            # so it goes after a / delimiter
+            text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
     return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq))

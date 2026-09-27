@@ -566,8 +566,10 @@ def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) 
         elif not p.compressed and (parts.dao_lat or parts.dao_lon):
             lat = float(fields["latitude"])
             lon = float(fields["longitude"])
-            fields["latitude"] = lat + (parts.dao_lat / 60 if lat >= 0 else -parts.dao_lat / 60)
-            fields["longitude"] = lon + (parts.dao_lon / 60 if lon >= 0 else -parts.dao_lon / 60)
+            # the added precision is on the position's own side of the equator or meridian, even
+            # at 0 degrees (-0.0 south or west)
+            fields["latitude"] = lat + math.copysign(parts.dao_lat / 60, lat)
+            fields["longitude"] = lon + math.copysign(parts.dao_lon / 60, lon)
     fields["comment"] = ctx.text(parts.comment)
 
 

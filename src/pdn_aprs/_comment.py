@@ -134,9 +134,12 @@ def parse_extension(
             if str(symbol) == "/\\":
                 df = _DF.match(rest, 7)
                 if df:
-                    values["df_bearing"] = DfBearing(
-                        int(df.group(1)), int(df.group(2)), int(df.group(3)), int(df.group(4))
-                    )
+                    bearing = int(df.group(1))
+                    if bearing > 360:
+                        # a bearing is degrees: the whole /BRG/NRQ goes, as an out-of-range course does
+                        ctx.defect(C.OUT_OF_RANGE_VALUE)
+                    else:
+                        values["df_bearing"] = DfBearing(bearing, int(df.group(2)), int(df.group(3)), int(df.group(4)))
                     consumed = df.end()
             elif symbol.code == "@":
                 st = _STORM.match(rest, 7)
@@ -343,7 +346,8 @@ def _lift_rest(
             parts.altitude_feet = value
             text = text[: m.start()] + text[m.end() :]
     if "{" in text and symbol is not None:
-        is_signpost = symbol.is_alternate and symbol.code == "m"
+        # only \m is a signpost: with an overlay, m is an ordinary symbol (APRS12c ch. 11)
+        is_signpost = str(symbol) == "\\m"
         is_line = isinstance(area, AreaObject) and area.shape in (
             AreaShape.LINE_DOWN_RIGHT,
             AreaShape.LINE_DOWN_LEFT,
