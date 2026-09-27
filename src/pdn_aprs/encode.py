@@ -1252,6 +1252,9 @@ def _third_party(data: ThirdParty) -> bytes:
 def _user_defined(data: UserDefined) -> bytes:
     if len(data.user_id) != 1 or len(data.packet_type) != 1:
         raise _refuse("user ID and packet type are one character each")
+    if (data.user_id + data.packet_type + data.data).endswith(("\r", "\n")):
+        # a line break at the end of a packet is a tolerated defect, not data: it would be dropped
+        raise _refuse("user-defined data that ends in a line break would read back without it")
     try:
         return ("{" + data.user_id + data.packet_type + data.data).encode("latin-1")
     except UnicodeEncodeError:

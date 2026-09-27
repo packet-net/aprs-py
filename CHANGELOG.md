@@ -19,6 +19,8 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - The digits of a `!DAO!` on a compressed position, which a decoder ignores, are those the same DAO gives the position written uncompressed (`!sCp!`), so that a reader that did apply them lands on the position reported; they used to be `!!` or `00`.
 - A snowfall under 1 inch is written as `.` and two digits (0.5 as `.50`, where it used to write `0.5`).
 - A range sent later in a compressed position's comment (`RNG0025`) is rounded to the nearest step of the cs bytes, with the default type byte, where it used to be refused.
+- User-defined data that ends in a line break is refused: the decoder takes a trailing CR or LF as a tolerated defect and drops it, so it would not read back.
+- `from_neutral` reads a bulletin or NWS bulletin with its empty text left out, and a third-party packet whose source or destination is left out as empty.
 - Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
 - The conformance tests compare the bytes written with a case's `canonical_info` byte for byte, for `equivalent` cases once the data reads back the same, and for the new `rounded` cases, whose data differs by the rounding.
 

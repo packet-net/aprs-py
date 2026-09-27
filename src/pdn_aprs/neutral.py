@@ -239,7 +239,9 @@ def _comment_telemetry(d: dict[str, Any]) -> CommentTelemetry:
 def _packet(d: dict[str, Any]) -> Packet:
     path = tuple(PathEntry(p.rstrip("*"), p.endswith("*")) for p in d.get("path", ()))
     diagnostics = tuple(Diagnostic.parse(x) for x in d.get("diagnostics", ()))
-    return Packet(d["source"], d["destination"], path, b"", from_neutral(d["data"]), diagnostics, third_party=True)
+    # a header's source and destination are always written, even when empty; one left out is empty
+    source, destination = d.get("source", ""), d.get("destination", "")
+    return Packet(source, destination, path, b"", from_neutral(d["data"]), diagnostics, third_party=True)
 
 
 _CONVERT: dict[str, Any] = {
@@ -288,7 +290,8 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             kwargs[key] = _CONVERT[key](value)
         else:
             kwargs[key] = value
-    if cls is Message and "text" not in kwargs:
+    if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
+        # empty text is left out of the neutral form
         kwargs["text"] = ""
     try:
         return cls(**kwargs)

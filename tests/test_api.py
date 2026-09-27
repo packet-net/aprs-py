@@ -279,6 +279,8 @@ def test_timestamps() -> None:
         aprs.TelemetryCoefficients("BLN1", (0, 1, 0)),
         aprs.TelemetryNames("NWS-WARN", ("Temp",)),
         aprs.DirectedQuery("BLN1", "APRSP"),
+        # a line break at the end of a packet is a tolerated defect, not data
+        aprs.UserDefined("Q", "1", "data\r"),
     ],
 )
 def test_encoder_refuses(data: aprs.AprsData) -> None:
@@ -402,6 +404,13 @@ def test_third_party_inner_packet_has_no_q_construct() -> None:
     assert isinstance(again, aprs.ThirdParty)
     assert again.packet.q_construct is None
     assert aprs.decode("N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello").q_construct == aprs.QConstruct("qAR", "N2CALL")
+
+
+def test_neutral_form_leaves_empty_text_and_addresses_out() -> None:
+    assert from_neutral({"type": "bulletin", "addressee": "BLN1"}) == aprs.Bulletin("BLN1", "")
+    third = from_neutral({"type": "third-party", "packet": {"source": "N0CALL", "data": {"type": "status"}}})
+    assert isinstance(third, aprs.ThirdParty)
+    assert third.packet.destination == ""
 
 
 def test_neutral_round_trip() -> None:
