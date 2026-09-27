@@ -1,5 +1,3 @@
 {
-  "_comment": "Conformance checks to skip, as \"<case id>::<check>\": \"<reason>\", where the check is lenient, strict, tolerance, reencode or encode. A case believed wrong is listed here with evidence rather than edited.",
-  "mic-e/speed-190-to-199-knots::reencode": "The case's canonical bytes contradict the README's own Mic-E rule: \"the encoder uses the printable forms APRS12c ch. 10 allows (... course hundreds + 4)\". The input's DC byte is ':' (speed units 3, course hundreds 0 without the + 4); with the + 4 it is '>', which this encoder writes (`/Xg/>O>...). Both read back as 193 knots and 51 degrees; only the + 4 form is the one the rule names.",
-  "mic-e/speed-190-to-199-knots-sent-as-del::reencode": "The case's canonical bytes contradict the README's own Mic-E rule: \"the encoder uses the printable forms APRS12c ch. 10 allows (... course hundreds + 4)\". The input's DC byte is ':' (speed units 3, course hundreds 0 without the + 4); with the + 4 it is '>', which this encoder writes (`/Xg/>O>...). Both read back as 193 knots and 51 degrees; only the + 4 form is the one the rule names."
+  "_comment": "Conformance checks to skip, as \"<case id>::<check>\": \"<reason>\", where the check is lenient, strict, tolerance, reencode or encode. A case believed wrong is listed here with evidence rather than edited. There are none."
 }
