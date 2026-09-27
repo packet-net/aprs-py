@@ -59,7 +59,7 @@ class DiagnosticCode(str, Enum):
     RESERVED_DATA_TYPE = "reserved-data-type"
     """A reserved data type identifier with no defined format (APRS12c ch. 5)."""
     OBSOLETE_FORMAT = "obsolete-format"
-    """A format the spec marks obsolete or not recommended, e.g. raw NMEA or raw weather."""
+    """A format the spec marks obsolete or not recommended, e.g. raw NMEA, raw weather, or the Rev 0 Mic-E data type identifiers 0x1C and 0x1D."""
     OUT_OF_RANGE_VALUE = "out-of-range-value"
     """A value in a well-formed field is out of range and was dropped."""
     INVALID_TIMESTAMP = "invalid-timestamp"
@@ -101,7 +101,7 @@ class DiagnosticCode(str, Enum):
     INVALID_MIC_E_INFORMATION = "invalid-mic-e-information"
     """The Mic-E information field is malformed (APRS12c ch. 10)."""
     KENWOOD_FF_PADDING = "kenwood-ff-padding"
-    """Kenwood TM-D710 0xFF padding was removed (UAP 5.10)."""
+    """Kenwood TM-D710 0xFF padding was removed from Mic-E status text, after the destination and the nine fixed bytes decoded (UAP 5.10)."""
     MIC_E_MISSING_DEVICE_TYPE = "mic-e-missing-device-type"
     """A Mic-E report without a device type prefix (UAP 5.4)."""
     INVALID_MESSAGE = "invalid-message"
@@ -121,19 +121,19 @@ class DiagnosticCode(str, Enum):
     INVALID_LOCATOR = "invalid-locator"
     """A Maidenhead locator is malformed."""
     INVALID_NMEA = "invalid-nmea"
-    """An NMEA sentence is malformed."""
+    """The text after $ is not an NMEA 0183 sentence: not printable ASCII, no valid address field, or a reserved character in a field."""
     NMEA_CHECKSUM_MISMATCH = "nmea-checksum-mismatch"
     """An NMEA sentence's checksum does not match, so the sentence is corrupt and is not decoded."""
     INVALID_THIRD_PARTY = "invalid-third-party"
-    """A third-party header is malformed (APRS12c ch. 17)."""
+    """A third-party header is malformed, or (strict) its inner header has a defect a lenient decoder tolerates (APRS12c ch. 17)."""
     INVALID_GENERAL_QUERY = "invalid-general-query"
-    """A general query is malformed (APRS12c ch. 15)."""
+    """A general query is malformed, or its footprint is out of range (APRS12c ch. 15)."""
     INVALID_CAPABILITIES = "invalid-capabilities"
     """A station capabilities report is malformed (APRS12c ch. 15)."""
     INVALID_USER_DEFINED = "invalid-user-defined"
     """A user-defined packet is shorter than its 3-byte header (APRS12c ch. 19)."""
     INVALID_AGRELO_DF = "invalid-agrelo-df"
-    """An Agrelo DF report is malformed."""
+    """An Agrelo DF report is not exactly %, a bearing of 000 to 360, / and a quality digit."""
     MISSING_SPACE_AFTER_LOCATOR = "missing-space-after-locator"
     """A grid-locator status report lacks the mandatory space before its text (UAP 5.17)."""
     COMPRESSION_TYPE_RESERVED_BITS = "compression-type-reserved-bits"
@@ -151,13 +151,13 @@ class DiagnosticCode(str, Enum):
     MIC_E_ALTITUDE_NOT_FIRST = "mic-e-altitude-not-first"
     """A Mic-E altitude after other status text instead of first (APRS12c ch. 10)."""
     BRACE_IN_MESSAGE_TEXT = "brace-in-message-text"
-    """Message text contains a { that does not start a valid message ID (APRS12c ch. 14)."""
+    """Message, bulletin or telemetry metadata text contains a { that does not start a valid message ID, including the reply-ack form on a bulletin or metadata (APRS12c ch. 14)."""
     INVALID_ADDRESSEE_CHARACTERS = "invalid-addressee-characters"
     """A message addressee contains a space or : (APRS12c ch. 14)."""
     LETTER_GROUP_BULLETIN = "letter-group-bulletin"
     """A bulletin addressee has a group name after a letter, e.g. BLNCNET; group bulletins use a digit (APRS12c ch. 14)."""
     FREE_TEXT_CAPABILITIES = "free-text-capabilities"
-    """A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items (APRS12c ch. 15)."""
+    """A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15)."""
 
     def __str__(self) -> str:
         return self.value
@@ -225,7 +225,7 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.TRUNCATED: "The information field is shorter than its format requires.",
     DiagnosticCode.NOT_APRS: "The first byte is not a data type identifier (APRS12c ch. 20).",
     DiagnosticCode.RESERVED_DATA_TYPE: "A reserved data type identifier with no defined format (APRS12c ch. 5).",
-    DiagnosticCode.OBSOLETE_FORMAT: "A format the spec marks obsolete or not recommended, e.g. raw NMEA or raw weather.",
+    DiagnosticCode.OBSOLETE_FORMAT: "A format the spec marks obsolete or not recommended, e.g. raw NMEA, raw weather, or the Rev 0 Mic-E data type identifiers 0x1C and 0x1D.",
     DiagnosticCode.OUT_OF_RANGE_VALUE: "A value in a well-formed field is out of range and was dropped.",
     DiagnosticCode.INVALID_TIMESTAMP: "A timestamp is malformed or out of range (APRS12c ch. 6, UAP 5.8).",
     DiagnosticCode.INVALID_POSITION: "The position is missing or starts with something that cannot begin one.",
@@ -246,7 +246,7 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.INVALID_WEATHER: "Positionless or raw weather data that could not be decoded.",
     DiagnosticCode.INVALID_MIC_E_DESTINATION: "The destination address is not a valid Mic-E encoding (APRS12c ch. 10).",
     DiagnosticCode.INVALID_MIC_E_INFORMATION: "The Mic-E information field is malformed (APRS12c ch. 10).",
-    DiagnosticCode.KENWOOD_FF_PADDING: "Kenwood TM-D710 0xFF padding was removed (UAP 5.10).",
+    DiagnosticCode.KENWOOD_FF_PADDING: "Kenwood TM-D710 0xFF padding was removed from Mic-E status text, after the destination and the nine fixed bytes decoded (UAP 5.10).",
     DiagnosticCode.MIC_E_MISSING_DEVICE_TYPE: "A Mic-E report without a device type prefix (UAP 5.4).",
     DiagnosticCode.INVALID_MESSAGE: "A message is malformed (APRS12c ch. 14).",
     DiagnosticCode.UNPADDED_ADDRESSEE: "The addressee is not padded to 9 characters.",
@@ -256,13 +256,13 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.INVALID_TELEMETRY: "A telemetry report is malformed (APRS12c ch. 13).",
     DiagnosticCode.INVALID_STATUS: "A status report is malformed (APRS12c ch. 16).",
     DiagnosticCode.INVALID_LOCATOR: "A Maidenhead locator is malformed.",
-    DiagnosticCode.INVALID_NMEA: "An NMEA sentence is malformed.",
+    DiagnosticCode.INVALID_NMEA: "The text after $ is not an NMEA 0183 sentence: not printable ASCII, no valid address field, or a reserved character in a field.",
     DiagnosticCode.NMEA_CHECKSUM_MISMATCH: "An NMEA sentence's checksum does not match, so the sentence is corrupt and is not decoded.",
-    DiagnosticCode.INVALID_THIRD_PARTY: "A third-party header is malformed (APRS12c ch. 17).",
-    DiagnosticCode.INVALID_GENERAL_QUERY: "A general query is malformed (APRS12c ch. 15).",
+    DiagnosticCode.INVALID_THIRD_PARTY: "A third-party header is malformed, or (strict) its inner header has a defect a lenient decoder tolerates (APRS12c ch. 17).",
+    DiagnosticCode.INVALID_GENERAL_QUERY: "A general query is malformed, or its footprint is out of range (APRS12c ch. 15).",
     DiagnosticCode.INVALID_CAPABILITIES: "A station capabilities report is malformed (APRS12c ch. 15).",
     DiagnosticCode.INVALID_USER_DEFINED: "A user-defined packet is shorter than its 3-byte header (APRS12c ch. 19).",
-    DiagnosticCode.INVALID_AGRELO_DF: "An Agrelo DF report is malformed.",
+    DiagnosticCode.INVALID_AGRELO_DF: "An Agrelo DF report is not exactly %, a bearing of 000 to 360, / and a quality digit.",
     DiagnosticCode.MISSING_SPACE_AFTER_LOCATOR: "A grid-locator status report lacks the mandatory space before its text (UAP 5.17).",
     DiagnosticCode.COMPRESSION_TYPE_RESERVED_BITS: "A compressed position's type byte sets its unused high bits (APRS12c ch. 9).",
     DiagnosticCode.MALFORMED_TIMESTAMP: "A timestamped position report whose timestamp is missing or not timestamp-shaped (UAP 5.8).",
@@ -271,10 +271,10 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.WIND_FIELDS_INSTEAD_OF_EXTENSION: "Wind sent as c/s fields in a position weather report instead of the DDD/SSS extension, or after a compressed position whose cs bytes carry no wind.",
     DiagnosticCode.WIND_EXTENSION_AFTER_COMPRESSED: "An uncompressed wind extension after a compressed weather position (UAP 5.33).",
     DiagnosticCode.MIC_E_ALTITUDE_NOT_FIRST: "A Mic-E altitude after other status text instead of first (APRS12c ch. 10).",
-    DiagnosticCode.BRACE_IN_MESSAGE_TEXT: "Message text contains a { that does not start a valid message ID (APRS12c ch. 14).",
+    DiagnosticCode.BRACE_IN_MESSAGE_TEXT: "Message, bulletin or telemetry metadata text contains a { that does not start a valid message ID, including the reply-ack form on a bulletin or metadata (APRS12c ch. 14).",
     DiagnosticCode.INVALID_ADDRESSEE_CHARACTERS: "A message addressee contains a space or : (APRS12c ch. 14).",
     DiagnosticCode.LETTER_GROUP_BULLETIN: "A bulletin addressee has a group name after a letter, e.g. BLNCNET; group bulletins use a digit (APRS12c ch. 14).",
-    DiagnosticCode.FREE_TEXT_CAPABILITIES: "A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items (APRS12c ch. 15).",
+    DiagnosticCode.FREE_TEXT_CAPABILITIES: "A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15).",
 }
 
 

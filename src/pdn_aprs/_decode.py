@@ -7,12 +7,13 @@ when they are not UTF-8 (``non-utf8-text``).
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, NoReturn
 
 from . import _util
 from ._comment import CommentParts, lift_comment, lift_telemetry_dao, parse_extension
-from ._weather import parse_weather_fields, weather_tail
+from ._weather import parse_weather_fields, raise_field_defects, weather_tail
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .errors import HeaderError
 from .model import (
@@ -124,6 +125,9 @@ class Ctx:
 
 
 _ADDRESS = re.compile(r"[A-Za-z0-9-]{1,9}\Z")
+_THIRD_PARTY_SOURCE = re.compile(r"[ -9;-=?-~]{1,9}\Z")
+"""A third-party header's source: 1-9 printable ASCII characters other than ``>`` and ``:``
+(APRS12c ch. 17)."""
 
 
 def _header_error(ctx: Ctx, code: DiagnosticCode) -> NoReturn:
@@ -138,25 +142,25 @@ def _header_defect(ctx: Ctx, code: DiagnosticCode) -> None:
         _header_error(ctx, code)
 
 
-def _path_from_calls(ctx: Ctx, calls: list[str]) -> tuple[PathEntry, ...]:
-    """Path entries from TNC2 text; entries up to the last one marked ``*`` are used."""
-    stars = [i for i, call in enumerate(calls) if call.endswith("*")]
-    if len(stars) > 1:
-        _header_defect(ctx, C.MULTIPLE_USED_MARKERS)
-    last = stars[-1] if stars else -1
-    return tuple(PathEntry(call.rstrip("*"), i <= last) for i, call in enumerate(calls))
+def parse_tnc2_header(header: str, ctx: Ctx, *, third_party: bool = False) -> tuple[str, str, tuple[PathEntry, ...]]:
+    """``SOURCE>DEST,PATH`` into its parts.
 
-
-def parse_tnc2_header(
-    header: str, ctx: Ctx, *, error: DiagnosticCode | None = None
-) -> tuple[str, str, tuple[PathEntry, ...]]:
-    """``SOURCE>DEST,PATH`` into its parts. ``error`` replaces every header error's code
-    (a third-party header's defects are ``invalid-third-party``)."""
+    With ``third_party`` it is the header inside a third-party packet: the source may be any 1-9
+    printable characters other than ``>`` and ``:``, a defect the options tolerate is a warning
+    in ``ctx`` (the inner packet's), and anything else raises :class:`RejectedError`, which the
+    caller reports as ``invalid-third-party``.
+    """
 
     def bad(code: DiagnosticCode) -> NoReturn:
-        if error is not None:
-            ctx.fail(error)
+        if third_party:
+            raise RejectedError
         _header_error(ctx, code)
+
+    def defect(code: DiagnosticCode) -> None:
+        if ctx.tolerates(code):
+            ctx.warn(code)
+        else:
+            bad(code)
 
     gt = header.find(">")
     if gt <= 0:
@@ -164,12 +168,10 @@ def parse_tnc2_header(
     source = header[:gt]
     parts = header[gt + 1 :].split(",")
     destination = parts[0]
-    if not _ADDRESS.match(source):
+    if not (_THIRD_PARTY_SOURCE if third_party else _ADDRESS).match(source):
         bad(C.INVALID_ADDRESS)
     if not destination:
-        if error is not None:
-            ctx.fail(error)
-        _header_defect(ctx, C.EMPTY_DESTINATION)
+        defect(C.EMPTY_DESTINATION)
     elif not _ADDRESS.match(destination):
         bad(C.INVALID_ADDRESS)
     calls: list[str] = []
@@ -182,12 +184,14 @@ def parse_tnc2_header(
             bad(C.INVALID_ADDRESS)
         calls.append(entry)
     if empty:
-        if error is not None:
-            ctx.fail(error)
-        _header_defect(ctx, C.EMPTY_PATH_ENTRY)
-    if error is not None and sum(1 for c in calls if c.endswith("*")) > 1:
-        ctx.fail(error)
-    return source, destination, _path_from_calls(ctx, calls)
+        defect(C.EMPTY_PATH_ENTRY)
+    # entries up to the last one marked * are used
+    stars = [i for i, call in enumerate(calls) if call.endswith("*")]
+    if len(stars) > 1:
+        defect(C.MULTIPLE_USED_MARKERS)
+    last = stars[-1] if stars else -1
+    path = tuple(PathEntry(call.rstrip("*"), i <= last) for i, call in enumerate(calls))
+    return source, destination, path
 
 
 def decode_tnc2(line: bytes | str, options: ParseOptions = LENIENT) -> Packet:
@@ -348,22 +352,30 @@ _AMBIGUITY_UNIT = (0.0, 0.1, 1.0, 10.0, 60.0)
 
 
 def _coordinate(text: str, degree_digits: int, ambiguity: int | None) -> tuple[float, int] | None:
-    """``ddmm.hh`` or ``dddmm.hh`` (hemisphere removed) in minutes, with its blanked digits.
+    """``ddmm.hh`` or ``dddmm.hh`` (hemisphere removed) in minutes, with its ambiguity level.
 
-    Digits blanked by ``ambiguity`` (when given, the latitude's) are ignored; the result is the
-    centre of the box they leave. Returns None when malformed.
+    For a latitude (``ambiguity`` None) the level is its run of trailing spaces, at most 4. For a
+    longitude it is the latitude's: each digit place that level blanks is ignored and may hold a
+    digit or a space, and every other place must be a digit (vectors interpretations.md,
+    "Longitude blanks follow the latitude"). The result is the centre of the box the level
+    leaves. Returns None when malformed.
     """
     if len(text) != degree_digits + 5 or text[degree_digits + 2] != ".":
         return None
     digits = text[: degree_digits + 2] + text[degree_digits + 3 :]
-    # blanked digits: trailing spaces, at most 4 (hundredths, tenths, minutes units, tens)
     n = len(digits)
-    blanks = 0
-    while blanks < n and digits[n - 1 - blanks] == " ":
-        blanks += 1
-    if blanks > 4 or any(not ("0" <= ch <= "9") for ch in digits[: n - blanks]):
+    if ambiguity is None:
+        level = 0
+        while level < n and digits[n - 1 - level] == " ":
+            level += 1
+        if level > 4:
+            return None
+    else:
+        level = ambiguity
+        if any(not ("0" <= ch <= "9" or ch == " ") for ch in digits[n - level :]):
+            return None
+    if any(not ("0" <= ch <= "9") for ch in digits[: n - level]):
         return None
-    level = blanks if ambiguity is None else max(ambiguity, blanks)
     kept = digits[: n - level] + "0" * level
     degrees = int(kept[:degree_digits])
     minutes = int(kept[degree_digits : degree_digits + 2]) + int(kept[degree_digits + 2 :]) / 100
@@ -371,7 +383,7 @@ def _coordinate(text: str, degree_digits: int, ambiguity: int | None) -> tuple[f
         minutes += _AMBIGUITY_UNIT[level] / 2
     if int(kept[degree_digits : degree_digits + 2]) > 59:
         return None
-    return degrees * 60 + minutes, blanks
+    return degrees * 60 + minutes, level
 
 
 def _uncompressed(s: str, pos: int, ctx: Ctx) -> Pos:
@@ -554,8 +566,10 @@ def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) 
         elif not p.compressed and (parts.dao_lat or parts.dao_lon):
             lat = float(fields["latitude"])
             lon = float(fields["longitude"])
-            fields["latitude"] = lat + (parts.dao_lat / 60 if lat >= 0 else -parts.dao_lat / 60)
-            fields["longitude"] = lon + (parts.dao_lon / 60 if lon >= 0 else -parts.dao_lon / 60)
+            # the added precision is on the position's own side of the equator or meridian, even
+            # at 0 degrees (-0.0 south or west)
+            fields["latitude"] = lat + math.copysign(parts.dao_lat / 60, lat)
+            fields["longitude"] = lon + math.copysign(parts.dao_lon / 60, lon)
     fields["comment"] = ctx.text(parts.comment)
 
 
@@ -596,13 +610,16 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
             wind["wind_speed_mph"] = speed
         wind_sent = True
         rest = rest[7:]
-    result = parse_weather_fields(
-        rest,
-        ctx,
-        positionless=False,
-        wind_known=wind_sent,
-        compressed=p.compressed,
-    )
+    result = parse_weather_fields(rest, positionless=False, wind_known=wind_sent)
+    if not wind_sent:
+        # the wind is judged where its extension belongs, before any field: sent as c and s
+        # fields instead, or missing or incomplete (not after a compressed position, whose cs
+        # bytes say it is unknown)
+        if result.wind_from_fields:
+            ctx.defect(C.WIND_FIELDS_INSTEAD_OF_EXTENSION)
+        if not p.compressed and not (result.direction_sent and result.speed_sent):
+            ctx.defect(C.INCOMPLETE_WEATHER)
+    raise_field_defects(result, ctx, positionless=False)
     weather = dict(wind)
     weather.update(result.values)
     if (
@@ -754,10 +771,13 @@ def _mic_e_destination(destination: str, ctx: Ctx) -> tuple[float, int, str, boo
     kept = text.rstrip(" ") + "0" * blanks
     degrees = int(kept[:2])
     minutes = int(kept[2:4]) + int(kept[4:6]) / 100
-    if int(kept[2:4]) > 59 or degrees > 90 or (degrees == 90 and minutes > 0):
+    if int(kept[2:4]) > 59:
         ctx.fail(C.INVALID_MIC_E_DESTINATION)
     if blanks:
         minutes += _AMBIGUITY_UNIT[blanks] / 2
+    if degrees * 60 + minutes > 90 * 60:
+        # exactly 90 degrees is valid, but not an ambiguity whose centre is past the pole (90LLLL)
+        ctx.fail(C.INVALID_MIC_E_DESTINATION)
     lat = degrees + minutes / 60
     if any(std) and any(custom):
         message = MicEMessage.UNKNOWN.value
@@ -774,6 +794,10 @@ def _mic_e_destination(destination: str, ctx: Ctx) -> tuple[float, int, str, boo
 def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     from .devices import mic_e_suffixes
 
+    if s[0] in "\x1c\x1d":
+        # the Rev 0 beta data type identifiers, obsolete (APRS12c ch. 10): said at the DTI,
+        # before anything else is checked
+        ctx.info(C.OBSOLETE_FORMAT)
     lat, ambiguity, message, _north, offset, west, ssid = _mic_e_destination(destination, ctx)
     if len(s) < 9:
         ctx.fail(C.INVALID_MIC_E_INFORMATION)
@@ -866,14 +890,6 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     if _MICE_ALTITUDE.match(rest):
         altitude = _util.base91_value(rest[:3]) - 10000
         rest = rest[4:]
-    else:
-        found = _MICE_ALTITUDE.search(rest)
-        if found is not None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
-            ctx.warn(C.MIC_E_ALTITUDE_NOT_FIRST)
-            altitude = _util.base91_value(found.group()[:3]) - 10000
-            rest = rest[: found.start()] + rest[found.end() :]
-    if altitude is not None:
-        fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     locator: str | None = None
     loc = _mic_e_locator(rest)
     if loc is not None:
@@ -890,11 +906,24 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         ext_kind, consumed, values = ext
         fields.update(values)
         rest = rest[consumed:]
+    # an altitude later in the text is looked for once a data extension at the start is lifted,
+    # so that its bytes are never read as one (0PH} in PHG3330PH})
+    cuts: tuple[int, ...] = ()
+    if altitude is None:
+        found = _MICE_ALTITUDE.search(rest)
+        if found is not None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
+            ctx.warn(C.MIC_E_ALTITUDE_NOT_FIRST)
+            altitude = _util.base91_value(found.group()[:3]) - 10000
+            rest = rest[: found.start()] + rest[found.end() :]
+            cuts = (found.start(),)
+    if altitude is not None:
+        fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     parts = lift_comment(
         rest,
         ctx,
         symbol=p.symbol,
         late_extensions=ext_kind not in ("phg", "range", "dfs"),
+        cuts=cuts,
     )
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(
@@ -924,27 +953,35 @@ _ID = re.compile(r"[A-Za-z0-9]{1,5}\Z")
 _ACK = re.compile(r"(ack|rej)([A-Za-z0-9]{1,5})(?:\}([A-Za-z0-9]{0,5}))?(?:\{([A-Za-z0-9]{1,5}))?\Z")
 _DIRECTED = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST", "PING?")
 _CALLSIGN = re.compile(r"[A-Za-z0-9-]{1,9}\Z")
+_BULLETIN = re.compile(r"BLN[0-9A-Z]")
 
 
-def _split_message_id(text: str, ctx: Ctx) -> tuple[str, str | None, str | None]:
-    """Text, message ID and reply-ack from message text ending ``{ID``, ``{MM}`` or ``{MM}AA``."""
+def _message_id_parts(text: str, *, reply_ack: bool) -> tuple[str, str | None, str | None, bool]:
+    """Text, message ID and reply-ack from text ending ``{ID`` (or, with ``reply_ack``, ``{MM}`` or
+    ``{MM}AA``), and whether a ``{`` that starts no message ID was left in the text."""
     brace = text.rfind("{")
     if brace < 0:
-        return text, None, None
+        return text, None, None, False
     tail = text[brace + 1 :]
     msg_id: str | None = None
     reply: str | None = None
     if _ID.match(tail):
         msg_id = tail
-    elif "}" in tail:
+    elif reply_ack and "}" in tail:
         mm, _, aa = tail.partition("}")
         if _ID.match(mm) and (aa == "" or _ID.match(aa)):
             msg_id, reply = mm, aa
     if msg_id is None:
-        ctx.defect(C.BRACE_IN_MESSAGE_TEXT)
-        return text, None, None
+        return text, None, None, True
     body = text[:brace]
-    if "{" in body:
+    return body, msg_id, reply, "{" in body
+
+
+def _split_message_id(text: str, ctx: Ctx, *, reply_ack: bool = True) -> tuple[str, str | None, str | None]:
+    """:func:`_message_id_parts`, with ``brace-in-message-text`` for a stray ``{``. Bulletins,
+    NWS bulletins and telemetry metadata take a message ID but not the reply-ack form."""
+    body, msg_id, reply, stray = _message_id_parts(text, reply_ack=reply_ack)
+    if stray:
         ctx.defect(C.BRACE_IN_MESSAGE_TEXT)
     return body, msg_id, reply
 
@@ -966,7 +1003,11 @@ def _message(s: str, destination: str, ctx: Ctx) -> AprsData:
     if " " in addressee or ":" in addressee:
         ctx.defect(C.INVALID_ADDRESSEE_CHARACTERS)
 
-    if body.startswith(("PARM.", "UNIT.", "EQNS.", "BITS.")):
+    bulletin = _BULLETIN.match(addressee) is not None
+    nws = addressee.startswith(("NWS-", "NWS_"))
+    # only a message can be telemetry metadata, which APRS12c ch. 13 addresses to "the callsign
+    # of the station transmitting the telemetry data": bulletin text is just text
+    if not bulletin and not nws and body.startswith(("PARM.", "UNIT.", "EQNS.", "BITS.")):
         meta = _telemetry_metadata(addressee, body, ctx)
         if meta is not None:
             return meta
@@ -978,12 +1019,14 @@ def _message(s: str, destination: str, ctx: Ctx) -> AprsData:
         if kind == "ack":
             return Ack(addressee, ident, reply)
         return Reject(addressee, ident, reply)
-    if addressee.startswith("BLN"):
-        bulletin = _bulletin(addressee, body, ctx)
-        if bulletin is not None:
-            return bulletin
-    if addressee.startswith(("NWS-", "NWS_")):
-        text, msg_id, _reply = _split_message_id(body, ctx)
+    if bulletin:
+        # BLN then a digit or an upper-case letter; anything else is an ordinary message
+        if addressee[3].isalpha() and len(addressee) > 4:
+            ctx.defect(C.LETTER_GROUP_BULLETIN)
+        text, msg_id, _reply = _split_message_id(body, ctx, reply_ack=False)
+        return Bulletin(addressee, ctx.text(text), msg_id)
+    if nws:
+        text, msg_id, _reply = _split_message_id(body, ctx, reply_ack=False)
         return NwsBulletin(addressee, ctx.text(text), msg_id)
     if body.startswith("?"):
         if "{" in body:
@@ -995,17 +1038,6 @@ def _message(s: str, destination: str, ctx: Ctx) -> AprsData:
             return query
     text, msg_id, reply = _split_message_id(body, ctx)
     return Message(addressee, ctx.text(text), msg_id, reply)
-
-
-def _bulletin(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
-    ident = addressee[3:4]
-    group = addressee[4:]
-    if not ident:
-        return None
-    if ident.isalpha() and group:
-        ctx.defect(C.LETTER_GROUP_BULLETIN)
-    text, msg_id, _reply = _split_message_id(body, ctx)
-    return Bulletin(addressee, ctx.text(text), msg_id)
 
 
 def _directed_query(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
@@ -1020,6 +1052,7 @@ def _directed_query(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
         if any(upper.startswith(k) for k in _DIRECTED):
             ctx.info(C.INVALID_QUERY)
             return None
+        # a type the spec does not define is upper-case letters, then a space or the end
         m = re.match(r"[A-Z]+", rest)
         if not m or (len(rest) > m.end() and rest[m.end()] != " "):
             return None
@@ -1028,12 +1061,14 @@ def _directed_query(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
     if "{" in remainder:
         ctx.info(C.INVALID_QUERY)
         return None
+    # spaces after the target are padding (APRSH pads it to 9), and one space before it is a
+    # separator (vectors interpretations.md)
     target = remainder.rstrip(" ")
-    if target.startswith(" ") and qtype not in _DIRECTED:
+    if target.startswith(" "):
         target = target[1:]
     if not target:
         return DirectedQuery(addressee, qtype, None)
-    if len(target) > 9 or not _CALLSIGN.match(target):
+    if not _CALLSIGN.match(target):
         ctx.info(C.INVALID_QUERY)
         return None
     return DirectedQuery(addressee, qtype, target)
@@ -1043,19 +1078,23 @@ _COEFF = re.compile(r" *(-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?) *\Z
 
 
 def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
-    trial = ctx.trial()
-    text, msg_id, _reply = _split_message_id(body, trial)
-    if any(d.severity is Severity.ERROR for d in trial.diags) or trial.diags:
-        ctx.info(C.INVALID_TELEMETRY_METADATA)
-        return None
+    """Telemetry metadata, or None (with an ``invalid-telemetry-metadata`` info) when its prefix
+    and list are not well formed, so that it is read as a plain message.
+
+    The structure is checked first, then a stray ``{`` (which stays in the list), then the text's
+    encoding.
+    """
+    text, msg_id, _reply, stray = _message_id_parts(body, reply_ack=False)
     kind = text[:5]
     content = text[5:]
     if kind in ("PARM.", "UNIT."):
-        items = content.split(",")
-        if len(items) > 13:
+        if content.count(",") > 12:
             ctx.info(C.INVALID_TELEMETRY_METADATA)
             return None
-        values = tuple(ctx.text(item) for item in items)
+        if stray:
+            ctx.defect(C.BRACE_IN_MESSAGE_TEXT)
+        # the whole list is UTF-8 or Latin-1, not each entry on its own
+        values = tuple(ctx.text(content).split(","))
         if kind == "PARM.":
             return TelemetryNames(addressee, values, msg_id)
         return TelemetryUnits(addressee, values, msg_id)
@@ -1066,20 +1105,25 @@ def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
         texts: list[str] = []
         for item in items:
             m = _COEFF.match(item)
-            if not m:
+            value = _number(m.group(1)) if m else math.nan
+            if m is None or not math.isfinite(value):
+                # not a number, or too large for one (1e400)
                 ctx.info(C.INVALID_TELEMETRY_METADATA)
                 return None
             texts.append(m.group(1))
-            numbers.append(_number(m.group(1)))
+            numbers.append(value)
         if not numbers or len(numbers) > 15:
             ctx.info(C.INVALID_TELEMETRY_METADATA)
             return None
+        # (a stray { is in a coefficient, which is then not a number)
         return TelemetryCoefficients(addressee, tuple(numbers), msg_id, tuple(texts))
     # BITS.
     bits = content[:8]
     if len(bits) != 8 or any(b not in "01" for b in bits) or (content[8:9] not in ("", ",")):
         ctx.info(C.INVALID_TELEMETRY_METADATA)
         return None
+    if stray:
+        ctx.defect(C.BRACE_IN_MESSAGE_TEXT)
     project = ctx.text(content[9:])
     return TelemetryBits(addressee, bits, project, msg_id)
 
@@ -1092,7 +1136,9 @@ def _number(text: str) -> float:
 
 # ------------------------------------------------------------------ status
 
-_BEAM = re.compile(r"\^([0-9A-Z])([0-9:;<=>?@A-K])\Z")
+_BEAM = re.compile(r"\^([0-9A-Z])([1-9:;<=>?@A-K])\Z")
+"""A beam heading at the very end of status text: a heading code and an ERP code (APRS12c ch. 16,
+whose ERP codes run 1-9, ``:`` to ``@``, A-K: there is no 0)."""
 
 
 def _status(s: str, destination: str, ctx: Ctx) -> AprsData:
@@ -1118,9 +1164,8 @@ def _status(s: str, destination: str, ctx: Ctx) -> AprsData:
     m = _BEAM.search(body)
     if m:
         beam = Beam(m.group(1), m.group(2))
+        # the text before it is kept as sent, spaces included
         body = body[: m.start()]
-        if locator is not None:
-            body = body.rstrip(" ")
     return StatusReport(ctx.text(body), timestamp, locator, symbol, beam)
 
 
@@ -1141,7 +1186,9 @@ def _status_locator(body: str) -> tuple[str, Symbol, int] | None:
 
 # ------------------------------------------------------------------ telemetry
 
-_TELEMETRY_NUMBER = re.compile(r" *(-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)) *\Z")
+_TELEMETRY_NUMBER = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+"""A telemetry value: an optional ``-``, then digits with an optional decimal point. No ``+``, and
+no spaces (vectors interpretations.md, "Numbers in telemetry")."""
 
 
 def _telemetry(s: str, destination: str, ctx: Ctx) -> AprsData:
@@ -1172,7 +1219,7 @@ def _telemetry(s: str, destination: str, ctx: Ctx) -> AprsData:
         m = _TELEMETRY_NUMBER.match(part)
         if not m:
             ctx.fail(C.INVALID_TELEMETRY)
-        analog.append(_number(m.group(1)))
+        analog.append(_number(part))
         texts.append(part)
     bits: str | None = None
     comment = ""
@@ -1197,7 +1244,8 @@ def _positionless_weather(s: str, destination: str, ctx: Ctx) -> AprsData:
     timestamp = Timestamp(ts)
     if not timestamp.is_valid:
         ctx.defect(C.INVALID_TIMESTAMP)
-    result = parse_weather_fields(s[9:], ctx, positionless=True, wind_known=False, compressed=False)
+    result = parse_weather_fields(s[9:], positionless=True, wind_known=False)
+    raise_field_defects(result, ctx, positionless=True)
     text = weather_tail(result.text, ctx, result.values)
     return PositionlessWeather(timestamp, Weather(**result.values), ctx.text(text))
 
@@ -1220,102 +1268,140 @@ def _peet_star(s: str, destination: str, ctx: Ctx) -> AprsData:
 
 # ------------------------------------------------------------------ NMEA
 
-_NMEA_CHECKSUM = re.compile(r"\*([0-9A-Fa-f]{2})\Z")
+_NMEA_ADDRESS = re.compile(r"(?:[A-Z0-9]{5}|P[A-Z0-9]{3,}),")
+"""An NMEA 0183 address field and the comma after it: five upper-case letters or digits (a
+talker and a sentence formatter, or a query), or ``P`` and a manufacturer's code."""
+_NMEA_CHECKSUM = re.compile(r"\*[0-9A-Fa-f]{2}")
 
 
 def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
+    """Raw NMEA (``$``): it must be an NMEA 0183 sentence (vectors interpretations.md, "What $
+    text is an NMEA sentence"). The sentence ends at its first ``*`` and two hex digits; any text
+    after that is the comment."""
     if s.startswith("$ULTW"):
         return _raw_weather(s, RawWeatherFormat.ULTIMETER_PACKET, 5, ctx)
     ctx.info(C.OBSOLETE_FORMAT)
-    sentence = s[1:]
-    if not _util.is_printable_ascii(sentence) or not re.match(r"[A-Z0-9]{3,}(,|\*|\Z)", sentence):
+    text = s[1:]
+    star = text.find("*")
+    comment = ""
+    if star < 0:
+        sentence = body = text
+    elif _NMEA_CHECKSUM.match(text, star):
+        sentence = text[: star + 3]
+        body = text[:star]
+        comment = text[star + 3 :]
+    else:
+        # a * that starts no checksum is a reserved character in a field
         ctx.fail(C.INVALID_NMEA)
-    has_checksum = False
-    body = sentence
-    m = _NMEA_CHECKSUM.search(sentence)
-    if m:
-        star = m.start()
-        want = int(m.group(1), 16)
+    # the structure is read before the checksum
+    if not _util.is_printable_ascii(sentence) or not _NMEA_ADDRESS.match(body) or "$" in body:
+        ctx.fail(C.INVALID_NMEA)
+    has_checksum = star >= 0
+    if has_checksum:
         got = 0
-        for ch in sentence[:star]:
+        for ch in body:
             got ^= ord(ch)
-        if got != want:
+        if got != int(sentence[-2:], 16):
             ctx.fail(C.NMEA_CHECKSUM_MISMATCH)
-        has_checksum = True
-        body = sentence[:star]
     fields = body.split(",")
-    kind = fields[0][-3:]
+    address = fields[0]
+    # only an approved address has a sentence formatter: a proprietary one (P...) is not read
+    kind = address[2:] if len(address) == 5 and not address.startswith("P") else ""
     values: dict[str, Any] = {}
+
+    def field(i: int) -> str:
+        return fields[i] if i < len(fields) else ""
+
     if kind == "GGA":
-        _nmea_time(fields, 1, values)
-        _nmea_position(fields, 2, values)
-        if len(fields) > 6 and fields[6]:
-            values["fix"] = NmeaFix.INVALID if fields[6] == "0" else NmeaFix.VALID
-        _nmea_float(fields, 9, "altitude_m", values)
+        _nmea_time(field(1), values)
+        _nmea_position(field(2), field(3), field(4), field(5), values)
+        quality = field(6)
+        if len(quality) == 1 and "0" <= quality <= "9":
+            values["fix"] = NmeaFix.INVALID if quality == "0" else NmeaFix.VALID
+        _nmea_float(field(9), "altitude_m", values)
     elif kind == "RMC":
-        _nmea_time(fields, 1, values)
-        if len(fields) > 2 and fields[2]:
-            values["fix"] = NmeaFix.VALID if fields[2] == "A" else NmeaFix.INVALID
-        _nmea_position(fields, 3, values)
-        _nmea_float(fields, 7, "speed_knots", values)
-        _nmea_float(fields, 8, "course_degrees", values)
+        _nmea_time(field(1), values)
+        _nmea_status(field(2), values)
+        _nmea_position(field(3), field(4), field(5), field(6), values)
+        _nmea_float(field(7), "speed_knots", values)
+        _nmea_float(field(8), "course_degrees", values)
     elif kind == "GLL":
-        _nmea_position(fields, 1, values)
-        _nmea_time(fields, 5, values)
-        if len(fields) > 6 and fields[6]:
-            values["fix"] = NmeaFix.VALID if fields[6][:1] == "A" else NmeaFix.INVALID
+        _nmea_position(field(1), field(2), field(3), field(4), values)
+        _nmea_time(field(5), values)
+        _nmea_status(field(6), values)
     elif kind == "VTG":
-        _nmea_float(fields, 1, "course_degrees", values)
-        _nmea_float(fields, 5, "speed_knots", values)
+        _nmea_float(field(1), "course_degrees", values)
+        _nmea_float(field(5), "speed_knots", values)
     elif kind == "WPL":
-        _nmea_position(fields, 1, values)
-        if len(fields) > 5 and fields[5]:
-            values["waypoint"] = fields[5]
-    return NmeaSentence(sentence, has_checksum, **values)
+        _nmea_position(field(1), field(2), field(3), field(4), values)
+        if field(5):
+            values["waypoint"] = field(5)
+    return NmeaSentence(sentence, has_checksum, comment=ctx.text(comment), **values)
 
 
 _DECIMAL = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+_NMEA_TIME = re.compile(r"([0-9]{2})([0-9]{2})([0-9]{2})(\.[0-9]*)?\Z")
+_NMEA_COORDINATE = re.compile(r"([0-9]+)([0-9]{2}(?:\.[0-9]*)?)\Z")
 
 
-def _nmea_float(fields: list[str], i: int, key: str, values: dict[str, Any]) -> None:
-    if len(fields) > i and _DECIMAL.match(fields[i]):
-        values[key] = float(fields[i])
+def _nmea_float(text: str, key: str, values: dict[str, Any]) -> None:
+    if _DECIMAL.match(text):
+        values[key] = float(text)
 
 
-def _nmea_time(fields: list[str], i: int, values: dict[str, Any]) -> None:
-    if len(fields) <= i:
+def _nmea_status(text: str, values: dict[str, Any]) -> None:
+    """RMC's or GLL's status: ``A`` valid, ``V`` invalid, anything else says nothing."""
+    if text == "A":
+        values["fix"] = NmeaFix.VALID
+    elif text == "V":
+        values["fix"] = NmeaFix.INVALID
+
+
+def _nmea_time(text: str, values: dict[str, Any]) -> None:
+    """``hhmmss`` with an optional fraction, kept as sent less trailing zeros."""
+    m = _NMEA_TIME.match(text)
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59 or int(m.group(3)) > 59:
         return
-    t = fields[i]
-    if len(t) >= 6 and t[:6].isdigit():
-        text = f"{t[0:2]}:{t[2:4]}:{t[4:6]}"
-        frac = t[6:]
-        if frac.startswith(".") and frac[1:].isdigit():
-            frac = frac.rstrip("0").rstrip(".")
-            text += frac
-        values["time"] = text
+    frac = (m.group(4) or "").rstrip("0").rstrip(".")
+    values["time"] = f"{m.group(1)}:{m.group(2)}:{m.group(3)}{frac}"
 
 
-def _nmea_position(fields: list[str], i: int, values: dict[str, Any]) -> None:
-    if len(fields) <= i + 3:
-        return
-    lat, ns, lon, ew = fields[i : i + 4]
-    if not (_DECIMAL.match(lat) and _DECIMAL.match(lon)):
-        return
-    lat_value = float(lat)
-    lon_value = float(lon)
-    if ns not in ("N", "S") or ew not in ("E", "W"):
-        return
-    la = int(lat_value // 100) + (lat_value % 100) / 60
-    lo = int(lon_value // 100) + (lon_value % 100) / 60
-    values["latitude"] = -la if ns == "S" else la
-    values["longitude"] = -lo if ew == "W" else lo
+def _nmea_coordinate(text: str, hemisphere: str, positive: str, negative: str, limit: int) -> float | None:
+    """Degrees then two minute digits, with an optional fraction: however many degree digits
+    there are, but at least one; minutes below 60; at most ``limit`` degrees."""
+    m = _NMEA_COORDINATE.match(text)
+    if not m or hemisphere not in (positive, negative):
+        return None
+    minutes = float(m.group(2))
+    if minutes >= 60:
+        return None
+    value = int(m.group(1)) + minutes / 60
+    if value > limit:
+        return None
+    return -value if hemisphere == negative else value
+
+
+def _nmea_position(lat: str, ns: str, lon: str, ew: str, values: dict[str, Any]) -> None:
+    """A position needs both coordinates."""
+    latitude = _nmea_coordinate(lat, ns, "N", "S", 90)
+    longitude = _nmea_coordinate(lon, ew, "E", "W", 180)
+    if latitude is not None and longitude is not None:
+        values["latitude"] = latitude
+        values["longitude"] = longitude
 
 
 # ------------------------------------------------------------------ the rest
 
 
+def _has_control(text: str) -> bool:
+    """Whether ``text`` holds a control character: below U+0020, or U+007F."""
+    return any(c < " " or c == "\x7f" for c in text)
+
+
 def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
-    body = s[1:]
+    # the whole text is UTF-8 or Latin-1, not each item on its own (vectors README)
+    body = ctx.text(s[1:])
+    # only U+0020 is padding: a CR at the edge of an item stays in it
     items = [item.strip(" ") for item in body.split(",")]
     items = [item for item in items if item]
     if not items:
@@ -1325,19 +1411,22 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     for item in items:
         token, eq, value = item.partition("=")
         token = token.strip(" ")
-        if " " in token or not token:
+        value = value.strip(" ")
+        if not token or " " in token or _has_control(token) or _has_control(value):
             free = True
-        if eq:
-            caps.append((ctx.text(token), ctx.text(value.strip(" "))))
-        else:
-            caps.append((ctx.text(token),))
+        caps.append((token, value) if eq else (token,))
     ctx.flush_text()
     if free:
         ctx.defect(C.FREE_TEXT_CAPABILITIES)
     return Capabilities(tuple(caps))
 
 
-_FOOTPRINT = re.compile(r" ?(-?\d+(?:\.\d+)?),(-? ?\d+(?:\.\d+)?),(\d{4})\Z")
+_FOOTPRINT_DEGREES = r"( ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))"
+_FOOTPRINT = re.compile(_FOOTPRINT_DEGREES + "," + _FOOTPRINT_DEGREES + r",([0-9]{4})\Z")
+"""A general query footprint: latitude and longitude in decimal degrees, each a number as a
+telemetry value is (an optional ``-``, then digits with an optional decimal point, at least one
+digit), where only a positive value may have a leading space (APRS12c ch. 15); and a radius of
+exactly 4 digits."""
 
 
 def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
@@ -1353,7 +1442,10 @@ def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
         m = _FOOTPRINT.match(rest)
         if not m:
             ctx.fail(C.INVALID_GENERAL_QUERY)
-        footprint = Footprint(float(m.group(1)), float(m.group(2).replace(" ", "")), int(m.group(3)))
+        footprint = Footprint(float(m.group(1)), float(m.group(2)), int(m.group(3)))
+        if abs(footprint.latitude) > 90 or abs(footprint.longitude) > 180:
+            # no such place: dropping the footprint would make the query one to every station
+            ctx.fail(C.INVALID_GENERAL_QUERY)
     return Query(qtype, footprint)
 
 
@@ -1377,8 +1469,9 @@ def _test(s: str, destination: str, ctx: Ctx) -> AprsData:
 
 
 def _agrelo(s: str, destination: str, ctx: Ctx) -> AprsData:
-    m = re.fullmatch(r"%(\d{3})/(\d)", s)
-    if not m:
+    m = re.fullmatch(r"%([0-9]{3})/([0-9])", s)
+    if not m or int(m.group(1)) > 360:
+        # a bearing is a direction, 000 to 360 (vectors interpretations.md)
         ctx.fail(C.INVALID_AGRELO_DF)
     return AgreloDf(int(m.group(1)), int(m.group(2)))
 
@@ -1396,14 +1489,15 @@ def _third_party(s: str, destination: str, ctx: Ctx) -> AprsData:
     header = body[:colon]
     if not header.isascii():
         ctx.fail(C.INVALID_THIRD_PARTY)
+    # a defect the inner header may tolerate is the inner packet's warning (vectors README)
     inner = Ctx(ctx.options)
     try:
-        source, dest, path = parse_tnc2_header(header, inner, error=C.INVALID_THIRD_PARTY)
-    except (RejectedError, HeaderError):
+        source, dest, path = parse_tnc2_header(header, inner, third_party=True)
+    except RejectedError:
         ctx.fail(C.INVALID_THIRD_PARTY)
     info = body[colon + 1 :].encode("latin-1")
     data = decode_info(info, dest, inner)
-    return ThirdParty(Packet(source, dest, path, info, data, tuple(inner.diags)))
+    return ThirdParty(Packet(source, dest, path, info, data, tuple(inner.diags), third_party=True))
 
 
 _HANDLERS = {

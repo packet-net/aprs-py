@@ -507,7 +507,9 @@ class Dao:
 
 @dataclass(frozen=True, slots=True)
 class CommentTelemetry:
-    """Base-91 telemetry from a comment (``|ss11|``): sequence, 1-5 analog values, digital."""
+    """Base-91 telemetry from a comment (``|ss11|``): sequence, 1-5 analog values, and
+    ``digital``, the eight binary channels (0-255; bits 9-13 of the value are reserved and
+    ignored, APRS12c ch. 13)."""
 
     sequence: int
     analog: tuple[int, ...]
@@ -857,7 +859,9 @@ class RawWeather(AprsData):
 
 @dataclass(frozen=True, slots=True, repr=False)
 class NmeaSentence(AprsData):
-    """A raw NMEA sentence (``$``), without the ``$``, and what could be read from it."""
+    """A raw NMEA sentence (``$``), without the ``$`` and up to and including any checksum, and
+    what could be read from it. ``comment`` is any text sent after the checksum (TinyTrack sends
+    one), kept as sent."""
 
     kind: ClassVar[str] = "nmea"
     sentence: str
@@ -870,6 +874,7 @@ class NmeaSentence(AprsData):
     altitude_m: float | None = None
     time: str | None = None
     waypoint: str | None = None
+    comment: str = ""
 
 
 @dataclass(frozen=True, slots=True, repr=False)

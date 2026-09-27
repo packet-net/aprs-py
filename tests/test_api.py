@@ -243,11 +243,98 @@ def test_timestamps() -> None:
         aprs.ItemReport(latitude=0, longitude=0, symbol=Symbol.HOUSE, name="AB"),
         aprs.MicEReport(latitude=0, longitude=0, symbol=Symbol.CAR, mic_e_message=MicEMessage.UNKNOWN),
         aprs.Unrecognized(aprs.UnrecognizedReason.MALFORMED),
+        # each of these would read back as different data
+        aprs.PositionReport(
+            latitude=0, longitude=0, symbol=Symbol.HOUSE, dao=aprs.Dao("3", aprs.DaoPrecision.THOUSANDTHS)
+        ),
+        aprs.PositionReport(
+            latitude=0,
+            longitude=0,
+            symbol=Symbol("5", "l"),
+            area=aprs.AreaObject(aprs.AreaShape.OPEN_ELLIPSE, aprs.AreaColor.BLACK, 1, 1),
+        ),
+        aprs.PositionReport(
+            latitude=0, longitude=0, symbol=Symbol.HOUSE, telemetry=aprs.CommentTelemetry(0, (0, 0, 0, 0, 0), 256)
+        ),
+        aprs.PositionReport(latitude=0, longitude=0, symbol=Symbol("\\", "m"), signpost="\xff"),
+        aprs.StatusReport("x", beam=aprs.Beam("B", "0")),
+        aprs.Bulletin("BLNe", "x"),
+        aprs.Capabilities((("MSG_CNT", "4\x1c3"),)),
+        aprs.Capabilities((("MSG_CNT", " 43"),)),
+        aprs.Query("APRS", aprs.Footprint(100.02, -117.15, 200)),
+        aprs.AgreloDf(361, 0),
+        aprs.TelemetryCoefficients("N0CALL", (0, float("inf"), 0)),
+        aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", comment="/no checksum"),
+        aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", latitude=1.0, longitude=1.0),
+        aprs.TelemetryCoefficients("BLN1", (0, 1, 0)),
+        aprs.TelemetryNames("NWS-WARN", ("Temp",)),
+        aprs.DirectedQuery("BLN1", "APRSP"),
     ],
 )
 def test_encoder_refuses(data: aprs.AprsData) -> None:
     with pytest.raises(EncodeError):
         aprs.encode_info(data)
+
+
+def test_nmea_comment_after_checksum() -> None:
+    line = "N0CALL>APT311:$GPRMC,204717,A,3242.4549,N,08527.2835,W,000,340,090207,,*0C/Home Station by TinyTrack"
+    packet = aprs.decode(line)
+    assert isinstance(packet.data, aprs.NmeaSentence)
+    assert packet.data.sentence.endswith(",*0C")
+    assert packet.data.comment == "/Home Station by TinyTrack"
+    assert aprs.encode_info(packet.data) == packet.info
+    assert from_neutral(to_neutral(packet.data)) == packet.data
+
+
+@pytest.mark.parametrize(("snow", "text"), [(0.32, "s.32"), (0.05, "s.05"), (1.5, "s1.5"), (12, "s012"), (0.3, "s0.3")])
+def test_snowfall_is_written_exactly(snow: float, text: str) -> None:
+    info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+    assert info.endswith(text.encode())
+    assert aprs.decode(b"N0CALL>APZ001:" + info).data == aprs.PositionlessWeather(
+        Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)
+    )
+
+
+@pytest.mark.parametrize("snow", [12.5, 0.325, 1000, -1])
+def test_snowfall_that_three_characters_cannot_hold_is_refused(snow: float) -> None:
+    with pytest.raises(EncodeError):
+        aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "info"),
+    [
+        (34.02, -117.15, b"?APRS? 34.02,-117.15,0200"),
+        (-34.02, 117.15, b"?APRS?-34.02, 117.15,0200"),
+    ],
+)
+def test_footprint_space_only_before_a_positive_value(latitude: float, longitude: float, info: bytes) -> None:
+    query = aprs.Query("APRS", aprs.Footprint(latitude, longitude, 200))
+    assert aprs.encode_info(query) == info
+    assert aprs.decode(b"N0CALL>APZ001:" + info).data == query
+    assert isinstance(aprs.decode("N0CALL>APZ001:?APRS? 34.02,- 17.15,0200").data, aprs.Unrecognized)
+
+
+def test_directed_query_targets() -> None:
+    def written(query_type: str) -> bytes:
+        return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))
+
+    assert written("APRSH") == b":KH2Z     :?APRSHN0QBF    "
+    assert written("APRSD") == b":KH2Z     :?APRSDN0QBF"
+    assert written("FOO") == b":KH2Z     :?FOO N0QBF"
+
+
+def test_third_party_inner_packet_has_no_q_construct() -> None:
+    # a q-construct is only read in the outer header (vectors README, "Addresses and path")
+    packet = aprs.decode("N0CALL>APZ001:}N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello")
+    assert isinstance(packet.data, aprs.ThirdParty)
+    inner = packet.data.packet
+    assert [str(p) for p in inner.path] == ["WIDE2-1", "qAR", "N2CALL"]
+    assert inner.q_construct is None
+    again = from_neutral(to_neutral(packet.data))
+    assert isinstance(again, aprs.ThirdParty)
+    assert again.packet.q_construct is None
+    assert aprs.decode("N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello").q_construct == aprs.QConstruct("qAR", "N2CALL")
 
 
 def test_neutral_round_trip() -> None:

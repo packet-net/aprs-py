@@ -27,7 +27,7 @@ from multiprocessing import Pool
 from typing import Any
 
 from pdn_aprs import EncodeError, HeaderError, MicEReport, Packet, ParseOptions, Unrecognized, decode_tnc2
-from pdn_aprs.encode import encode_info, mic_e_destination
+from pdn_aprs.encode import DEFAULT_DESTINATION, encode_info, mic_e_destination
 from pdn_aprs.neutral import packet_to_neutral, to_neutral
 
 LENIENT = ParseOptions.lenient()
@@ -61,15 +61,19 @@ def result(line: bytes, options: ParseOptions) -> tuple[dict[str, Any], Packet |
 
 
 def reencode(packet: Packet | None) -> str:
+    """How the lenient data encodes again. The bytes written are decoded again under a
+    well-formed header (for Mic-E, the destination the encoder computed), so that a defect in the
+    original header, an empty destination say, is not counted against the encoder."""
     if packet is None or isinstance(packet.data, Unrecognized):
         return "none"
     data = packet.data
     try:
         info = encode_info(data)
-        destination = mic_e_destination(data) if isinstance(data, MicEReport) else packet.destination
+        destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
     except EncodeError:
         return "refused"
-    if info == packet.info.rstrip(b"\r\n") and destination == packet.destination:
+    same_destination = not isinstance(data, MicEReport) or destination == packet.destination
+    if info == packet.info.rstrip(b"\r\n") and same_destination:
         return "identical"
     try:
         again = decode_tnc2(f"{packet.source}>{destination}".encode("ascii") + b":" + info, LENIENT)
