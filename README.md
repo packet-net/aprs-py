@@ -170,7 +170,7 @@ Symbol('/f')
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and the encode cases. All 5574 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and the encode cases. All 5,574 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
 `tools/diff_dump.py` decodes a whole capture and writes the JSONL that the vectors' `tools/compare.py` reads, spread over all cores (a 6.9-million-line capture takes about two minutes):
 
