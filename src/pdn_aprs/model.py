@@ -587,11 +587,18 @@ class Beam:
 
 @dataclass(frozen=True, slots=True)
 class Footprint:
-    """A general query's target footprint."""
+    """A general query's target footprint.
+
+    ``latitude_text`` and ``longitude_text`` keep the numbers as sent (`` 34.0``, ``-.1715``),
+    leading space included, so they can be written back byte for byte; they are optional when
+    encoding.
+    """
 
     latitude: float
     longitude: float
     radius_miles: int
+    latitude_text: str = field(default="", compare=False, repr=False)
+    longitude_text: str = field(default="", compare=False, repr=False)
 
 
 # ---------------------------------------------------------------- data types

@@ -1442,7 +1442,10 @@ def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
         m = _FOOTPRINT.match(rest)
         if not m:
             ctx.fail(C.INVALID_GENERAL_QUERY)
-        footprint = Footprint(float(m.group(1)), float(m.group(2)), int(m.group(3)))
+        latitude, longitude = m.group(1), m.group(2)
+        footprint = Footprint(
+            float(latitude), float(longitude), int(m.group(3)), latitude_text=latitude, longitude_text=longitude
+        )
         if abs(footprint.latitude) > 90 or abs(footprint.longitude) > 180:
             # no such place: dropping the footprint would make the query one to every station
             ctx.fail(C.INVALID_GENERAL_QUERY)

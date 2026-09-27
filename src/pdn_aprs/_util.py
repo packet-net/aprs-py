@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 
 KNOTS_TO_MPH = 1852 / 1609.344
@@ -87,6 +88,17 @@ def number_text(value: float) -> str:
     if "e" in text or "E" in text:
         text = f"{value:.15f}".rstrip("0").rstrip(".")
     return text
+
+
+def round_half_away(value: float) -> int:
+    """``value`` rounded to the nearest whole number, halves away from zero (2.5 to 3, -2.5 to
+    -3), as the vectors' rules round wherever they say "nearest". Python's ``round`` takes
+    halves to the even number instead."""
+    magnitude = abs(value)
+    whole = math.floor(magnitude)
+    if magnitude - whole >= 0.5:
+        whole += 1
+    return -whole if value < 0 else whole
 
 
 def number_equal(a: float, b: float) -> bool:

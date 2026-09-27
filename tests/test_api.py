@@ -286,7 +286,10 @@ def test_nmea_comment_after_checksum() -> None:
     assert from_neutral(to_neutral(packet.data)) == packet.data
 
 
-@pytest.mark.parametrize(("snow", "text"), [(0.32, "s.32"), (0.05, "s.05"), (1.5, "s1.5"), (12, "s012"), (0.3, "s0.3")])
+@pytest.mark.parametrize(
+    ("snow", "text"),
+    [(0.32, "s.32"), (0.05, "s.05"), (1.5, "s1.5"), (12, "s012"), (0.3, "s.30"), (0.5, "s.50"), (2, "s002")],
+)
 def test_snowfall_is_written_exactly(snow: float, text: str) -> None:
     info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
     assert info.endswith(text.encode())
@@ -313,6 +316,60 @@ def test_footprint_space_only_before_a_positive_value(latitude: float, longitude
     assert aprs.encode_info(query) == info
     assert aprs.decode(b"N0CALL>APZ001:" + info).data == query
     assert isinstance(aprs.decode("N0CALL>APZ001:?APRS? 34.02,- 17.15,0200").data, aprs.Unrecognized)
+
+
+@pytest.mark.parametrize(
+    "info", ["?APRS? 34.0,-117.15,0200", "?APRS? 34.360,-.1715,0200", "?APRS? 10.02,117.15,0200", "?APRS?-34,0,0200"]
+)
+def test_footprint_numbers_as_sent(info: str) -> None:
+    # a footprint number is one as a telemetry value is, so it keeps its text as sent
+    assert aprs.encode_info(aprs.decode("N0CALL>APZ001:" + info).data) == info.encode()
+
+
+@pytest.mark.parametrize(
+    ("info", "written"),
+    [
+        # a DAO's digits on a compressed position agree with the position reported
+        ('!L5<&{T"Pt#  GLoRa APRS Digi Godowa|(X#d*_!s%R!', '!L5<&{T"Pt# sTLoRa APRS Digi Godowa|(X#d*_!sCp!'),
+        # the frequency first, then the altitude, then the free text after a space
+        ("!4903.50N/07201.75Wj006/058/A=000889146.520MHz Dayton Bound", None),
+        ("!4903.50N/07201.75Wj006/058/146.520MHz/A=000889 Dayton Bound", "="),
+        (")I91 3N!4903.50N\\07201.75Wm/A=000100146.520MHz T100 x{55}", None),
+        (")I91 3N!4903.50N\\07201.75Wm146.520MHz T100{55}/A=000100 x", "="),
+        # a PHGR ends in its /, and the frequency follows it straight on
+        (
+            "@252109z4342.57NI00752.70W#145.225MHz PHG33403/Digi-Igate",
+            "@252109z4342.57NI00752.70W#PHG33403/145.225MHz Digi-Igate",
+        ),
+        ("!4903.50N/07201.75W#PHG3340/145.225MHz Digi", "="),
+        # a late range goes into the cs bytes, rounded to the nearest step
+        ("!/5L!!<*e7>  G RNG0025hello", "!/5L!!<*e7>{BChello"),
+    ],
+)
+def test_encoder_writes_the_canonical_bytes(info: str, written: str | None) -> None:
+    got = aprs.encode_info(aprs.decode("N0CALL>APZ001:" + info).data).decode("utf-8")
+    if written is None:
+        assert got != info
+        # what it wrote is canonical: it writes it again byte for byte
+        assert aprs.encode_info(aprs.decode("N0CALL>APZ001:" + got).data).decode("utf-8") == got
+    else:
+        assert got == (info if written == "=" else written)
+
+
+def test_mic_e_phgr_then_frequency_has_one_slash() -> None:
+    packet = aprs.decode('N0CALL>S32UVT:`(_fn"Oj/`PHG72604/146.520MHz')
+    assert isinstance(packet.data, aprs.MicEReport)
+    assert packet.data.phg is not None
+    assert packet.data.frequency is not None
+    assert aprs.encode_info(packet.data) == packet.info
+
+
+def test_rounding_is_half_away_from_zero() -> None:
+    # the rules round to the nearest step, halves away from zero; Python's round() takes halves
+    # to the even number
+    weather = aprs.Weather(rain_1h_in=0.125, temperature_f=-2.5)
+    info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), weather))
+    assert b"t-03r013" in info
 
 
 def test_directed_query_targets() -> None:

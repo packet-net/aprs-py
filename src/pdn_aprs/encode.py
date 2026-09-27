@@ -14,10 +14,11 @@ b'=5130.00N/00007.00W>088/036Mobile'
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, TypeVar
 
 from . import _util
 from ._comment import MICROWAVE_BASE
@@ -31,6 +32,7 @@ from .model import (
     Bulletin,
     Capabilities,
     CommentTelemetry,
+    CompressionType,
     DaoPrecision,
     DirectedQuery,
     ItemReport,
@@ -85,12 +87,19 @@ allocated to your application in the aprs-deviceid database."""
 MESSAGE_TEXT_LIMIT = 67
 """The longest message or bulletin text a sender may write (APRS12c ch. 14)."""
 
+_P = TypeVar("_P", bound=PositionedData)
+
+_nearest = _util.round_half_away
+"""Every value the encoder rounds goes to the nearest step, halves away from zero."""
+
 _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
 
 
 _TELEMETRY_VALUE = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
 _COEFFICIENT = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\Z")
+_FOOTPRINT_VALUE = re.compile(r"(?: ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))\Z")
+"""A footprint latitude or longitude as sent: a leading space only before a positive value."""
 
 
 def _same_number(text: str, value: float, form: re.Pattern[str]) -> bool:
@@ -197,7 +206,7 @@ def _checked(data: AprsData, info: str) -> bytes:
 
 def _minutes_units(value: float, per_minute: int) -> int:
     """|value| in units of 1/``per_minute`` of a minute of arc, rounded."""
-    return round(abs(value) * 60 * per_minute)
+    return _nearest(abs(value) * 60 * per_minute)
 
 
 def _is_negative(value: float) -> bool:
@@ -206,10 +215,14 @@ def _is_negative(value: float) -> bool:
 
 def _dao_digits(data: PositionedData) -> tuple[str, str, int, int]:
     """For a ``!DAO!``: its two characters, and the latitude and longitude in hundredths of a
-    minute to write in the position itself."""
+    minute to write in the position itself.
+
+    A compressed position's DAO adds no precision, so a decoder ignores its digits; they are
+    written as the same DAO would give the position written uncompressed, so that a reader that
+    did apply them would land on the position reported (vectors ruling E2)."""
     dao = data.dao
     lat, lon = data.latitude, data.longitude
-    if dao is None or dao.precision is DaoPrecision.NONE or data.compressed:
+    if dao is None or dao.precision is DaoPrecision.NONE:
         return " ", " ", _minutes_units(lat, 100), _minutes_units(lon, 100)
     if dao.precision is DaoPrecision.THOUSANDTHS:
         la, lo = _minutes_units(lat, 1000), _minutes_units(lon, 1000)
@@ -232,12 +245,8 @@ def _dao_text(data: PositionedData, a: str, o: str) -> str:
         if not datum.isalpha():
             raise _refuse("a base-91 DAO needs a letter datum")
         datum = datum.lower()
-        if data.compressed:
-            a = o = "!"
     elif dao.precision is DaoPrecision.THOUSANDTHS:
         datum = datum.upper()
-        if data.compressed:
-            a = o = "0"
     else:
         datum = datum.upper()
         a = o = " "
@@ -278,15 +287,17 @@ def _base91(value: int, width: int) -> str:
 def _course_speed(course: float, knots: float) -> str:
     if not 0 <= course <= 360:
         raise _refuse(f"course {course} is not 0-360")
-    c = math.floor(course / 4 + 0.5) % 90
-    s = round(math.log(knots + 1) / math.log(1.08)) if knots > 0 else 0
+    # a course that rounds to 360 is north, c = 0 (vectors interpretations.md, "Re-encoding into
+    # compressed bytes rounds")
+    c = _nearest(course / 4) % 90
+    s = _nearest(math.log(knots + 1) / math.log(1.08)) if knots > 0 else 0
     if not 0 <= s <= 90:
         raise _refuse(f"speed {knots} knots is too high for the compressed format")
     return chr(c + 33) + chr(s + 33)
 
 
 def _altitude(feet: float) -> str:
-    value = round(feet)
+    value = _nearest(feet)
     if value < 0:
         if value < -99999:
             raise _refuse("altitude too low")
@@ -310,8 +321,8 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
     table = data.symbol.table
     if "0" <= table <= "9":
         table = chr(ord(table) - ord("0") + ord("a"))
-    y = _base91(round(380926 * (90 - lat)), 4)
-    x = _base91(round(190463 * (180 + lon)), 4)
+    y = _base91(_nearest(380926 * (90 - lat)), 4)
+    x = _base91(_nearest(190463 * (180 + lon)), 4)
     ctype = data.compression
     altitude_text = ""
     cs: str | None = None
@@ -330,7 +341,7 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
         if data.altitude_feet is None:
             raise _refuse("a GGA compressed position needs an altitude")
         alt = data.altitude_feet
-        value = round(math.log(alt) / math.log(1.002)) if alt >= 1 else 0
+        value = _nearest(math.log(alt) / math.log(1.002)) if alt >= 1 else 0
         value = min(max(value, 0), 91 * 91 - 1)
         cs = _base91(value, 2)
         if not _util.number_equal(1.002**value, alt):
@@ -351,17 +362,12 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
         elif data.range_miles is not None:
             if data.range_miles < 2:
                 raise _refuse("a compressed range is at least 2 miles")
-            s = round(math.log(data.range_miles / 2) / math.log(1.08))
+            # 2 x 1.08^s miles: a range between the steps is rounded to the nearest one, as a
+            # course or speed is (vectors interpretations.md, "Re-encoding into compressed bytes
+            # rounds")
+            s = _nearest(math.log(data.range_miles / 2) / math.log(1.08))
             if not 0 <= s <= 90:
                 raise _refuse("range too large for the compressed format")
-            step = 2 * 1.08**s
-            if not _util.number_equal(step, data.range_miles):
-                # interpretations.md lets an encoder round a range into the cs bytes or refuse:
-                # this one refuses, rather than write a different range
-                raise _refuse(
-                    f"a compressed range is 2 x 1.08^n miles, so {data.range_miles:g} miles cannot be written"
-                    f" exactly (the nearest step is {step:.2f} miles)"
-                )
             cs = "{" + chr(s + 33)
     if cs is None:
         if ctype is not None:
@@ -398,7 +404,7 @@ def _dfs_text(data: PositionedData) -> str:
 
 
 def _range_text(miles: float) -> str:
-    r = round(miles)
+    r = _nearest(miles)
     if not 0 <= r <= 9999:
         raise _refuse("range is not 0-9999 miles")
     return f"RNG{r:04d}"
@@ -436,10 +442,10 @@ def _extension(data: PositionedData) -> str:
         speed = data.speed_knots
         if course is not None and not 0 <= course <= 360:
             raise _refuse(f"course {course} is not 0-360")
-        if speed is not None and not 0 <= round(speed) <= 999:
+        if speed is not None and not 0 <= _nearest(speed) <= 999:
             raise _refuse(f"speed {speed} is not 0-999 knots")
-        text = ("..." if course is None else f"{round(course):03d}") + "/"
-        text += "..." if speed is None else f"{round(speed):03d}"
+        text = ("..." if course is None else f"{_nearest(course):03d}") + "/"
+        text += "..." if speed is None else f"{_nearest(speed):03d}"
         if data.df_bearing is not None:
             if str(data.symbol) != "/\\":
                 raise _refuse("DF bearing needs the DF symbol /\\")
@@ -498,7 +504,7 @@ def _frequency_text(f: VoiceFrequency) -> str:
     elif f.narrow:
         raise _refuse("narrow is set by a tone letter")
     if f.offset_khz is not None:
-        tens = round(f.offset_khz / 10)
+        tens = _nearest(f.offset_khz / 10)
         if abs(tens) > 999:
             raise _refuse("offset too large")
         text += f" {'-' if tens < 0 else '+'}{abs(tens):03d}"
@@ -545,12 +551,19 @@ def _braces(data: PositionedData) -> str:
 
 
 def _snowfall_text(snow: float) -> str:
-    """Snowfall exactly in its three characters, with a decimal point where it needs one: 12 as
-    ``012``, 1.5 as ``1.5``, 0.32 as ``.32``. Refused when three characters cannot hold it."""
+    """Snowfall exactly in its three characters, one form for each value: a whole number as three
+    digits (12 as ``012``), a number under 1 as ``.`` and two digits (0.32 as ``.32``, 0.5 as
+    ``.50``), and any other as a digit, ``.`` and a digit (1.5 as ``1.5``). Refused when three
+    characters cannot hold it."""
     if snow >= 0:
-        for text in (f"{snow:03.0f}", f"{snow:3.1f}", f"{snow:.2f}".removeprefix("0")):
-            if len(text) == 3 and _util.number_equal(float(text), snow):
-                return text
+        if float(snow).is_integer():
+            text = f"{snow:03.0f}"
+        elif snow < 1:
+            text = f"{snow:.2f}".removeprefix("0")
+        else:
+            text = f"{snow:3.1f}"
+        if len(text) == 3 and _util.number_equal(float(text), snow):
+            return text
     raise _refuse(f"snowfall of {snow} inches cannot be written exactly in three characters")
 
 
@@ -562,7 +575,7 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     def num(v: float | None, width: int, scale: float = 1) -> str:
         if v is None:
             return "." * width
-        value = round(v * scale)
+        value = _nearest(v * scale)
         if value < 0 or value >= 10**width:
             raise _refuse(f"weather value {v} does not fit {width} digits")
         return f"{value:0{width}d}"
@@ -579,7 +592,7 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     if t is None:
         out.append("t...")
     else:
-        ti = round(t)
+        ti = _nearest(t)
         if not -99 <= ti <= 999:
             raise _refuse("temperature does not fit the weather format")
         out.append(f"t{ti:03d}" if ti >= 0 else f"t-{-ti:02d}")
@@ -590,14 +603,14 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     if w.rain_midnight_in is not None:
         out.append("P" + num(w.rain_midnight_in, 3, 100))
     if w.humidity_percent is not None:
-        h = round(w.humidity_percent)
+        h = _nearest(w.humidity_percent)
         if not 1 <= h <= 100:
             raise _refuse("humidity is not 1-100%")
         out.append("h" + ("00" if h == 100 else f"{h:02d}"))
     if w.pressure_mbar is not None:
         out.append("b" + num(w.pressure_mbar, 5, 10))
     if w.luminosity_w_m2 is not None:
-        lum = round(w.luminosity_w_m2)
+        lum = _nearest(w.luminosity_w_m2)
         if 0 <= lum <= 999:
             out.append(f"L{lum:03d}")
         elif 1000 <= lum <= 1999:
@@ -621,6 +634,15 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
             raise _refuse("software type and unit go together")
         out.append(w.software + w.unit)
     return "".join(out)
+
+
+def _typed(data: _P) -> _P:
+    """A compressed position's range goes into the cs bytes, which need a type byte. One sent
+    later in the comment (``RNG``) comes without one, so it gets the default, as wind sent after
+    a compressed position does."""
+    if data.compressed and data.compression is None and data.range_miles is not None:
+        return dataclasses.replace(data, compression=CompressionType())
+    return data
 
 
 def _position_body(data: PositionedData) -> Callable[[str], str]:
@@ -663,16 +685,21 @@ def _position_body(data: PositionedData) -> Callable[[str], str]:
     ext = "" if data.compressed else _extension(data)
     braces = _braces(data)
     freq = "" if data.frequency is None else _frequency_text(data.frequency)
-    if freq and ext and not braces and not altitude:
+    if freq and ext and not ext.endswith("/"):
+        # $CSE/SPD/FFF.FFFMHz, $PHGphgd/FFF.FFFMHz (APRS12c ch. 18); a PHGR already ends in its /
         freq = "/" + freq
 
     def rest(comment: str) -> str:
-        return position + ext + braces + altitude + freq + comment + telemetry + dao
+        # the frequency first, where radios read it (APRS12c ch. 18: the first 10 bytes of the
+        # comment), then the braces, the altitude, the free text, telemetry and the DAO
+        # (vectors ruling E3)
+        return position + ext + freq + braces + altitude + comment + telemetry + dao
 
     return rest
 
 
 def _position(data: PositionReport) -> bytes:
+    data = _typed(data)
     if data.timestamp is not None:
         _check_timestamp(data.timestamp, _TIMESTAMPED, "position")
         head = ("@" if data.messaging else "/") + data.timestamp.text
@@ -685,6 +712,7 @@ def _position(data: PositionReport) -> bytes:
 
 
 def _object(data: ObjectReport) -> bytes:
+    data = _typed(data)
     name = data.name
     if not 1 <= len(name) <= 9 or not _util.is_printable_ascii(name):
         raise _refuse(f"object name {name!r} is not 1-9 printable characters")
@@ -701,6 +729,7 @@ def _object(data: ObjectReport) -> bytes:
 
 
 def _item(data: ItemReport) -> bytes:
+    data = _typed(data)
     name = data.name
     if not 3 <= len(name) <= 9 or not _util.is_printable_ascii(name) or "!" in name or "_" in name:
         raise _refuse(f"item name {name!r} is not 3-9 printable characters without ! or _")
@@ -785,7 +814,7 @@ def _mic_e_destination(data: MicEReport) -> str:
 
 def _mic_e_altitude(feet: float) -> str | None:
     """The Mic-E ``xxx}`` altitude, or None when it would not read back exactly."""
-    metres = round(feet / _util.FEET_PER_METRE)
+    metres = _nearest(feet / _util.FEET_PER_METRE)
     value = metres + 10000
     if not 0 <= value < 91**3:
         return None
@@ -826,8 +855,8 @@ def _mic_e(data: MicEReport) -> bytes:
     else:
         d = deg - 100
     m = minutes + 60 if minutes < 10 else minutes
-    speed = 0 if data.speed_knots is None else round(data.speed_knots)
-    course = 0 if data.course_degrees is None else round(data.course_degrees)
+    speed = 0 if data.speed_knots is None else _nearest(data.speed_knots)
+    course = 0 if data.course_degrees is None else _nearest(data.course_degrees)
     if not 0 <= speed <= 799:
         raise _refuse("Mic-E speed is 0-799 knots")
     if not 0 <= course <= 360:
@@ -875,7 +904,7 @@ def _mic_e(data: MicEReport) -> bytes:
     if data.range_miles is not None:
         ext = _range_text(data.range_miles)
     freq = "" if data.frequency is None else _frequency_text(data.frequency)
-    if freq and ext and not altitude_later:
+    if freq and ext and not altitude_later and not ext.endswith("/"):
         freq = "/" + freq
     telemetry = _telemetry_text(data.telemetry)
     dao = _dao_text(data, a, o)
@@ -1151,11 +1180,17 @@ def _query(data: Query) -> bytes:
             raise _refuse("footprint radius is 0-9999 miles")
         if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
             raise _refuse("footprint latitude or longitude out of range")
-        # north and east are positive, "indicated by a leading space"; south and west have only
-        # the minus sign (APRS12c ch. 15)
-        lat, lon = (_util.number_text(v) for v in (f.latitude, f.longitude))
-        lat, lon = (v if v.startswith("-") else " " + v for v in (lat, lon))
-        text += f"{lat},{lon},{f.radius_miles:04d}"
+        # numbers as sent, leading space or not (vectors ruling E1); otherwise north and east
+        # are positive, "indicated by a leading space", and south and west have only the minus
+        # sign (APRS12c ch. 15)
+        numbers = []
+        for value, sent in ((f.latitude, f.latitude_text), (f.longitude, f.longitude_text)):
+            if not _same_number(sent, value, _FOOTPRINT_VALUE):
+                sent = _util.number_text(value)
+                if not sent.startswith("-"):
+                    sent = " " + sent
+            numbers.append(sent)
+        text += f"{numbers[0]},{numbers[1]},{f.radius_miles:04d}"
     return _checked(data, text)
 
 

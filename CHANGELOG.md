@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batch 1).
+
+### Added
+
+- `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
+
+### Changed
+
+- The comment of a position, object or item is written in the order frequency, braces, altitude, free text, base-91 telemetry, `!DAO!`: the frequency goes first, where radios read it (APRS12c ch. 18), the altitude follows it and its fields straight on, and the free text follows after a space (`j006/058/146.520MHz/A=000889 Dayton Bound`; it used to write `/A=` before the frequency).
+- A frequency after a PHGR follows its `/` straight on (`PHG33403/145.225MHz`, where it used to write `//`), in Mic-E status text too; after any other data extension it is written after a `/`, now also when braces or an altitude follow.
+- The digits of a `!DAO!` on a compressed position, which a decoder ignores, are those the same DAO gives the position written uncompressed (`!sCp!`), so that a reader that did apply them lands on the position reported; they used to be `!!` or `00`.
+- A snowfall under 1 inch is written as `.` and two digits (0.5 as `.50`, where it used to write `0.5`).
+- A range sent later in a compressed position's comment (`RNG0025`) is rounded to the nearest step of the cs bytes, with the default type byte, where it used to be refused.
+- Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
+
 ## [0.2.0]
 
 Brought into line with the rulings from seven rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 159 new cases, and new rules in its README and interpretations.md). All 6,015 of the vectors' checks pass.
