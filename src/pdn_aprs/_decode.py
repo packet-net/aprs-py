@@ -843,6 +843,12 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     if "\xff" in rest:
         ctx.defect(C.KENWOOD_FF_PADDING)
         rest = rest.replace("\xff", "")
+    # Rev 0 binary telemetry, looked for once the 0xFF padding is gone (vectors interpretations.md).
+    legacy: tuple[int, ...] = ()
+    if len(rest) >= 6 and rest[0] == "\x1d":
+        ctx.info(C.OBSOLETE_FORMAT)
+        legacy = tuple(ord(c) for c in rest[1:6])
+        rest = rest[6:]
     type_code: str | None = None
     if rest[:1] in ("`", "'", ">", "]", " "):
         type_code = rest[0]
@@ -897,6 +903,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         type_code=type_code,
         device_suffix=suffix,
         locator=locator,
+        legacy_telemetry=legacy,
         destination_ssid=ssid,
         **fields,
     )
