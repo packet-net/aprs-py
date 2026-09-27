@@ -266,6 +266,9 @@ def test_timestamps() -> None:
         aprs.TelemetryCoefficients("N0CALL", (0, float("inf"), 0)),
         aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", comment="/no checksum"),
         aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", latitude=1.0, longitude=1.0),
+        aprs.TelemetryCoefficients("BLN1", (0, 1, 0)),
+        aprs.TelemetryNames("NWS-WARN", ("Temp",)),
+        aprs.DirectedQuery("BLN1", "APRSP"),
     ],
 )
 def test_encoder_refuses(data: aprs.AprsData) -> None:

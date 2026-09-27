@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-Brought into line with the rulings from two rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 143 new cases, and new rules in its README and interpretations.md). All 5,969 of the vectors' checks pass.
+Brought into line with the rulings from four rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 149 new cases, and new rules in its README and interpretations.md). All 5,987 of the vectors' checks pass.
 
 ### Added
 
@@ -17,10 +17,10 @@ Brought into line with the rulings from two rounds of differential fuzzing of al
 - Mic-E: the 0x1C and 0x1D data type identifiers get an `obsolete-format` info, before anything else is checked. A destination whose ambiguity centres its latitude past 90 degrees (`90LLLL`) is `invalid-mic-e-destination`, and the encoder refuses an ambiguous position at 90 or 180 degrees. A PHG straight after the type code is read before an altitude is looked for later in the text, so `0PH}` in `PHG3330PH}` is not an altitude.
 - Positions: the latitude alone sets the ambiguity. A longitude place it blanks may hold a digit or a space; a space anywhere else is `invalid-longitude`.
 - `!DAO!`: a digit datum is only read with spaces for A and O, and a DAO is five bytes as sent, never joined across removed telemetry or a Mic-E altitude. The precision it adds stays south or west of 0 degrees: a Mic-E latitude of 0 degrees south with a DAO is now negative.
-- Only `\l` is an area object and only `\m` a signpost; with an overlay, `l` and `m` are ordinary symbols. A signpost is 1-3 printable ASCII characters. Base-91 comment telemetry's `digital` is the eight binary channels, 0-255.
+- Only `\l` is an area object and only `\m` a signpost; with an overlay, `l` and `m` are ordinary symbols. A signpost is 1-3 printable ASCII characters in the first `{` and `}` holding 1-3 characters, wherever that is. Base-91 comment telemetry's `digital` is the eight binary channels, 0-255.
 - Weather: the wind is judged where the `DDD/SSS` extension belongs, before any field, so missing wind, or wind sent as fields, is reported first. When the wind comes as fields, `s` is the wind speed until the speed is known, wherever it comes. A repeated extra field letter no longer ends the fields. `s.` and `s..` are an unknown snowfall with a width warning, but a snowfall value that holds a digit is a number of three characters (`s.50`), so `s.5h` is not a field.
 - Station capabilities: a control character in a token or a value makes the report free text, only spaces are trimmed, and the whole text is read as UTF-8 or Latin-1, not each item on its own. Telemetry names and units are read as one text in the same way.
-- Messages: an addressee is a bulletin only when `BLN` is followed by a digit or an upper-case letter. Bulletins, NWS bulletins and telemetry metadata take a message ID but not the reply-ack form, which stays in the text with `brace-in-message-text`. A stray `{` in a `PARM.`, `UNIT.` or `BITS.` list keeps it metadata, and a strict decoder now names the error.
+- Messages: an addressee is a bulletin only when `BLN` is followed by a digit or an upper-case letter. Bulletins, NWS bulletins and telemetry metadata take a message ID but not the reply-ack form, which stays in the text with `brace-in-message-text`. A stray `{` in a `PARM.`, `UNIT.` or `BITS.` list keeps it metadata, and a strict decoder now names the error. Only a message can be telemetry metadata or a directed query: bulletin and NWS bulletin text starting `PARM.`, `EQNS.`, `?` and so on is just text, and the encoder refuses metadata or a query to a bulletin addressee.
 - Directed queries: one space before the target is a separator, and spaces after it are padding.
 - Telemetry: a value with a space in it is `invalid-telemetry`, and an `EQNS.` coefficient that is not a finite number (`1e400`) makes it a plain message.
 - Status: `0` is not an ERP code, so `^B0` is text, and the text before a beam heading keeps its spaces.

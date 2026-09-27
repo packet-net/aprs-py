@@ -1003,7 +1003,11 @@ def _message(s: str, destination: str, ctx: Ctx) -> AprsData:
     if " " in addressee or ":" in addressee:
         ctx.defect(C.INVALID_ADDRESSEE_CHARACTERS)
 
-    if body.startswith(("PARM.", "UNIT.", "EQNS.", "BITS.")):
+    bulletin = _BULLETIN.match(addressee) is not None
+    nws = addressee.startswith(("NWS-", "NWS_"))
+    # only a message can be telemetry metadata, which APRS12c ch. 13 addresses to "the callsign
+    # of the station transmitting the telemetry data": bulletin text is just text
+    if not bulletin and not nws and body.startswith(("PARM.", "UNIT.", "EQNS.", "BITS.")):
         meta = _telemetry_metadata(addressee, body, ctx)
         if meta is not None:
             return meta
@@ -1015,13 +1019,13 @@ def _message(s: str, destination: str, ctx: Ctx) -> AprsData:
         if kind == "ack":
             return Ack(addressee, ident, reply)
         return Reject(addressee, ident, reply)
-    if _BULLETIN.match(addressee):
+    if bulletin:
         # BLN then a digit or an upper-case letter; anything else is an ordinary message
         if addressee[3].isalpha() and len(addressee) > 4:
             ctx.defect(C.LETTER_GROUP_BULLETIN)
         text, msg_id, _reply = _split_message_id(body, ctx, reply_ack=False)
         return Bulletin(addressee, ctx.text(text), msg_id)
-    if addressee.startswith(("NWS-", "NWS_")):
+    if nws:
         text, msg_id, _reply = _split_message_id(body, ctx, reply_ack=False)
         return NwsBulletin(addressee, ctx.text(text), msg_id)
     if body.startswith("?"):

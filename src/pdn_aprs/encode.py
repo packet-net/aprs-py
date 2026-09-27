@@ -897,6 +897,13 @@ def _addressee(addressee: str) -> str:
     return ":" + addressee.ljust(9) + ":"
 
 
+def _check_message_addressee(addressee: str, what: str) -> None:
+    """Only a message can be telemetry metadata or a directed query: text to a bulletin or NWS
+    bulletin addressee reads back as bulletin text."""
+    if re.match(r"BLN[0-9A-Z]", addressee) or addressee.startswith(("NWS-", "NWS_")):
+        raise _refuse(f"{what} goes to a station, not the bulletin addressee {addressee!r}")
+
+
 def _is_id(text: str) -> bool:
     return 1 <= len(text) <= 5 and text.isascii() and text.isalnum()
 
@@ -969,6 +976,7 @@ def _metadata_list(items: tuple[str, ...], limit: int, what: str) -> str:
 
 
 def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoefficients | TelemetryBits) -> bytes:
+    _check_message_addressee(data.addressee, "telemetry metadata")
     head = _addressee(data.addressee)
     if isinstance(data, TelemetryNames):
         body = "PARM." + _metadata_list(data.names, 13, "PARM.")
@@ -1001,6 +1009,7 @@ _DEFINED_QUERIES = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST
 
 
 def _directed_query(data: DirectedQuery) -> bytes:
+    _check_message_addressee(data.addressee, "a directed query")
     qtype = data.query_type
     if qtype != "PING?" and (not qtype or not all("A" <= c <= "Z" for c in qtype)):
         raise _refuse(f"query type {qtype!r} is not upper-case letters")
