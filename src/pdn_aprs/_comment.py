@@ -45,10 +45,12 @@ _AREA = re.compile(r"([0-9])([0-9 ]{2})(/[0-9]|1[0-5])([0-9 ]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
 _STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
-_BRACES = re.compile(r"\{([^{}]{1,3})\}")
-"""Signpost or corridor braces: the first ``{`` followed by 1-3 characters and a ``}``, wherever
-it is. A signpost's characters are printable ASCII (vectors interpretations.md, "Signpost
-overlays are printable ASCII"), and a corridor's are digits."""
+_SIGNPOST = re.compile(r"\{([ -z|~]{1,3})\}")
+"""Signpost braces: the first ``{``, 1-3 printable ASCII characters that are not braces, and ``}``,
+wherever they are (vectors interpretations.md, "Signpost overlays are printable ASCII"). Braces
+that do not qualify are comment text and do not stop the search."""
+_CORRIDOR = re.compile(r"\{([0-9]{1,3})\}")
+"""Corridor braces: the first ``{``, 1-3 digits and ``}``, wherever they are."""
 
 _FREQ_KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{3})[Mm][Hh][Zz]")
 _FREQ_10KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{2}) [Mm][Hh][Zz]")
@@ -352,15 +354,16 @@ def _lift_rest(
             AreaShape.LINE_DOWN_RIGHT,
             AreaShape.LINE_DOWN_LEFT,
         )
-        m = _BRACES.search(text) if is_signpost or is_line else None
-        if m is not None:
-            content = m.group(1)
-            if is_signpost and _util.is_printable_ascii(content):
-                parts.fields["signpost"] = content
+        if is_signpost:
+            m = _SIGNPOST.search(text)
+            if m:
+                parts.fields["signpost"] = m.group(1)
                 text = text[: m.start()] + text[m.end() :]
-            elif is_line and isinstance(area, AreaObject) and content.isascii() and content.isdigit():
+        elif is_line and isinstance(area, AreaObject):
+            m = _CORRIDOR.search(text)
+            if m:
                 parts.fields["area"] = AreaObject(
-                    area.shape, area.color, area.lat_offset, area.lon_offset, int(content)
+                    area.shape, area.color, area.lat_offset, area.lon_offset, int(m.group(1))
                 )
                 text = text[: m.start()] + text[m.end() :]
     if late_extensions:
