@@ -18,6 +18,7 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - A snowfall under 1 inch is written as `.` and two digits (0.5 as `.50`, where it used to write `0.5`).
 - A range sent later in a compressed position's comment (`RNG0025`) is rounded to the nearest step of the cs bytes, with the default type byte, where it used to be refused.
 - Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
+- The conformance tests compare the bytes written with a case's `canonical_info` byte for byte, for `equivalent` cases once the data reads back the same, and for the new `rounded` cases, whose data differs by the rounding.
 
 ## [0.2.0]
 

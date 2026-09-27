@@ -1,8 +1,9 @@
 """Loading and checking the conformance vectors (the ``vectors/`` submodule).
 
 Each case is checked as the vectors' README describes: the lenient decoding, the strict one,
-the single-tolerance check, the re-encoding, and for encode cases the encoding. Checks listed in
-``known_differences.json`` are skipped with their reasons.
+the single-tolerance check, the re-encoding (byte for byte against ``canonical_info`` where a case
+gives it), and for encode cases the encoding. Checks listed in ``known_differences.json`` are
+skipped with their reasons.
 """
 
 from __future__ import annotations
@@ -250,6 +251,12 @@ def check_reencode(case: dict[str, Any]) -> list[str]:
         if isinstance(data, MicEReport) and new_destination != destination:
             out.append(f"wrote destination {new_destination!r}, expected {destination!r}")
         return out
+    canonical = case["canonical_info"].encode("utf-8") if "canonical_info" in case else None
+    if case["reencode"] == "rounded":
+        # a value the format holds only in steps is rounded, so the data read back differs from
+        # the original by that rounding: only the bytes are compared
+        assert canonical is not None, "a rounded case gives canonical_info"
+        return [] if written == canonical else [f"wrote {written!r}, expected {canonical!r}"]
     again = decode_tnc2(f"{source}>{new_destination}".encode("ascii") + b":" + written)
     out = differences(to_neutral(data), to_neutral(again.data), "reencoded")
     bad = [str(d) for d in again.diagnostics if d.severity.value != "info"]
@@ -257,6 +264,9 @@ def check_reencode(case: dict[str, Any]) -> list[str]:
         out.append(f"wrote {written!r}, which decodes with {bad}")
     elif out:
         out.insert(0, f"wrote {written!r}")
+    elif canonical is not None and written != canonical:
+        # the bytes the Encoding rule leads to are binding, not only data that reads back the same
+        out.append(f"wrote {written!r}, expected {canonical!r}")
     return out
 
 

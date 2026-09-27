@@ -55,7 +55,8 @@ def test_tolerance(case: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("case", _params("reencode"))
 def test_reencode(case: dict[str, Any]) -> None:
-    """Encoding the lenient data again: identical bytes, equivalent bytes, or a refusal."""
+    """Encoding the lenient data again: identical bytes, the canonical bytes (for ``equivalent``,
+    once they read back as the same data, and for ``rounded``), or a refusal."""
     _run("reencode", case)
 
 
