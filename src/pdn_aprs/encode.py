@@ -766,8 +766,12 @@ def _mic_e(data: MicEReport) -> bytes:
     destination = mic_e_destination(data)
     if data.compressed or data.compression is not None:
         raise _refuse("a Mic-E report is not compressed")
+    legacy = b""
     if data.legacy_telemetry:
-        raise _refuse("Mic-E telemetry is obsolete")
+        # A 255 would be taken for Kenwood 0xFF padding and removed on the way back in.
+        if len(data.legacy_telemetry) != 5 or any(not 0 <= v <= 254 for v in data.legacy_telemetry):
+            raise _refuse("obsolete Mic-E binary telemetry is 5 values, each 0-254")
+        legacy = bytes([0x1D, *data.legacy_telemetry])
     if data.weather is not None or data.area is not None or data.df_bearing or data.storm or data.signpost:
         raise _refuse("a Mic-E report cannot carry weather, area, DF, storm or signpost data")
     a, o, _, lon_units = _dao_digits(data)
@@ -844,7 +848,7 @@ def _mic_e(data: MicEReport) -> bytes:
         if locator and (after or comment):
             text += " "
         text += after + comment
-        return (head + text + telemetry + dao + suffix).encode("utf-8")
+        return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
     return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq))
 
