@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-Brought into line with the rulings from six rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 156 new cases, and new rules in its README and interpretations.md). All 6,007 of the vectors' checks pass.
+Brought into line with the rulings from six rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 157 new cases, and new rules in its README and interpretations.md). All 6,009 of the vectors' checks pass.
 
 ### Added
 
