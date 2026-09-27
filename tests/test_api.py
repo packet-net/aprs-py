@@ -243,11 +243,53 @@ def test_timestamps() -> None:
         aprs.ItemReport(latitude=0, longitude=0, symbol=Symbol.HOUSE, name="AB"),
         aprs.MicEReport(latitude=0, longitude=0, symbol=Symbol.CAR, mic_e_message=MicEMessage.UNKNOWN),
         aprs.Unrecognized(aprs.UnrecognizedReason.MALFORMED),
+        # each of these would read back as different data
+        aprs.PositionReport(
+            latitude=0, longitude=0, symbol=Symbol.HOUSE, dao=aprs.Dao("3", aprs.DaoPrecision.THOUSANDTHS)
+        ),
+        aprs.PositionReport(
+            latitude=0,
+            longitude=0,
+            symbol=Symbol("5", "l"),
+            area=aprs.AreaObject(aprs.AreaShape.OPEN_ELLIPSE, aprs.AreaColor.BLACK, 1, 1),
+        ),
+        aprs.PositionReport(
+            latitude=0, longitude=0, symbol=Symbol.HOUSE, telemetry=aprs.CommentTelemetry(0, (0, 0, 0, 0, 0), 256)
+        ),
+        aprs.PositionReport(latitude=0, longitude=0, symbol=Symbol("\\", "m"), signpost="\xff"),
+        aprs.StatusReport("x", beam=aprs.Beam("B", "0")),
+        aprs.Bulletin("BLNe", "x"),
+        aprs.Capabilities((("MSG_CNT", "4\x1c3"),)),
+        aprs.Capabilities((("MSG_CNT", " 43"),)),
+        aprs.Query("APRS", aprs.Footprint(100.02, -117.15, 200)),
+        aprs.AgreloDf(361, 0),
+        aprs.TelemetryCoefficients("N0CALL", (0, float("inf"), 0)),
+        aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", comment="/no checksum"),
+        aprs.NmeaSentence("GPGLL,2554.459,N,08020.187,W,154027.281,A", latitude=1.0, longitude=1.0),
     ],
 )
 def test_encoder_refuses(data: aprs.AprsData) -> None:
     with pytest.raises(EncodeError):
         aprs.encode_info(data)
+
+
+def test_nmea_comment_after_checksum() -> None:
+    line = "N0CALL>APT311:$GPRMC,204717,A,3242.4549,N,08527.2835,W,000,340,090207,,*0C/Home Station by TinyTrack"
+    packet = aprs.decode(line)
+    assert isinstance(packet.data, aprs.NmeaSentence)
+    assert packet.data.sentence.endswith(",*0C")
+    assert packet.data.comment == "/Home Station by TinyTrack"
+    assert aprs.encode_info(packet.data) == packet.info
+    assert from_neutral(to_neutral(packet.data)) == packet.data
+
+
+def test_directed_query_targets() -> None:
+    def written(query_type: str) -> bytes:
+        return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))
+
+    assert written("APRSH") == b":KH2Z     :?APRSHN0QBF    "
+    assert written("APRSD") == b":KH2Z     :?APRSDN0QBF"
+    assert written("FOO") == b":KH2Z     :?FOO N0QBF"
 
 
 def test_neutral_round_trip() -> None:

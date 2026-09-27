@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+Brought into line with the rulings from differential fuzzing of all five implementations (packet-net/aprs-vectors: 120 new cases, and new rules in its README and interpretations.md). All 5,899 of the vectors' checks pass except the two for `corpus/0686`, a real TinyTrack packet recorded before the NMEA ruling; it now decodes as a sentence with a comment, and the vectors will refresh its record.
+
+### Added
+
+- `NmeaSentence.comment`: text sent after the checksum (TinyTrack sends one), kept as sent, and written back after the checksum.
+
+### Changed
+
+- NMEA: text after `$` must be an NMEA 0183 sentence, or it is `invalid-nmea`: printable ASCII, an address of five upper-case letters or digits (or `P` and three or more of them), then at least one field. The sentence ends at its first `*` and two hex digits, and the checksum is verified; a `*` that starts no checksum is `invalid-nmea`. The structure is checked before the checksum. Only GGA, GLL, RMC, VTG and WPL from a five-character address that does not start `P` are read. A coordinate needs a degree digit, minutes below 60 and a value in range, and a position needs both; the time must be exactly `hhmmss` in range; `fix` needs a status of `A` or `V`, or a one-digit GGA quality.
+- Mic-E: the 0x1C and 0x1D data type identifiers get an `obsolete-format` info, before anything else is checked. A PHG straight after the type code is read before an altitude is looked for later in the text, so `0PH}` in `PHG3330PH}` is not an altitude.
+- Positions: the latitude alone sets the ambiguity. A longitude place it blanks may hold a digit or a space; a space anywhere else is `invalid-longitude`.
+- `!DAO!`: a digit datum is only read with spaces for A and O, and a DAO is five bytes as sent, never joined across removed telemetry or a Mic-E altitude.
+- Only `\l` is an area object; with an overlay, `l` is an ordinary symbol. A signpost is 1-3 printable ASCII characters. Base-91 comment telemetry's `digital` is the eight binary channels, 0-255.
+- Weather: the wind is judged where the `DDD/SSS` extension belongs, before any field, so missing wind, or wind sent as fields, is reported first. When the wind comes as fields, `s` is the wind speed until the speed is known, wherever it comes. A repeated extra field letter no longer ends the fields. `s.` and `s..` are an unknown snowfall with a width warning.
+- Station capabilities: a control character in a token or a value makes the report free text, only spaces are trimmed, and the whole text is read as UTF-8 or Latin-1, not each item on its own. Telemetry names and units are read as one text in the same way.
+- Messages: an addressee is a bulletin only when `BLN` is followed by a digit or an upper-case letter. Bulletins, NWS bulletins and telemetry metadata take a message ID but not the reply-ack form, which stays in the text with `brace-in-message-text`. A stray `{` in a `PARM.`, `UNIT.` or `BITS.` list keeps it metadata, and a strict decoder now names the error.
+- Directed queries: one space before the target is a separator, and spaces after it are padding.
+- Telemetry: a value with a space in it is `invalid-telemetry`, and an `EQNS.` coefficient that is not a finite number (`1e400`) makes it a plain message.
+- Status: `0` is not an ERP code, so `^B0` is text, and the text before a beam heading keeps its spaces.
+- A general query footprint beyond 90 or 180 degrees is `invalid-general-query`, and an Agrelo bearing over 360 is `invalid-agrelo-df`.
+- Third-party packets: the inner source may be 1-9 printable ASCII characters other than `>` and `:`. A defect the inner header may tolerate (several used markers, an empty path entry) is decoded leniently, with its warning on the inner packet; a strict decoder rejects the packet as `invalid-third-party`.
+- Encoding: the encoder writes an equivalent form or refuses, never bytes that read back as different data. It writes an APRSH query target padded to 9 characters and another undefined type's target after a space, a third-party packet's empty inner information field as received, and an NMEA comment after the checksum. It refuses a third-party packet whose inner header has a tolerated defect, an out-of-range footprint, an Agrelo bearing over 360, a capability value with a control character or padding spaces, a coefficient that is not finite, a digit DAO datum with added precision, an area object with an overlay, comment telemetry binary over 255, a signpost that is not printable ASCII, a beam ERP code of 0, and `BLN` followed by a lower-case letter.
+- `tools/diff_dump.py` decodes a re-encoded packet again under a well-formed header (for Mic-E, the destination the encoder computed), so a defect in the original header is no longer counted against the encoder.
+- The conformance tests no longer check that a Mic-E case without `device` identifies no device: the vectors' README says such a case says nothing about device identification.
+
 ## [0.1.1]
 
 ### Changed

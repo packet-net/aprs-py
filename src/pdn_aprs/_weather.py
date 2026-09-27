@@ -1,8 +1,12 @@
 """The weather fields of a weather report (APRS12c ch. 12).
 
 The fields are one contiguous run, which ends at the first thing that is not a field, at a
-field letter seen before, and at ``c`` once the wind is known. What follows is the software
-type and unit, or else ``weather-comment`` text.
+defined field already read, and at ``c`` once the wind is known (vectors interpretations.md,
+"Which weather field a letter is"). What follows is the software type and unit, or else
+``weather-comment`` text.
+
+The fields are read without raising their defects: the caller raises them in reading order,
+after what it met before the fields (the wind, in a positioned report).
 """
 
 from __future__ import annotations
@@ -44,16 +48,26 @@ _FIELDS: dict[str, tuple[str, int, _Convert]] = {
     "#": ("rain_raw", 3, int),
 }
 _WIND_SPEED: tuple[str, int, _Convert] = ("wind_speed_mph", 3, int)
+_SNOWFALL = "snow_24h_in"
 
 _SOFTWARE_UNIT = re.compile(r"([A-Za-z])([A-Za-z0-9_-]{2,4})\Z")
 _EXTRA = re.compile(r"[0-9.-]+")
+_SNOW_VALUE = re.compile(r"[0-9.]{3}")
 
 
 @dataclass
 class WeatherFields:
+    """What the fields held, the text after them, and their defects in reading order."""
+
     values: dict[str, Any] = field(default_factory=dict)
     text: str = ""
+    defects: list[DiagnosticCode] = field(default_factory=list)
+    direction_sent: bool = False
+    speed_sent: bool = False
+    gust_sent: bool = False
+    temperature_sent: bool = False
     wind_from_fields: bool = False
+    """A ``c`` field was read: the wind came as fields."""
 
 
 def _value_length(text: str, i: int, negative: bool) -> int:
@@ -67,66 +81,84 @@ def _value_length(text: str, i: int, negative: bool) -> int:
     return n
 
 
-def parse_weather_fields(
-    text: str, ctx: Ctx, *, positionless: bool, wind_known: bool, compressed: bool
-) -> WeatherFields:
+def _dots(text: str, i: int) -> int:
+    n = 0
+    while i + n < len(text) and text[i + n] == ".":
+        n += 1
+    return n
+
+
+def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> WeatherFields:
+    """The fields at the start of ``text``. ``wind_known``: the wind came before the fields (the
+    ``DDD/SSS`` extension, or compressed cs bytes), so ``c`` ends them and ``s`` is snowfall.
+
+    ``c`` is the wind direction until the direction is known, but only with a value after it.
+    When the wind comes as fields (always in a positionless report; in a positioned one once a
+    ``c`` field is read), ``s`` is the wind speed until the speed is known, and snowfall after
+    that. Extra fields are a list, so a repeated extra letter does not end the run.
+    """
     result = WeatherFields()
     values = result.values
+    defects = result.defects
     seen: set[str] = set()
     extras: list[WeatherExtra] = []
-    direction_sent = speed_sent = wind_known
-    gust_sent = temperature_sent = False
-    previous = ""
+    wind_as_fields = positionless
+    result.direction_sent = result.speed_sent = wind_known
     i = 0
     n = len(text)
     while i < n:
         letter = text[i]
-        if letter == "c" and (direction_sent or "c" in seen):
-            break
         spec: tuple[str, int, _Convert] | None
-        if letter == "s":
-            if previous == "c" and not speed_sent:
+        if letter == "c":
+            if result.direction_sent:
+                break
+            spec = _FIELDS["c"]
+        elif letter == "s":
+            if wind_as_fields and not result.speed_sent:
                 spec = _WIND_SPEED
             else:
-                # snowfall keeps its fixed width: three digits (a decimal point allowed) or dots
-                chunk = text[i + 1 : i + 4]
-                if "snow_24h_in" in seen or len(chunk) != 3 or not re.fullmatch(r"[0-9.]{3}", chunk):
+                # snowfall keeps its fixed width: three digits (a decimal point allowed) or dots,
+                # or, one or two dots short, an unknown value with a width warning
+                if _SNOWFALL in seen:
                     break
-                seen.add("snow_24h_in")
-                if chunk != "...":
-                    try:
-                        values["snow_24h_in"] = float(chunk)
-                    except ValueError:
-                        break
-                i += 4
-                previous = "s"
+                chunk = text[i + 1 : i + 4]
+                dots = _dots(text, i + 1)
+                if dots >= 3:
+                    length = 3
+                elif len(chunk) == 3 and _SNOW_VALUE.fullmatch(chunk) and chunk.count(".") <= 1:
+                    values[_SNOWFALL] = float(chunk)
+                    length = 3
+                elif dots:
+                    defects.append(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
+                    length = dots
+                else:
+                    break
+                seen.add(_SNOWFALL)
+                i += 1 + length
                 continue
         else:
             spec = _FIELDS.get(letter)
         if spec is None:
             if not letter.isalpha() or not letter.isascii():
                 break
+            # a letter the spec does not define, and the whole run after it, ending in a digit
             m = _EXTRA.match(text, i + 1)
-            if not m or len(m.group()) < 2 or not m.group()[-1].isdigit() or letter in seen:
+            if not m or len(m.group()) < 2 or not m.group()[-1].isdigit():
                 break
-            seen.add(letter)
             extras.append(WeatherExtra(letter, m.group()))
             i = m.end()
-            previous = letter
             continue
         key, width, convert = spec
         if key in seen:
             break
         chunk = text[i + 1 : i + 1 + width]
-        dots = 0
-        while i + 1 + dots < n and text[i + 1 + dots] == ".":
-            dots += 1
+        dots = _dots(text, i + 1)
         if dots >= width or chunk == " " * width:
             value = None
             length = width
         elif dots:
             # an unknown value shorter than its width (b...)
-            ctx.defect(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
+            defects.append(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
             value = None
             length = dots
         else:
@@ -134,44 +166,45 @@ def parse_weather_fields(
             if length == 0:
                 break
             if length < width or length == width + 1:
-                ctx.defect(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
+                defects.append(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
             elif length > width + 1:
                 length = width
             value = int(text[i + 1 : i + 1 + length])
         if key == "wind_direction_degrees":
+            result.direction_sent = True
             if not positionless:
-                ctx.defect(C.WIND_FIELDS_INSTEAD_OF_EXTENSION)
                 result.wind_from_fields = True
-            direction_sent = True
+                wind_as_fields = True
         elif key == "wind_speed_mph":
-            speed_sent = True
+            result.speed_sent = True
         elif key == "wind_gust_mph":
-            gust_sent = True
+            result.gust_sent = True
         elif key == "temperature_f":
-            temperature_sent = True
+            result.temperature_sent = True
         seen.add(key)
-        if key == "luminosity_w_m2":
-            seen.add(key)
         if value is not None:
-            converted = convert(value)
             if (key == "wind_direction_degrees" and value > 360) or (key == "humidity_percent" and value > 100):
-                ctx.defect(C.OUT_OF_RANGE_VALUE)
+                defects.append(C.OUT_OF_RANGE_VALUE)
             else:
-                values[key] = converted
+                values[key] = convert(value)
         i += 1 + length
-        previous = letter
     if extras:
         values["extra"] = tuple(extras)
-    if positionless:
-        if not (direction_sent and speed_sent and gust_sent and temperature_sent):
-            ctx.defect(C.INCOMPLETE_WEATHER)
-    else:
-        if not compressed and not (direction_sent and speed_sent):
-            ctx.defect(C.INCOMPLETE_WEATHER)
-        if not (gust_sent and temperature_sent):
-            ctx.defect(C.INCOMPLETE_WEATHER)
     result.text = text[i:]
     return result
+
+
+def raise_field_defects(result: WeatherFields, ctx: Ctx, *, positionless: bool) -> None:
+    """The fields' defects in reading order, then ``incomplete-weather`` for the fields a report
+    must have: in a positionless one ``c``, ``s``, ``g`` and ``t``; otherwise ``g`` and ``t``
+    (the wind is judged where its extension belongs)."""
+    for code in result.defects:
+        ctx.defect(code)
+    if positionless:
+        if not (result.direction_sent and result.speed_sent and result.gust_sent and result.temperature_sent):
+            ctx.defect(C.INCOMPLETE_WEATHER)
+    elif not (result.gust_sent and result.temperature_sent):
+        ctx.defect(C.INCOMPLETE_WEATHER)
 
 
 def weather_tail(rest: str, ctx: Ctx, values: dict[str, Any]) -> str:

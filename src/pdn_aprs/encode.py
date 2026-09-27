@@ -15,12 +15,13 @@ b'=5130.00N/00007.00W>088/036Mobile'
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from . import _util
 from ._comment import MICROWAVE_BASE
-from .diagnostics import Severity
+from .diagnostics import DiagnosticCode, Severity
 from .errors import EncodeError
 from .model import (
     Ack,
@@ -61,6 +62,8 @@ from .model import (
     Timestamp,
     TimestampKind,
     ToneType,
+    Unrecognized,
+    UnrecognizedReason,
     UserDefined,
     VoiceFrequency,
     Weather,
@@ -87,14 +90,18 @@ _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
 
 
-def _same_number(text: str, value: float) -> bool:
-    """Whether a number kept as sent still says ``value``, so it can be written back."""
-    stripped = text.strip(" ")
-    if not stripped or not all(c in "0123456789.-+eE" for c in stripped):
+_TELEMETRY_VALUE = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+_COEFFICIENT = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\Z")
+
+
+def _same_number(text: str, value: float, form: re.Pattern[str]) -> bool:
+    """Whether a number kept as sent is one ``form`` allows and still says ``value``, so that it
+    can be written back."""
+    if not form.match(text):
         return False
     try:
-        return _util.number_equal(float(stripped), float(value))
-    except ValueError:
+        return _util.number_equal(float(text), float(value))
+    except (ValueError, OverflowError):
         return False
 
 
@@ -128,21 +135,23 @@ def _check_timestamp(ts: Timestamp, kinds: tuple[TimestampKind, ...], what: str)
         raise _refuse(f"{what} timestamp {ts.text!r} is out of range")
 
 
-def _shape_differences(a: Any, b: Any) -> bool:
-    """True when two neutral values differ other than in numbers."""
+def _shape_differences(a: Any, b: Any, *, numbers: bool = False) -> bool:
+    """True when two neutral values differ other than in numbers (with ``numbers``, in numbers
+    too, beyond the vectors' tolerance)."""
     if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() != b.keys() or any(_shape_differences(a[k], b[k]) for k in a)
+        return a.keys() != b.keys() or any(_shape_differences(a[k], b[k], numbers=numbers) for k in a)
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) != len(b) or any(_shape_differences(x, y) for x, y in zip(a, b, strict=False))
+        return len(a) != len(b) or any(_shape_differences(x, y, numbers=numbers) for x, y in zip(a, b, strict=False))
     if isinstance(a, bool) or isinstance(b, bool):
         return a is not b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return False
+        return numbers and not _util.number_equal(a, b)
     return bool(a != b)
 
 
-def _reads_back(data: AprsData, info: bytes, destination: str) -> bool:
-    """Whether ``info`` decodes, leniently and without defects, to data of ``data``'s shape."""
+def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool = False) -> bool:
+    """Whether ``info`` decodes, leniently and without defects, to data of ``data``'s shape (and,
+    with ``numbers``, the same numbers too)."""
     from ._decode import Ctx, decode_info
     from .neutral import to_neutral
 
@@ -150,7 +159,7 @@ def _reads_back(data: AprsData, info: bytes, destination: str) -> bool:
     decoded = decode_info(info, destination, ctx)
     if any(d.severity is not Severity.INFO for d in ctx.diags):
         return False
-    return not _shape_differences(to_neutral(data), to_neutral(decoded))
+    return not _shape_differences(to_neutral(data), to_neutral(decoded), numbers=numbers)
 
 
 def _with_comment(
@@ -217,6 +226,9 @@ def _dao_text(data: PositionedData, a: str, o: str) -> str:
     datum = dao.datum
     if len(datum) != 1 or not (datum.isascii() and datum.isalnum()):
         raise _refuse(f"DAO datum {datum!r} is not one letter or digit")
+    if datum.isdigit() and dao.precision is not DaoPrecision.NONE:
+        # a digit has no case to say how A and O are written
+        raise _refuse("a DAO with a digit datum carries no added precision")
     if dao.precision is DaoPrecision.BASE91:
         if not datum.isalpha():
             raise _refuse("a base-91 DAO needs a letter datum")
@@ -433,8 +445,8 @@ def _extension(data: PositionedData) -> str:
     if data.dfs is not None:
         parts.append(_dfs_text(data))
     if data.area is not None:
-        if not (data.symbol.is_alternate and data.symbol.code == "l"):
-            raise _refuse("an area object needs the area symbol \\l")
+        if str(data.symbol) != "\\l":
+            raise _refuse("an area object needs the area symbol \\l, without an overlay")
         a = data.area
         if not (0 <= a.lat_offset <= 99 and 0 <= a.lon_offset <= 99):
             raise _refuse("area offsets are 0-99")
@@ -495,6 +507,8 @@ def _telemetry_text(t: CommentTelemetry | None) -> str:
     if t.digital is not None:
         if len(t.analog) != 5:
             raise _refuse("comment telemetry digital bits need all five analog values")
+        if not 0 <= t.digital <= 255:
+            raise _refuse("comment telemetry has eight binary channels, 0-255")
         values.append(t.digital)
     if any(not 0 <= v <= 8280 for v in values):
         raise _refuse("comment telemetry values are 0-8280")
@@ -506,8 +520,9 @@ def _braces(data: PositionedData) -> str:
     if data.signpost is not None:
         if not (data.symbol.is_alternate and data.symbol.code == "m"):
             raise _refuse("a signpost needs the signpost symbol \\m")
-        if not 1 <= len(data.signpost) <= 3 or any(c in "{}" for c in data.signpost):
-            raise _refuse("a signpost is 1-3 characters")
+        sign = data.signpost
+        if not 1 <= len(sign) <= 3 or not _util.is_printable_ascii(sign) or "{" in sign or "}" in sign:
+            raise _refuse("a signpost is 1-3 printable ASCII characters other than braces")
         text += "{" + data.signpost + "}"
     if data.area is not None and data.area.corridor_width_miles is not None:
         if data.area.shape not in (AreaShape.LINE_DOWN_RIGHT, AreaShape.LINE_DOWN_LEFT):
@@ -907,8 +922,8 @@ def _ack(data: Ack | Reject) -> bytes:
 
 def _bulletin(data: Bulletin) -> bytes:
     a = data.addressee
-    if not (a.startswith("BLN") and 4 <= len(a) <= 9 and a[3].isascii() and a[3].isalnum()):
-        raise _refuse(f"bulletin addressee {a!r} is not BLN then a digit or letter")
+    if not (a.startswith("BLN") and 4 <= len(a) <= 9 and ("0" <= a[3] <= "9" or "A" <= a[3] <= "Z")):
+        raise _refuse(f"bulletin addressee {a!r} is not BLN then a digit or an upper-case letter")
     if a[3].isalpha() and len(a) > 4:
         raise _refuse("a group bulletin's identifier is a digit")
     _message_text(data.text)
@@ -941,9 +956,11 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
     elif isinstance(data, TelemetryCoefficients):
         if not 1 <= len(data.coefficients) <= 15:
             raise _refuse("EQNS. carries 1-15 coefficients")
+        if not all(math.isfinite(v) for v in data.coefficients):
+            raise _refuse("a coefficient is a finite number")
         texts = data.coefficients_text
         if len(texts) != len(data.coefficients) or any(
-            not _same_number(t, v) for t, v in zip(texts, data.coefficients, strict=False)
+            not _same_number(t, v, _COEFFICIENT) for t, v in zip(texts, data.coefficients, strict=False)
         ):
             texts = tuple(_util.number_text(v) for v in data.coefficients)
         body = "EQNS." + ",".join(texts)
@@ -959,13 +976,22 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
     return _checked(data, head + body + _message_id(data.message_id, None))
 
 
+_DEFINED_QUERIES = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST", "PING?")
+
+
 def _directed_query(data: DirectedQuery) -> bytes:
     qtype = data.query_type
-    if not qtype or not all("A" <= c <= "Z" or c == "?" for c in qtype):
+    if qtype != "PING?" and (not qtype or not all("A" <= c <= "Z" for c in qtype)):
         raise _refuse(f"query type {qtype!r} is not upper-case letters")
     target = data.target or ""
     if target and (len(target) > 9 or not all(c.isascii() and (c.isalnum() or c == "-") for c in target)):
         raise _refuse(f"query target {target!r} is not a callsign")
+    # a defined type's target goes straight after it, an APRSH one padded to 9 characters
+    # (APRS12c 1.2 notes); any other type's after one space, since its length is not fixed
+    if target and qtype == "APRSH":
+        target = target.ljust(9)
+    elif target and qtype not in _DEFINED_QUERIES:
+        target = " " + target
     return _checked(data, _addressee(data.addressee) + "?" + qtype + target)
 
 
@@ -994,7 +1020,7 @@ def _status(data: StatusReport) -> bytes:
     if data.beam is not None:
         b = data.beam
         if not ("0" <= b.heading_code <= "9" or "A" <= b.heading_code <= "Z") or not (
-            "0" <= b.power_code <= "9" or ":" <= b.power_code <= "K"
+            "1" <= b.power_code <= "9" or ":" <= b.power_code <= "K"
         ):
             raise _refuse("beam heading or power code out of range")
         text += "^" + b.heading_code + b.power_code
@@ -1016,7 +1042,7 @@ def _telemetry(data: TelemetryReport) -> bytes:
         t = texts[i] if i < len(texts) else None
         if v is None:
             values.append("")
-        elif t is not None and _same_number(t, v):
+        elif t is not None and _same_number(t, v, _TELEMETRY_VALUE):
             values.append(t)
         elif isinstance(v, int) or float(v).is_integer():
             iv = int(v)
@@ -1047,30 +1073,28 @@ def _raw_weather(data: RawWeather) -> bytes:
 
 
 def _nmea(data: NmeaSentence) -> bytes:
+    """The sentence, and any comment after its checksum. It must read back as the same data: an
+    NMEA 0183 sentence, whose fields say what ``data`` says."""
     s = data.sentence
     if not s or not _util.is_printable_ascii(s):
         raise _refuse("an NMEA sentence is printable ASCII")
-    star = len(s) - 3
-    ends_with_checksum = star >= 0 and s[star] == "*" and all(c in "0123456789ABCDEFabcdef" for c in s[star + 1 :])
-    if data.has_checksum:
-        if not ends_with_checksum:
-            raise _refuse("the sentence has no *hh checksum")
+    star = s.find("*")
+    if star >= 0 and (star != len(s) - 3 or not all(c in "0123456789ABCDEFabcdef" for c in s[star + 1 :])):
+        raise _refuse("a * in an NMEA sentence starts its checksum, *hh at the end")
+    if data.has_checksum != (star >= 0):
+        raise _refuse("has_checksum does not say whether the sentence ends with a *hh checksum")
+    if star >= 0:
         got = 0
         for ch in s[:star]:
             got ^= ord(ch)
-        try:
-            want = int(s[star + 1 :], 16)
-        except ValueError:
-            raise _refuse("the checksum is not hexadecimal") from None
-        if got != want:
+        if got != int(s[star + 1 :], 16):
             raise _refuse("the NMEA checksum does not match the sentence")
-    elif ends_with_checksum:
-        raise _refuse("has_checksum is false but the sentence ends with a checksum")
-    from ._decode import Ctx, decode_info
-
-    raw = ("$" + s).encode("ascii")
-    if not isinstance(decode_info(raw, DEFAULT_DESTINATION, Ctx(LENIENT)), NmeaSentence):
-        raise _refuse("the sentence does not read back as NMEA")
+    _check_text(data.comment, "comment")
+    if data.comment and not data.has_checksum:
+        raise _refuse("a comment goes after the sentence's checksum")
+    raw = ("$" + s).encode("ascii") + data.comment.encode("utf-8")
+    if not _reads_back(data, raw, DEFAULT_DESTINATION, numbers=True):
+        raise _refuse("the sentence does not read back as the same NMEA data")
     return raw
 
 
@@ -1089,6 +1113,8 @@ def _query(data: Query) -> bytes:
         f = data.footprint
         if not 0 <= f.radius_miles <= 9999:
             raise _refuse("footprint radius is 0-9999 miles")
+        if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
+            raise _refuse("footprint latitude or longitude out of range")
         text += f" {_util.number_text(f.latitude)},{_util.number_text(f.longitude)},{f.radius_miles:04d}"
     return _checked(data, text)
 
@@ -1105,26 +1131,44 @@ def _capabilities(data: Capabilities) -> bytes:
             raise _refuse(f"capability token {token!r} is free text")
         if len(cap) == 2:
             value = cap[1]
-            _check_text(value, "capability value")
+            if any(c < " " or c == "\x7f" for c in value):
+                raise _refuse("a capability value with a control character would read back as free text")
             if "," in value:
                 raise _refuse("a capability value cannot contain a comma")
+            if value != value.strip(" "):
+                raise _refuse("spaces around a capability value are padding and would be dropped")
             items.append(f"{token}={value}")
         else:
             items.append(token)
     return _checked(data, "<" + ",".join(items))
 
 
+_INNER_HEADER_DEFECTS = frozenset(
+    {DiagnosticCode.EMPTY_DESTINATION, DiagnosticCode.EMPTY_PATH_ENTRY, DiagnosticCode.MULTIPLE_USED_MARKERS}
+)
+
+
 def _third_party(data: ThirdParty) -> bytes:
+    from ._decode import _ADDRESS, _THIRD_PARTY_SOURCE
+
     inner = data.packet
-    _check_address(inner.source, "third-party source")
-    if inner.info:
-        # the original information field must not be changed (APRS12c ch. 17)
+    if any(d.code in _INNER_HEADER_DEFECTS for d in inner.diagnostics):
+        # the defect is part of the data, and no clean header reproduces it
+        raise _refuse("the third-party packet's inner header has a defect a clean header cannot carry")
+    if not _THIRD_PARTY_SOURCE.match(inner.source):
+        raise _refuse(f"third-party source {inner.source!r} is not 1-9 printable characters other than > and :")
+    if inner.info or inner.data == Unrecognized(UnrecognizedReason.EMPTY):
+        # the original information field must not be changed (APRS12c ch. 17), even when empty
         info = inner.info
         destination = inner.destination
     else:
         info = encode_info(inner.data)
         destination = mic_e_destination(inner.data) if isinstance(inner.data, MicEReport) else inner.destination
-    _check_address(destination, "third-party destination")
+    if not _ADDRESS.match(destination) or any(not _ADDRESS.match(p.call) for p in inner.path):
+        raise _refuse("a third-party destination or path entry is not 1-9 letters, digits or -")
+    used = [p.used for p in inner.path]
+    if used != sorted(used, reverse=True):
+        raise _refuse("in TNC2 a path entry before a used one is used too")
     path = tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
     return b"}" + header.encode("ascii") + b":" + info
@@ -1145,8 +1189,8 @@ def _test(data: TestData) -> bytes:
 
 
 def _agrelo(data: AgreloDf) -> bytes:
-    if not 0 <= data.bearing_degrees <= 999 or not 0 <= data.quality <= 9:
-        raise _refuse("Agrelo bearing is 3 digits and quality one")
+    if not 0 <= data.bearing_degrees <= 360 or not 0 <= data.quality <= 9:
+        raise _refuse("an Agrelo bearing is 0-360 degrees and its quality one digit")
     return f"%{data.bearing_degrees:03d}/{data.quality}".encode("ascii")
 
 

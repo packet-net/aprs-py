@@ -45,7 +45,10 @@ _AREA = re.compile(r"([0-9])([0-9 ]{2})(/[0-9]|1[0-5])([0-9 ]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
 _STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
-_BRACES = re.compile(r"\{([^{}]{1,3})\}")
+_SIGNPOST = re.compile(r"\{([ -z|~]{1,3})\}")
+"""Signpost braces: 1-3 printable ASCII characters other than braces (vectors interpretations.md,
+"Signpost overlays are printable ASCII")."""
+_CORRIDOR = re.compile(r"\{([0-9]{1,3})\}")
 
 _FREQ_KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{3})[Mm][Hh][Zz]")
 _FREQ_10KHZ = re.compile(r"([0-9A-O][0-9]{2}\.[0-9]{2}) [Mm][Hh][Zz]")
@@ -102,7 +105,8 @@ def parse_extension(
 ) -> tuple[str, int, dict[str, Any]] | None:
     """A data extension at the start of ``rest``: its kind, length and fields."""
     if not mic_e:
-        if symbol.is_alternate and symbol.code == "l":
+        # only \l is an area object: with an overlay, l is an ordinary symbol (APRS12c ch. 11)
+        if str(symbol) == "\\l":
             m = _AREA.match(rest)
             if m:
                 color = m.group(3)
@@ -187,11 +191,14 @@ def _telemetry(text: str) -> tuple[CommentTelemetry, int, int] | None:
     if n < 4 or n > 14 or n % 2 or not _util.is_base91(body):
         return None
     values = [_util.base91_value(body[i : i + 2]) for i in range(0, n, 2)]
-    digital = values[6] if len(values) == 7 else None
+    # eight binary channels; bits 9 to 13 are reserved (APRS12c ch. 13)
+    digital = values[6] & 0xFF if len(values) == 7 else None
     return CommentTelemetry(values[0], tuple(values[1:6]), digital), start, end + 1
 
 
 def _dao_at(text: str, i: int) -> tuple[Dao, float, float] | None:
+    """The ``!DAO!`` at ``i``. A letter datum's case gives the precision of A and O; a digit
+    datum has no case, so it is only read with spaces for them (vectors interpretations.md)."""
     if text[i] != "!" or text[i + 4] != "!":
         return None
     d, a, o = text[i + 1], text[i + 2], text[i + 3]
@@ -207,17 +214,24 @@ def _dao_at(text: str, i: int) -> tuple[Dao, float, float] | None:
             (ord(a) - 33) / 91 * 0.01,
             (ord(o) - 33) / 91 * 0.01,
         )
-    if not ("0" <= a <= "9" and "0" <= o <= "9"):
+    if not ("A" <= d <= "Z" and "0" <= a <= "9" and "0" <= o <= "9"):
         return None
     return Dao(d, DaoPrecision.THOUSANDTHS), int(a) * 0.001, int(o) * 0.001
 
 
-def _last_dao(text: str) -> tuple[Dao, float, float, int] | None:
+def _last_dao(text: str, skip: tuple[int, int] | None, cuts: tuple[int, ...]) -> tuple[Dao, float, float, int] | None:
+    """The last ``!DAO!``, five bytes as sent: not overlapping the ``skip`` span (the telemetry),
+    and not across a cut, a place where other text was already taken out."""
     for i in range(len(text) - 5, -1, -1):
-        if text[i] == "!":
-            found = _dao_at(text, i)
-            if found is not None:
-                return (*found, i)
+        if text[i] != "!":
+            continue
+        if skip is not None and i < skip[1] and i + 5 > skip[0]:
+            continue
+        if any(i < cut < i + 5 for cut in cuts):
+            continue
+        found = _dao_at(text, i)
+        if found is not None:
+            return (*found, i)
     return None
 
 
@@ -283,10 +297,13 @@ def lift_comment(
     symbol: Symbol | None,
     late_extensions: bool = True,
     area: object = None,
+    cuts: tuple[int, ...] = (),
 ) -> CommentParts:
-    """Lift the structured elements out of a comment; see the module docstring for the order."""
+    """Lift the structured elements out of a comment; see the module docstring for the order.
+    ``cuts``: places in ``text`` where something was already taken out, which no ``!DAO!``
+    spans."""
     parts = CommentParts()
-    text = lift_telemetry_dao(text, parts)
+    text = lift_telemetry_dao(text, parts, cuts)
     text = _lift_rest(text, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
     if text[:1] in (" ", "/"):
         text = text[1:]
@@ -294,18 +311,23 @@ def lift_comment(
     return parts
 
 
-def lift_telemetry_dao(text: str, parts: CommentParts) -> str:
-    """Lift base-91 telemetry and a ``!DAO!`` into ``parts``; returns the text left."""
-    if "|" in text:
-        tel = _telemetry(text)
-        if tel is not None:
-            parts.fields["telemetry"] = tel[0]
-            text = text[: tel[1]] + text[tel[2] :]
-    if "!" in text:
-        dao = _last_dao(text)
-        if dao is not None:
-            parts.dao, parts.dao_lat, parts.dao_lon, at = dao
-            text = text[:at] + text[at + 5 :]
+def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:
+    """Lift base-91 telemetry and a ``!DAO!`` into ``parts``; returns the text left.
+
+    The telemetry is found first, and the DAO is the last one outside it, in the text as sent, so
+    that taking the telemetry out never joins one.
+    """
+    tel = _telemetry(text) if "|" in text else None
+    dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
+    spans: list[tuple[int, int]] = []
+    if tel is not None:
+        parts.fields["telemetry"] = tel[0]
+        spans.append((tel[1], tel[2]))
+    if dao is not None:
+        parts.dao, parts.dao_lat, parts.dao_lon, at = dao
+        spans.append((at, at + 5))
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + text[end:]
     return text
 
 
@@ -326,18 +348,18 @@ def _lift_rest(
             AreaShape.LINE_DOWN_RIGHT,
             AreaShape.LINE_DOWN_LEFT,
         )
-        if is_signpost or is_line:
-            m = _BRACES.search(text)
+        if is_signpost:
+            m = _SIGNPOST.search(text)
             if m:
-                content = m.group(1)
-                if is_signpost:
-                    parts.fields["signpost"] = content
-                    text = text[: m.start()] + text[m.end() :]
-                elif content.isascii() and content.isdigit() and isinstance(area, AreaObject):
-                    parts.fields["area"] = AreaObject(
-                        area.shape, area.color, area.lat_offset, area.lon_offset, int(content)
-                    )
-                    text = text[: m.start()] + text[m.end() :]
+                parts.fields["signpost"] = m.group(1)
+                text = text[: m.start()] + text[m.end() :]
+        elif is_line and isinstance(area, AreaObject):
+            m = _CORRIDOR.search(text)
+            if m:
+                parts.fields["area"] = AreaObject(
+                    area.shape, area.color, area.lat_offset, area.lon_offset, int(m.group(1))
+                )
+                text = text[: m.start()] + text[m.end() :]
     if late_extensions:
         late = _late_extension(text)
         if late is not None and ctx.tolerates(C.DATA_EXTENSION_IN_COMMENT):

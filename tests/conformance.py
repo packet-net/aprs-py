@@ -159,14 +159,13 @@ def check_result(outcome: Outcome, expect: dict[str, Any], *, device: bool = Tru
         out += differences(expect["header"], header_to_neutral(packet), "header")
     if not device:
         return out
-    found = packet.device
+    # a case without "device" says nothing about device identification (vectors README)
     if "device" in expect:
+        found = packet.device
         got = {"vendor": found.vendor, "model": found.model} if found else None
         want = expect["device"]
         if got is None or any(got.get(k) != v for k, v in want.items()):
             out.append(f"device: expected {want!r}, got {got!r}")
-    elif isinstance(packet.data, MicEReport) and found is not None:
-        out.append(f"device: expected none, got {found}")
     return out
 
 
