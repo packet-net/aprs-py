@@ -7,10 +7,13 @@ the conformance vectors' ``tools/compare.py`` reads.
 ``lines.hex.gz`` holds one hex-encoded TNC2 line per line (packet.net's ``aprs-corpus diff
 lines`` writes it). Each output line is
 
-  {"n": 0, "lenient": R, "strict": R, "reencode": "identical|equivalent|refused|fails|none"}
+  {"n": 0, "lenient": R, "strict": R, "reencode": "identical|equivalent|refused|fails|none",
+   "written": "hex", "written_destination": "..."}
 
 where R is ``{"header", "data", "diagnostics"}`` in the vectors' neutral form, or
-``{"header_error": [...]}``; ``reencode`` says how the lenient data encodes again. The work is
+``{"header_error": [...]}``; ``reencode`` says how the lenient data encodes again, ``written`` is
+the information field it wrote (whenever it wrote one) and ``written_destination`` the Mic-E
+destination it computed. The work is
 spread over processes; the output keeps the input's order.
 """
 
@@ -60,28 +63,31 @@ def result(line: bytes, options: ParseOptions) -> tuple[dict[str, Any], Packet |
     return packet_to_neutral(packet), packet
 
 
-def reencode(packet: Packet | None) -> str:
-    """How the lenient data encodes again. The bytes written are decoded again under a
-    well-formed header (for Mic-E, the destination the encoder computed), so that a defect in the
-    original header, an empty destination say, is not counted against the encoder."""
+def reencode(packet: Packet | None) -> tuple[str, dict[str, str]]:
+    """How the lenient data encodes again, and what it wrote. The bytes written are decoded again
+    under a well-formed header (for Mic-E, the destination the encoder computed), so that a defect
+    in the original header, an empty destination say, is not counted against the encoder."""
     if packet is None or isinstance(packet.data, Unrecognized):
-        return "none"
+        return "none", {}
     data = packet.data
     try:
         info = encode_info(data)
         destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
     except EncodeError:
-        return "refused"
+        return "refused", {}
+    written = {"written": info.hex()}
+    if isinstance(data, MicEReport):
+        written["written_destination"] = destination
     same_destination = not isinstance(data, MicEReport) or destination == packet.destination
     if info == packet.info.rstrip(b"\r\n") and same_destination:
-        return "identical"
+        return "identical", written
     try:
         again = decode_tnc2(f"{packet.source}>{destination}".encode("ascii") + b":" + info, LENIENT)
     except HeaderError:
-        return "fails"
+        return "fails", written
     if any(d.severity.value != "info" for d in again.diagnostics):
-        return "fails"
-    return "equivalent" if same(to_neutral(data), to_neutral(again.data)) else "fails"
+        return "fails", written
+    return ("equivalent" if same(to_neutral(data), to_neutral(again.data)) else "fails"), written
 
 
 def dump_line(n: int, hex_line: str) -> str:
@@ -89,12 +95,12 @@ def dump_line(n: int, hex_line: str) -> str:
     try:
         lenient, packet = result(line, LENIENT)
         strict, _ = result(line, STRICT)
-        how = reencode(packet)
+        how, written = reencode(packet)
     except Exception as e:  # a crash is a bug: record it so the comparison shows it
         print(f"line {n}: {type(e).__name__}: {e}", file=sys.stderr)
         crash = {"header_error": [f"error:crash-{type(e).__name__}"]}
         return json.dumps({"n": n, "lenient": crash, "strict": crash, "reencode": "none"})
-    record = {"n": n, "lenient": lenient, "strict": strict, "reencode": how}
+    record = {"n": n, "lenient": lenient, "strict": strict, "reencode": how, **written}
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
