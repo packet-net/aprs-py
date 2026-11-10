@@ -14,7 +14,7 @@ requires-python = ">=3.10"
 dependencies = []
 keywords = ["aprs", "ax25", "ham-radio", "amateur-radio", "packet-radio", "mic-e", "kiss"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",

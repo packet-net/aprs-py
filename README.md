@@ -5,6 +5,8 @@
 
 An APRS (Automatic Packet Reporting System) decoder and encoder for Python, checked against the language-neutral conformance vectors in [packet-net/aprs-vectors](https://github.com/packet-net/aprs-vectors).
 
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.0: every case passes.
+
 - Decodes TNC2 / APRS-IS lines (`str` or `bytes`), AX.25 UI frames and KISS frames, into a packet with its header, the raw information field, the decoded data and diagnostics.
 - Every data type in the APRS 1.2 specification: positions (plain, compressed, with timestamps, weather, DF, storms, area objects), Mic-E, objects, items, messages, acks, bulletins, telemetry and its metadata, status, queries, capabilities, NMEA, raw weather, third-party, user-defined.
 - Lenient by default, strict on request, and every tolerable defect can be accepted or rejected on its own.

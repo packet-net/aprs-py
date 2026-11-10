@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-10
+
+This is the first stable release. The public API is now frozen under semantic versioning. From 1.0 the major and minor version are shared with aprs-vectors: a ruling round is a minor version for all five implementations, this library's own fixes are patch versions, and an API break is a major version.
 
 The 1.0 API cleanup. Nothing the vectors check changes: every vectors case passes, and the dump tool's encode, build and decode output over the 100,000-line comparison sets is byte for byte what 0.3.0 gave. Removed and renamed things are gone with no shim.
 
