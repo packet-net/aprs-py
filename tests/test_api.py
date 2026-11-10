@@ -766,14 +766,16 @@ def test_ambiguity_cut_takes_the_tolerance() -> None:
     assert aprs.encode_info(data).startswith(b"!8029.4 N")
 
 
-def test_compressed_range_without_a_compression_type_is_refused() -> None:
-    # the T byte written with the range would read back as a type the data does not have
+def test_compressed_cs_values_without_a_compression_type_get_the_default() -> None:
+    # the default type byte C goes with cs values the data gives no type for
     data = aprs.PositionReport(
-        latitude=49.5, longitude=-72.75, symbol=Symbol("/", ">"), compressed=True, range_miles=29.57
+        latitude=49.05833333333333,
+        longitude=-72.02916666666667,
+        symbol=Symbol("/", ">"),
+        compressed=True,
+        range_miles=2,
     )
-    with pytest.raises(EncodeError):
-        aprs.encode_info(data)
-    # a late RNG a decoder read keeps the default type byte when written back
+    assert aprs.encode_info(data) == b"!/5`=k<;>x>{!C"
     late = aprs.decode("N0CALL>APZ001:!/5L!!<*e7>  G RNG0025hello").data
     assert aprs.encode_info(late) == b"!/5L!!<*e7>{BChello"
 

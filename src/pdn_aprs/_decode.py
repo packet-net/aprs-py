@@ -559,10 +559,6 @@ def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) 
     """Put the elements lifted out of a comment into the fields, applying a DAO's precision."""
     for key, value in parts.fields.items():
         fields[key] = value
-    if p.compressed and "range_miles" in parts.fields and fields.get("compression") is None:
-        # a late RNG on a compressed position, which re-encodes into the cs bytes with the
-        # default type byte
-        fields["range_in_comment"] = True
     if parts.dao is not None:
         fields["dao"] = parts.dao
         if p.ambiguity:

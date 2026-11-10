@@ -701,11 +701,13 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
 
 
 def _typed(data: _P) -> _P:
-    """A compressed position's range goes into the cs bytes, which need a type byte. One a
-    decoder read from a late ``RNG`` in the comment came without one, so it gets the default.
-    Data that gives a range with no compression type is refused: the T byte would read back as
-    a type the data does not have (vectors README, Encoding)."""
-    if data.compressed and data.compression is None and data.range_miles is not None and data.range_in_comment:
+    """cs bytes that carry a value (a range, a course and speed, wind) need a type byte; data
+    with none gets the default, C (vectors README, Encoding)."""
+    if not data.compressed or data.compression is not None:
+        return data
+    w = getattr(data, "weather", None)
+    wind = w is not None and (w.wind_direction_degrees is not None or w.wind_speed_mph is not None)
+    if data.range_miles is not None or data.course_degrees is not None or data.speed_knots is not None or wind:
         return dataclasses.replace(data, compression=CompressionType())
     return data
 
