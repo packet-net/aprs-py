@@ -12,7 +12,7 @@ import re
 from typing import Any, NoReturn
 
 from . import _util
-from ._comment import CommentParts, lift_comment, lift_telemetry_dao, parse_extension
+from ._comment import CommentParts, lift_comment, lift_telemetry_dao, lifted_places, parse_extension
 from ._weather import parse_weather_fields, raise_field_defects, weather_tail
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .errors import HeaderError
@@ -895,9 +895,11 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     if loc is not None:
         locator, consumed = loc
         rest = rest[consumed:]
-        if rest and rest[0] != " ":
+        # base-91 telemetry and a !DAO! are lifted out of the status text before the locator is
+        # read, so a locator followed straight by either has no missing space (vectors ruling F16)
+        if rest and rest[0] != " " and lift_telemetry_dao(rest, CommentParts())[:1] not in ("", " "):
             ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-        elif rest:
+        elif rest[:1] == " ":
             rest = rest[1:]
     p = Pos(lat, lon, Symbol(table, code), ambiguity, False, None)
     ext = parse_extension(rest, p.symbol, ctx, mic_e=True)
@@ -916,6 +918,18 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
             altitude = _util.base91_value(found.group()[:3]) - 10000
             rest = rest[: found.start()] + rest[found.end() :]
             cuts = (found.start(),)
+        elif not ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
+            # the altitude is looked for before telemetry and the !DAO! are lifted; left as text,
+            # lifting them must not join the bytes either side of a place they came from into
+            # one. Only with a later altitude to decline; with none, strict reads as lenient
+            # (vectors README, Mic-E)
+            left, places = lifted_places(rest)
+            if found is not None and any(
+                _MICE_ALTITUDE.match(left, i) and i < place < i + 4
+                for place in places
+                for i in range(max(place - 3, 0), place)
+            ):
+                ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     parts = lift_comment(
@@ -1442,7 +1456,10 @@ def _query(s: str, destination: str, ctx: Ctx) -> AprsData:
         m = _FOOTPRINT.match(rest)
         if not m:
             ctx.fail(C.INVALID_GENERAL_QUERY)
-        footprint = Footprint(float(m.group(1)), float(m.group(2)), int(m.group(3)))
+        latitude, longitude = m.group(1), m.group(2)
+        footprint = Footprint(
+            float(latitude), float(longitude), int(m.group(3)), latitude_text=latitude, longitude_text=longitude
+        )
         if abs(footprint.latitude) > 90 or abs(footprint.longitude) > 180:
             # no such place: dropping the footprint would make the query one to every station
             ctx.fail(C.INVALID_GENERAL_QUERY)

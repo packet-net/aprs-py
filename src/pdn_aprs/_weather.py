@@ -124,6 +124,11 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
                     break
                 value_text = _SNOW_VALUE.match(text, i + 1)
                 chunk = value_text.group() if value_text else ""
+                if not chunk and text[i + 1 : i + 4] == "   ":
+                    # three spaces: sent as unknown, which counts as present
+                    seen.add(_SNOWFALL)
+                    i += 4
+                    continue
                 if any("0" <= ch <= "9" for ch in chunk):
                     if len(chunk) != 3 or chunk.count(".") > 1:
                         break

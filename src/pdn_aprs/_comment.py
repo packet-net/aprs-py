@@ -41,9 +41,9 @@ _PHG = re.compile(r"PHG([0-9])([0-~])([0-9])([0-9])(?:([1-9A-Z])/)?")
 _RNG = re.compile(r"RNG([0-9]{4})")
 _DFS = re.compile(r"DFS([0-9])([0-~])([0-9])([0-9])")
 _CSE_SPD = re.compile(r"([0-9]{3}|\.\.\.|   )/([0-9]{3}|\.\.\.|   )")
-_AREA = re.compile(r"([0-9])([0-9 ]{2})(/[0-9]|1[0-5])([0-9 ]{2})")
+_AREA = re.compile(r"([0-9])([0-9]{2})(/[0-9]|1[0-5])([0-9]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
-_STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
+_STORM = re.compile(r"/(TS|HC|TD)/([0-9.]{3})\^([0-9.]{3})/([0-9.]{4})>([0-9.]{3})&([0-9.]{3})(?:%([0-9.]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
 _SIGNPOST = re.compile(r"\{([ -z|~]{1,3})\}")
 """Signpost braces: the first ``{``, 1-3 printable ASCII characters that are not braces, and ``}``,
@@ -116,8 +116,8 @@ def parse_extension(
                 area = AreaObject(
                     list(AreaShape)[int(m.group(1))],
                     list(AreaColor)[color_code],
-                    int(m.group(2).replace(" ", "0")),
-                    int(m.group(4).replace(" ", "0")),
+                    int(m.group(2)),
+                    int(m.group(4)),
                 )
                 return "area", 7, {"area": area}
         m = _CSE_SPD.match(rest)
@@ -314,6 +314,24 @@ def lift_comment(
         text = text[1:]
     parts.comment = text
     return parts
+
+
+def lifted_places(text: str, cuts: tuple[int, ...] = ()) -> tuple[str, tuple[int, ...]]:
+    """The text left once base-91 telemetry and a ``!DAO!`` are lifted, and the places in it
+    where something was taken out."""
+    tel = _telemetry(text) if "|" in text else None
+    dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
+    spans = sorted(
+        ([(tel[1], tel[2])] if tel is not None else []) + ([(dao[3], dao[3] + 5)] if dao is not None else [])
+    )
+    places: list[int] = []
+    removed = 0
+    for start, end in spans:
+        places.append(start - removed)
+        removed += end - start
+    for start, end in reversed(spans):
+        text = text[:start] + text[end:]
+    return text, tuple(places)
 
 
 def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:

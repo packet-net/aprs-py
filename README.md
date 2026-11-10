@@ -170,14 +170,24 @@ Symbol('/f')
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding, and the encode cases. All 6,015 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), and the encode cases. All 6,137 checks pass. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
-`tools/diff_dump.py` decodes a whole capture and writes the JSONL that the vectors' `tools/compare.py` reads, spread over all cores (a 6.9-million-line capture takes about two minutes):
+### The dump tool
+
+`tools/diff_dump.py` runs a file of inputs through the library and writes what it made of each, as gzip-compressed JSON lines in the input's order, in the form the vectors' `tools/compare.py` reads (the vectors' README, "Comparing implementations"). It has the three modes that README describes:
 
 ```sh
-python3 tools/diff_dump.py lines.hex.gz py.jsonl.gz
-python3 vectors/tools/compare.py py.jsonl.gz rs.jsonl.gz --names Python Rust --lines lines.hex.gz
+python3 tools/diff_dump.py lines.hex.gz py.jsonl.gz                     # decode
+python3 tools/diff_dump.py --encode data.jsonl.gz py-encode.jsonl.gz    # encode
+python3 tools/diff_dump.py --build recipes.jsonl.gz py-build.jsonl.gz   # build
+python3 vectors/tools/compare.py py.jsonl.gz ts.jsonl.gz --names py ts --input lines.hex.gz
 ```
+
+- **Decode** (the default) reads one hex-encoded TNC2 line per line (the vectors' `tools/mutate.py` writes them). Each record holds the lenient and strict results in the neutral form, how the lenient data encodes again (`reencode`), the information field the encoder wrote (`written`, hex) and for Mic-E the destination it computed (`written_destination`), and `api`: what the public API says about the packet (source, destination, path, q-construct, whether it came from inside a third-party packet, `has_errors` and `has_warnings`, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for, and the same for a third-party packet's inner packet).
+- **Encode** (`--encode`) reads neutral data from the vectors' `tools/generate.py`, encodes it with `encode_info` and writes the bytes, the destination and what they decode to, or `refused` with the encoder's reason.
+- **Build** (`--build`) reads builder recipes (`generate.py --recipes`) and calls the `Station` methods as a program would, writing the TNC2 line and what it decodes to, or `refused`. A recipe key the `Station` methods do not take is `unsupported`, and the reason names it.
+
+The work is spread over processes: `--jobs N` (all cores by default) and `--chunk N` lines at a time (5,000); `--limit N` stops after N lines. A 6.9-million-line capture takes about two minutes to decode.
 
 On the 6,879,893-packet APRS-IS capture the other implementations were compared on, this one agrees with both on every packet: lenient and strict decoding and re-encoding.
 

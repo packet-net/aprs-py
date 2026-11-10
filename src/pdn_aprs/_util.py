@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
+from decimal import Decimal
+from fractions import Fraction
 
 KNOTS_TO_MPH = 1852 / 1609.344
 """Miles per hour in a knot: a nautical mile is 1852 m, a statute mile 1609.344 m."""
@@ -78,15 +81,44 @@ def utf8_or_latin1(text: str) -> tuple[str, bool]:
 
 
 def number_text(value: float) -> str:
-    """A number as short decimal text: ``5.2``, ``-32``, ``0.53``."""
-    if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
-        if isinstance(value, float) and abs(value) >= 1e16:
-            return repr(value)
-        return str(int(value))
-    text = repr(float(value))
-    if "e" in text or "E" in text:
-        text = f"{value:.15f}".rstrip("0").rstrip(".")
+    """A number as the shortest decimal text that reads back as it, with no exponent, no ``+``,
+    a leading ``0`` before a point and no trailing ``.0``: ``5.2``, ``-32``, ``0.53``, ``190``,
+    and 1e61 as ``1`` and 61 zeros (vectors ruling F11)."""
+    if isinstance(value, int):
+        return str(value)
+    text = format(Decimal(repr(float(value))), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text in ("-0", ""):
+        text = "0"
     return text
+
+
+def decimal(value: float) -> Decimal:
+    """``value`` as the decimal number its shortest text says (``1.69475``, not the binary
+    fraction just below it), so that a value written as a half rounds as a half, and the step a
+    value rounds to does not depend on how floating point rounds on the way."""
+    return Decimal(repr(float(value)))
+
+
+HALF_TOLERANCE = 1e-6
+"""How close to a step's half, in steps, a value is taken as the half (vectors ruling F2)."""
+
+
+def round_half_away(value: float | Decimal | Fraction) -> int:
+    """``value``, a number of steps, rounded to the nearest whole step, halves away from zero
+    (2.5 to 3, -2.5 to -3), as the vectors' rule F2 rounds every field.
+
+    The value is the binary floating-point number computed from the data, and one within 1e-6 of
+    a half is the half: the half the decimal text means then wins although its binary value lies
+    a few ulps either side (986.9499999999999 tenths is 9869.5, written 9870). Python's ``round``
+    takes halves to the even number instead."""
+    x = float(value)
+    magnitude = abs(x)
+    whole = math.floor(magnitude)
+    if magnitude - whole >= 0.5 - HALF_TOLERANCE:
+        whole += 1
+    return -whole if x < 0 else whole
 
 
 def number_equal(a: float, b: float) -> bool:

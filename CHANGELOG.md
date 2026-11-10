@@ -4,6 +4,64 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batches 1 and 2).
+
+### Added
+
+- `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
+
+- `tools/diff_dump.py` has an encode mode (`--encode`, neutral data from the vectors' `tools/generate.py`) and a build mode (`--build`, builder recipes), and its decode records carry the API view: the header, path and q-construct, the diagnostics accessors, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for.
+- `MicEReport.altitude_in_comment` asks the encoder to write the altitude as a `/A=` in feet even where the Mic-E altitude bytes would hold it; `Station.mic_e` sets it for an altitude given in feet. The neutral form leaves it out.
+- `Station.position`, `object` and `mic_e` take `speed_kmh` and `altitude_m`, and `Station.weather` takes `temperature_c`, `rain_1h_mm`, `rain_24h_mm` and `rain_since_midnight_mm`, beside the units APRS sends; they are converted.
+
+### Changed
+
+- The comment of a position, object or item is written in the order frequency, braces, altitude, free text, base-91 telemetry, `!DAO!`: the frequency goes first, where radios read it (APRS12c ch. 18), the altitude follows it and its fields straight on, and the free text follows after a space (`j006/058/146.520MHz/A=000889 Dayton Bound`; it used to write `/A=` before the frequency).
+- A frequency after a PHGR follows its `/` straight on (`PHG33403/145.225MHz`, where it used to write `//`), in Mic-E status text too; after any other data extension it is written after a `/`, now also when braces or an altitude follow.
+- The digits of a `!DAO!` on a compressed position, which a decoder ignores, are those the same DAO gives the position written uncompressed (`!sCp!`), so that a reader that did apply them lands on the position reported; they used to be `!!` or `00`.
+- A snowfall under 1 inch is written as `.` and two digits (0.5 as `.50`, where it used to write `0.5`).
+- A range sent later in a compressed position's comment (`RNG0025`) is rounded to the nearest step of the cs bytes, with the default type byte, where it used to be refused.
+- User-defined data that ends in a line break is refused: the decoder takes a trailing CR or LF as a tolerated defect and drops it, so it would not read back.
+- `from_neutral` reads a bulletin or NWS bulletin with its empty text left out, and a third-party packet whose source or destination is left out as empty.
+- Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
+- A half is judged on the value in binary floating point, measured in steps, and one within 1e-6 of a half is the half, which goes away from zero (vectors ruling F2): 1.275 inches of rain is `p128`, a latitude of 0.9764166666666666 degrees (58.584999999999996 minutes) is `0058.59N`, a pressure of 986.9499999999999 mbar is `b09870`. A voice frequency and a footprint radius are rounded the same way, and a frequency that rounds past its digits is refused.
+- Every value is rounded before it is checked: a course or wind direction of 360.4 is `360`, and one of -0.3 is `000` (both used to be refused).
+- A course of 0 is refused in Mic-E and compressed reports, where it would read back as no course or as 360; uncompressed it is `000` (F1).
+- A snowfall is rounded into its three forms (0.995 as `001`, 9.96 as `010`, 12.5 as `013`), where one the three characters could not hold exactly used to be refused (F3).
+- A number given as data with no text (an `EQNS.` coefficient, a telemetry value, a footprint coordinate) is the shortest plain decimal: 1e61 is `1` and 61 zeros, where it used to be `1e+61` (F11).
+- A Mic-E locator followed straight by base-91 telemetry or a `!DAO!` is no missing space, since both are lifted from the status text first (F16): the decoder no longer warns and the encoder writes them straight after it.
+- `T#MIC` with an empty first channel is refused with a reason of its own (F12).
+- `Packet.device` matches a tocall case-sensitively, so `APNl02` is nothing (A1).
+- `Station.mic_e`: a course of 0, or one that rounds to 0, is unknown and written as no course (B1); an altitude in metres goes in the Mic-E altitude bytes, rounded to the metre, and one in feet in a `/A=` (B2).
+- `Station.telemetry` refuses a sequence over 999 (B6).
+- A compressed speed or range rounds to the nearest step of its formula for any whole s, and is refused when that s is outside the byte: a speed of -0.03 knots is written as 0 and -0.3 refused, a range of 1.95 miles is written as 2 and 1.9 refused (G3; ranges under 2 miles used to be refused, negative speeds written as 0).
+- The ambiguity cut takes the 1e-6 tolerance at the box edge above (G2).
+
+- A compressed position whose cs bytes carry a range, a course and speed or wind, with no compression type, is written with the default type byte `C` (it used to be refused for anything but a range).
+- Strict decoding rejects a Mic-E status text where lifting a `!DAO!` would join the bytes either side of it into a Mic-E altitude, since the altitude is looked for before the DAO is lifted.
+
+### Fixed (batch 2)
+
+- Strict decoding rejects Mic-E status text with `mic-e-altitude-not-first` only when there is a later altitude to decline and lifting telemetry or the `!DAO!` would form an altitude across the place it came from; one the bytes already held is kept as text.
+- `Packet.to_ax25` refuses an address with a dash and no SSID (`WIDE1-`).
+- Storm data fields are digits or dots: a field with a space (`> 90`) means no storm data, and the text is comment.
+
+- `Packet.to_ax25` refuses an address whose SSID has a leading zero (`-00`, `-0`, `-07`), which the frame would bring back as a different SSID.
+- A snowfall sent as three spaces (`s   `) is a weather field sent as unknown, not comment text.
+
+- An area object's offsets are digits only (`Tyy/Cxx`), so `7 0/310` after the `\l` symbol is comment text, not an area.
+
+- A Mic-E comment that would join the `/A=` digits before it into a Mic-E altitude (`{5}` after `/A=000101`) is written after a separating space; it used to be refused (E12).
+- An ambiguous position is written from the box that holds it, so a decoder reports the centre nearest the value: 3.596 minutes at ambiguity 1 is `03.5 `, where rounding first made it `03.6 `. In Mic-E the longitude digits the ambiguity covers, which a decoder ignores, are written as the centre it reports.
+- The `!DAO!` digits on a compressed position are those of the position the compressed bytes report, not of the value given before it was rounded into them.
+- A compressed weather report whose altitude the GGA cs bytes cannot hold exactly is written with the nearest cs step, since there is no comment for a `/A=` (F14). It used to be dropped silently.
+- `Station.status` sends a grid locator in upper case, as a decoder reports it; a lower-case one used to be refused.
+
+### Fixed
+
+- `Packet.device`: aprs-deviceid's `n` wildcard matches a digit, so `APW290` is WinAPRS and `APD225` aprsd; they were not identified.
+- The conformance tests compare the bytes written with a case's `canonical_info` byte for byte, for `equivalent` cases once the data reads back the same, and for the new `rounded` cases, whose data differs by the rounding.
+
 ## [0.2.0]
 
 Brought into line with the rulings from seven rounds of differential fuzzing of all five implementations (packet-net/aprs-vectors: 159 new cases, and new rules in its README and interpretations.md). All 6,015 of the vectors' checks pass.
