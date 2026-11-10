@@ -117,7 +117,7 @@ M0LTE-13>APZ001::M0LTE-13 :PARM.Battery,Temp
 
 ```
 
-The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars.
+The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (with `tone` and `offset_khz`), `telemetry` and `precise` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
 
 ## Encoding
 
