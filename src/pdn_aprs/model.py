@@ -663,7 +663,9 @@ class MicEReport(PositionedData):
     ``type_code`` is the device type byte after the symbol (`` ` ``, ``'``, ``>``, ``]`` or a
     space) and ``device_suffix`` the device's suffix at the end, both lifted out of the
     comment. ``old_data`` is set by the ``'`` data type. ``destination_ssid`` is the
-    destination address's SSID, which an encoder writes back.
+    destination address's SSID, which an encoder writes back. ``altitude_in_comment`` asks an
+    encoder to write the altitude as a ``/A=`` in feet even where the Mic-E altitude bytes, in
+    metres, would hold it (a builder given an altitude in feet).
     """
 
     kind: ClassVar[str] = "mic-e"
@@ -674,6 +676,7 @@ class MicEReport(PositionedData):
     locator: str | None = None
     legacy_telemetry: tuple[int, ...] = ()
     destination_ssid: int = 0
+    altitude_in_comment: bool = field(default=False, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, repr=False)

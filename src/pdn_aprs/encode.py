@@ -958,7 +958,7 @@ def _mic_e(data: MicEReport) -> bytes:
     altitude_first = ""
     altitude_later = ""
     if data.altitude_feet is not None:
-        mic = _mic_e_altitude(data.altitude_feet)
+        mic = None if data.altitude_in_comment else _mic_e_altitude(data.altitude_feet)
         if mic is not None:
             altitude_first = mic
         else:

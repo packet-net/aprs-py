@@ -60,7 +60,7 @@ STATION = Station("M0LTE-9", via="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging
         STATION.item("AID #2", 49.0583, -72.0292, Symbol.AID_STATION),
         STATION.mic_e(51.4575, -0.9811, speed=12, course=94, comment="Hello"),
         STATION.mic_e(-33.8688, 151.2093, message=MicEMessage.EMERGENCY, speed=0),
-        STATION.mic_e(42.3, -71.3, speed=153, course=200, altitude=5787.401574803149),
+        STATION.mic_e(42.3, -71.3, speed=153, course=200, altitude_m=1764),
         STATION.weather(49.05, -72.03, wind_direction=220, wind_speed=4, gust=5, temperature=-7, humidity=100),
         STATION.weather(wind_direction=220, wind_speed=4, gust=5, temperature=77, timestamp=Timestamp.mdhm(1, 2, 3, 4)),
         STATION.message("G4ABC", "Hello", message_id="1"),
@@ -96,6 +96,34 @@ def test_station_metric_units() -> None:
     assert b"t077r100" in weather.info
     with pytest.raises(ValueError, match="both units"):
         STATION.position(51.45, -0.98, speed=10, speed_kmh=18.52)
+
+
+def test_station_mic_e_altitude_in_metres_or_feet() -> None:
+    # B2: metres go in the Mic-E altitude bytes, rounded to the metre; feet in a /A=
+    in_metres = STATION.mic_e(51.45, -0.98, altitude_m=100.4)
+    assert in_metres.info.endswith(b'"4{}')
+    assert isinstance(in_metres.data, aprs.MicEReport)
+    for feet, written in ((0, b"/A=000000"), (1250, b"/A=001250"), (-12.5, b"/A=-00013")):
+        assert STATION.mic_e(51.45, -0.98, altitude=feet).info.endswith(written)
+
+
+@pytest.mark.parametrize("course", [0, 0.3])
+def test_station_course_0_is_unknown(course: float) -> None:
+    # B1: a builder's course of 0 is the spec's unknown; north is 360
+    assert STATION.position(51.45, -0.98, course=course, speed=5).info.endswith(b">000/005")  # type: ignore[arg-type]
+    mic_e = STATION.mic_e(51.45, -0.98, course=course, speed=5)  # type: ignore[arg-type]
+    assert isinstance(mic_e.data, aprs.MicEReport)
+    assert mic_e.data.course_degrees is None
+    assert aprs.decode(mic_e.to_tnc2()).data == mic_e.data
+    with pytest.raises(EncodeError):
+        STATION.position(51.45, -0.98, course=course, speed=5, compressed=True)  # type: ignore[arg-type]
+
+
+def test_station_telemetry_sequence_over_999_is_refused() -> None:
+    # B6: refused, not wrapped
+    assert STATION.telemetry(999, [1, 2, 3, 4, 5]).info.startswith(b"T#999,")
+    with pytest.raises(ValueError, match="0-999"):
+        STATION.telemetry(1000, [1, 2, 3, 4, 5])
 
 
 def test_station_path_forms() -> None:

@@ -24,7 +24,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from ._util import FEET_PER_METRE
+from ._util import FEET_PER_METRE, round_half_away
 from .encode import DEFAULT_DESTINATION, build_packet
 from .model import (
     Ack,
@@ -272,7 +272,19 @@ class Station:
     ) -> Packet:
         """A Mic-E report: the compact position format of trackers and radios. The destination
         address carries half the position and is computed; the type code says whether this
-        station can message."""
+        station can message.
+
+        A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
+        An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
+        to the metre; one in feet goes in a ``/A=``."""
+        if course is not None and round_half_away(course) == 0:
+            course = None
+        if altitude_m is not None:
+            if altitude is not None:
+                raise ValueError("give the altitude once, not in both units")
+            feet: float | None = round_half_away(altitude_m) * FEET_PER_METRE
+        else:
+            feet = altitude
         data = MicEReport(
             latitude=latitude,
             longitude=longitude,
@@ -280,7 +292,8 @@ class Station:
             mic_e_message=message,
             course_degrees=course,
             speed_knots=speed if speed_kmh is None else speed_kmh / KMH_PER_KNOT,
-            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
+            altitude_feet=feet,
+            altitude_in_comment=altitude is not None,
             comment=comment,
             type_code="`" if self.messaging else "'",
         )
@@ -402,7 +415,10 @@ class Station:
         *,
         comment: str = "",
     ) -> Packet:
-        """A telemetry report: a sequence number, five analog values and eight bits."""
+        """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
+        refused, not wrapped), five analog values and eight bits."""
+        if isinstance(sequence, int) and not 0 <= sequence <= 999:
+            raise ValueError(f"telemetry sequence {sequence} is not 0-999")
         seq = f"{sequence:03d}" if isinstance(sequence, int) else sequence
         return self.send(TelemetryReport(seq, tuple(analog), bits, comment))
 
