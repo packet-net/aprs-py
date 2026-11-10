@@ -18,7 +18,6 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable, Iterable
-from decimal import Decimal
 from fractions import Fraction
 from typing import Any, TypeVar
 
@@ -179,6 +178,7 @@ def _with_comment(
     destination: str = DEFAULT_DESTINATION,
     *,
     after_frequency: bool = False,
+    separating_space: bool = False,
 ) -> bytes:
     """The first way of writing the comment that reads back as the data: as it is, then after
     a ``/`` delimiter. After a voice frequency it is written after a space, then straight
@@ -189,6 +189,10 @@ def _with_comment(
         candidates = [" " + comment, comment, " /" + comment]
     else:
         candidates = [comment, "/" + comment]
+    if comment and separating_space:
+        # a Mic-E comment that would join what comes before it into an altitude run (1{5}) is
+        # held apart by a space, the only clean form (vectors README, Encoding, E12)
+        candidates.append(" " + comment)
     for candidate in candidates:
         info = build(candidate)
         if _reads_back(data, info, destination):
@@ -226,8 +230,9 @@ def _ambiguous_units(value: float, ambiguity: int) -> int:
     centre a decoder reports is the one nearest the value (rounding first could move it into the
     next box)."""
     box = _AMBIGUITY_BOX[ambiguity]
-    exact = abs(_util.decimal(value)) * 6000 + Decimal("1e-9")
-    return math.floor(exact) // box * box
+    # a value within F2's tolerance of the box edge above it is on that edge (vectors ruling G2)
+    boxes = abs(float(value)) * 6000 / box
+    return math.floor(boxes + _util.HALF_TOLERANCE) * box
 
 
 def _is_negative(value: float) -> bool:
@@ -328,12 +333,13 @@ def _course_speed(course: float, knots: float, *, is_course: bool = True) -> str
     if is_course and whole == 0:
         # a c of 0 reads back as 360, and the cs bytes have no unknown course (vectors ruling F1)
         raise _refuse("a compressed course of 0 has no form; north is 360")
-    if _nearest(knots) < 0:
-        raise _refuse(f"speed {knots} is negative")
     # a course that rounds to 360 is north, c = 0 (vectors interpretations.md, "Re-encoding into
     # compressed bytes rounds")
     c = _nearest(_util.decimal(course) / 4) % 90
-    s = _nearest(math.log(knots + 1) / math.log(1.08)) if knots > 0 else 0
+    # the steps 1.08^s - 1 for every whole s; the nearest s outside the byte is refused (G3)
+    if knots <= -1:
+        raise _refuse(f"speed {knots} knots has no compressed step")
+    s = _nearest(math.log(knots + 1) / math.log(1.08))
     if not 0 <= s <= 90:
         raise _refuse(f"speed {knots} knots is too high for the compressed format")
     return chr(c + 33) + chr(s + 33)
@@ -405,8 +411,8 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
                 raise _refuse("a compressed course and speed needs both")
             cs = _course_speed(data.course_degrees, data.speed_knots)
         elif data.range_miles is not None:
-            if data.range_miles < 2:
-                raise _refuse("a compressed range is at least 2 miles")
+            if data.range_miles <= 0:
+                raise _refuse("a compressed range is positive")
             # 2 x 1.08^s miles: a range between the steps is rounded to the nearest one, as a
             # course or speed is (vectors interpretations.md, "Re-encoding into compressed bytes
             # rounds")
@@ -991,7 +997,7 @@ def _mic_e(data: MicEReport) -> bytes:
             text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
-    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq))
+    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
 
 
 # ---------------------------------------------------------------- messages

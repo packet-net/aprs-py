@@ -709,3 +709,53 @@ def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
     assert isinstance(back.data, aprs.MicEReport)
     assert back.data.locator is None
     assert back.data.comment == "IO91SX/G"
+
+
+@pytest.mark.parametrize("comment", ["{5}", "{}", "}:LoRa iGate"])
+def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) -> None:
+    # E12: after /A=000101, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
+    packet = STATION.mic_e(33.46, -2.69, altitude=100.5, comment=comment)
+    assert packet.info.endswith(b"/A=000101 " + comment.encode())
+    back = aprs.decode(packet.to_tnc2())
+    assert not back.diagnostics
+    assert isinstance(back.data, aprs.MicEReport)
+    assert back.data.comment == comment
+
+
+@pytest.mark.parametrize(("knots", "refused"), [(-0.03, False), (-0.3, True), (-1, True)])
+def test_compressed_speed_steps_beyond_the_byte(knots: float, refused: bool) -> None:
+    # G3: the nearest step 1.08^s - 1 for any whole s; refused when s is outside the byte
+    data = aprs.PositionReport(
+        latitude=49.5,
+        longitude=-72.75,
+        symbol=Symbol("/", ">"),
+        compressed=True,
+        compression=aprs.CompressionType(),
+        course_degrees=88,
+        speed_knots=knots,
+    )
+    if refused:
+        with pytest.raises(EncodeError):
+            aprs.encode_info(data)
+    else:
+        assert aprs.encode_info(data)[12:13] == b"!"
+
+
+@pytest.mark.parametrize(("miles", "refused"), [(1.95, False), (1.9, True), (0, True)])
+def test_compressed_range_steps_beyond_the_byte(miles: float, refused: bool) -> None:
+    # G3: 1.95 miles is nearest the 2-mile step (s = 0); 1.9 is nearest s = -1
+    data = aprs.PositionReport(
+        latitude=49.5, longitude=-72.75, symbol=Symbol("/", ">"), compressed=True, range_miles=miles
+    )
+    if refused:
+        with pytest.raises(EncodeError):
+            aprs.encode_info(data)
+    else:
+        assert aprs.encode_info(data)[11:13] == b"{!"
+
+
+def test_ambiguity_cut_takes_the_tolerance() -> None:
+    # G2: 80.49 degrees is 29.40 minutes in the text's meaning, box 29.4x, though its binary
+    # value is a hair below
+    data = aprs.PositionReport(latitude=80.49, longitude=0, symbol=Symbol("/", "-"), ambiguity=1)
+    assert aprs.encode_info(data).startswith(b"!8029.4 N")

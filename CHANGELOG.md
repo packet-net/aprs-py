@@ -34,6 +34,12 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - `Packet.device` matches a tocall case-sensitively, so `APNl02` is nothing (A1).
 - `Station.mic_e`: a course of 0, or one that rounds to 0, is unknown and written as no course (B1); an altitude in metres goes in the Mic-E altitude bytes, rounded to the metre, and one in feet in a `/A=` (B2).
 - `Station.telemetry` refuses a sequence over 999 (B6).
+- A compressed speed or range rounds to the nearest step of its formula for any whole s, and is refused when that s is outside the byte: a speed of -0.03 knots is written as 0 and -0.3 refused, a range of 1.95 miles is written as 2 and 1.9 refused (G3; ranges under 2 miles used to be refused, negative speeds written as 0).
+- The ambiguity cut takes the 1e-6 tolerance at the box edge above (G2).
+
+### Fixed (batch 2)
+
+- A Mic-E comment that would join the `/A=` digits before it into a Mic-E altitude (`{5}` after `/A=000101`) is written after a separating space; it used to be refused (E12).
 - An ambiguous position is written from the box that holds it, so a decoder reports the centre nearest the value: 3.596 minutes at ambiguity 1 is `03.5 `, where rounding first made it `03.6 `. In Mic-E the longitude digits the ambiguity covers, which a decoder ignores, are written as the centre it reports.
 - The `!DAO!` digits on a compressed position are those of the position the compressed bytes report, not of the value given before it was rounded into them.
 - A compressed weather report whose altitude the GGA cs bytes cannot hold exactly is written with the nearest cs step, since there is no comment for a `/A=` (F14). It used to be dropped silently.
