@@ -621,7 +621,8 @@ class PositionedData(AprsData):
     precision applied; an ambiguous position gives the centre of its box, and ``ambiguity``
     says how many digits were blanked (0-4). The data extensions and the elements lifted out
     of the comment (altitude, telemetry, frequency...) each have a field; ``comment`` is the
-    free text left over.
+    free text left over. ``range_in_comment`` marks a compressed position's range a decoder read
+    from a late ``RNG``, which an encoder writes into the cs bytes with the default type byte.
     """
 
     latitude: float
@@ -635,6 +636,7 @@ class PositionedData(AprsData):
     altitude_feet: float | None = None
     phg: Phg | None = None
     range_miles: float | None = None
+    range_in_comment: bool = field(default=False, compare=False, repr=False)
     dfs: Dfs | None = None
     area: AreaObject | None = None
     df_bearing: DfBearing | None = None

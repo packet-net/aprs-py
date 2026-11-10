@@ -745,7 +745,12 @@ def test_compressed_speed_steps_beyond_the_byte(knots: float, refused: bool) -> 
 def test_compressed_range_steps_beyond_the_byte(miles: float, refused: bool) -> None:
     # G3: 1.95 miles is nearest the 2-mile step (s = 0); 1.9 is nearest s = -1
     data = aprs.PositionReport(
-        latitude=49.5, longitude=-72.75, symbol=Symbol("/", ">"), compressed=True, range_miles=miles
+        latitude=49.5,
+        longitude=-72.75,
+        symbol=Symbol("/", ">"),
+        compressed=True,
+        compression=aprs.CompressionType(),
+        range_miles=miles,
     )
     if refused:
         with pytest.raises(EncodeError):
@@ -759,3 +764,24 @@ def test_ambiguity_cut_takes_the_tolerance() -> None:
     # value is a hair below
     data = aprs.PositionReport(latitude=80.49, longitude=0, symbol=Symbol("/", "-"), ambiguity=1)
     assert aprs.encode_info(data).startswith(b"!8029.4 N")
+
+
+def test_compressed_range_without_a_compression_type_is_refused() -> None:
+    # the T byte written with the range would read back as a type the data does not have
+    data = aprs.PositionReport(
+        latitude=49.5, longitude=-72.75, symbol=Symbol("/", ">"), compressed=True, range_miles=29.57
+    )
+    with pytest.raises(EncodeError):
+        aprs.encode_info(data)
+    # a late RNG a decoder read keeps the default type byte when written back
+    late = aprs.decode("N0CALL>APZ001:!/5L!!<*e7>  G RNG0025hello").data
+    assert aprs.encode_info(late) == b"!/5L!!<*e7>{BChello"
+
+
+def test_area_offsets_are_digits() -> None:
+    # Tyy/Cxx takes digits: 7 0/310 is comment text, not an area
+    packet = aprs.decode("N0CALL>APZ001:;SEARCH 1 *092345z4903.50N\\07201.75Wl7 0/310 0/310")
+    assert isinstance(packet.data, aprs.ObjectReport)
+    assert packet.data.area is None
+    assert packet.data.comment == "7 0/310 0/310"
+    assert aprs.encode_info(packet.data) == packet.info

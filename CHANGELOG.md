@@ -37,7 +37,12 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - A compressed speed or range rounds to the nearest step of its formula for any whole s, and is refused when that s is outside the byte: a speed of -0.03 knots is written as 0 and -0.3 refused, a range of 1.95 miles is written as 2 and 1.9 refused (G3; ranges under 2 miles used to be refused, negative speeds written as 0).
 - The ambiguity cut takes the 1e-6 tolerance at the box edge above (G2).
 
+- A compressed position given a range (or other cs values) with no compression type is refused, since the T byte would read back as a type the data does not have. A range a decoder read from a late `RNG` still goes in the cs bytes with the default type byte; `PositionedData.range_in_comment` marks it, and the neutral form leaves it out.
+- Strict decoding rejects a Mic-E status text where lifting a `!DAO!` would join the bytes either side of it into a Mic-E altitude, since the altitude is looked for before the DAO is lifted.
+
 ### Fixed (batch 2)
+
+- An area object's offsets are digits only (`Tyy/Cxx`), so `7 0/310` after the `\l` symbol is comment text, not an area.
 
 - A Mic-E comment that would join the `/A=` digits before it into a Mic-E altitude (`{5}` after `/A=000101`) is written after a separating space; it used to be refused (E12).
 - An ambiguous position is written from the box that holds it, so a decoder reports the centre nearest the value: 3.596 minutes at ambiguity 1 is `03.5 `, where rounding first made it `03.6 `. In Mic-E the longitude digits the ambiguity covers, which a decoder ignores, are written as the centre it reports.

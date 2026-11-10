@@ -41,7 +41,7 @@ _PHG = re.compile(r"PHG([0-9])([0-~])([0-9])([0-9])(?:([1-9A-Z])/)?")
 _RNG = re.compile(r"RNG([0-9]{4})")
 _DFS = re.compile(r"DFS([0-9])([0-~])([0-9])([0-9])")
 _CSE_SPD = re.compile(r"([0-9]{3}|\.\.\.|   )/([0-9]{3}|\.\.\.|   )")
-_AREA = re.compile(r"([0-9])([0-9 ]{2})(/[0-9]|1[0-5])([0-9 ]{2})")
+_AREA = re.compile(r"([0-9])([0-9]{2})(/[0-9]|1[0-5])([0-9]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
 _STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
@@ -116,8 +116,8 @@ def parse_extension(
                 area = AreaObject(
                     list(AreaShape)[int(m.group(1))],
                     list(AreaColor)[color_code],
-                    int(m.group(2).replace(" ", "0")),
-                    int(m.group(4).replace(" ", "0")),
+                    int(m.group(2)),
+                    int(m.group(4)),
                 )
                 return "area", 7, {"area": area}
         m = _CSE_SPD.match(rest)

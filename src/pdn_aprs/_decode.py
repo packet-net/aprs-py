@@ -559,6 +559,10 @@ def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) 
     """Put the elements lifted out of a comment into the fields, applying a DAO's precision."""
     for key, value in parts.fields.items():
         fields[key] = value
+    if p.compressed and "range_miles" in parts.fields and fields.get("compression") is None:
+        # a late RNG on a compressed position, which re-encodes into the cs bytes with the
+        # default type byte
+        fields["range_in_comment"] = True
     if parts.dao is not None:
         fields["dao"] = parts.dao
         if p.ambiguity:
@@ -918,6 +922,12 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
             altitude = _util.base91_value(found.group()[:3]) - 10000
             rest = rest[: found.start()] + rest[found.end() :]
             cuts = (found.start(),)
+        elif not ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
+            # the altitude is looked for before the !DAO! is lifted; left as text, lifting the
+            # DAO must not join the bytes either side of it into a new one (vectors README, Mic-E)
+            joined = _MICE_ALTITUDE.search(lift_telemetry_dao(rest, CommentParts()))
+            if joined is not None and (found is None or joined.group() != found.group()):
+                ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     parts = lift_comment(
