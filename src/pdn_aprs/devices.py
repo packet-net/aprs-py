@@ -69,11 +69,16 @@ def identify_mic_e(type_code: str | None, suffix: str | None) -> Device | None:
     return None
 
 
+def _char_matches(p: str, c: str) -> bool:
+    # aprs-deviceid's wildcards: ``?`` is any character and ``n`` a digit
+    return p == "?" or p == c or (p == "n" and "0" <= c <= "9")
+
+
 def _matches(pattern: str, call: str) -> bool:
     if pattern.endswith("*"):
         stem = pattern[:-1]
-        return len(call) >= len(stem) and all(p in ("?", c) for p, c in zip(stem, call, strict=False))
-    return len(pattern) == len(call) and all(p in ("?", c) for p, c in zip(pattern, call, strict=False))
+        return len(call) >= len(stem) and all(_char_matches(p, c) for p, c in zip(stem, call, strict=False))
+    return len(pattern) == len(call) and all(_char_matches(p, c) for p, c in zip(pattern, call, strict=False))
 
 
 @lru_cache(maxsize=4096)
@@ -83,7 +88,7 @@ def identify_tocall(destination: str) -> Device | None:
     best: tuple[int, str] | None = None
     for pattern in _db.TOCALLS:
         if _matches(pattern, call):
-            score = sum(1 for ch in pattern if ch not in "?*")
+            score = sum(1 for ch in pattern if ch not in "?*n")
             if best is None or score > best[0]:
                 best = (score, pattern)
     return _device(_db.TOCALLS[best[1]]) if best else None

@@ -520,6 +520,13 @@ def test_compressed_weather_altitude_off_the_cs_steps_is_refused() -> None:
         aprs.encode_info(data)
 
 
+def test_device_wildcard_n_is_a_digit() -> None:
+    # aprs-deviceid's n matches a digit: APWnnn is WinAPRS, APDnnn aprsd
+    assert aprs.decode("N0CALL>APW290:>hi").device is not None
+    assert aprs.decode("N0CALL>APD225:>hi").device is not None
+    assert aprs.decode("N0CALL>APWXYZ:>hi").device is None or aprs.decode("N0CALL>APWXYZ:>hi").device.model != "WinAPRS"
+
+
 def test_directed_query_targets() -> None:
     def written(query_type: str) -> bytes:
         return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))
