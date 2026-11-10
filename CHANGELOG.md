@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+The 1.0 API cleanup. Nothing the vectors check changes: every vectors case passes, and the dump tool's encode, build and decode output over the 100,000-line comparison sets is byte for byte what 0.3.0 gave. Removed and renamed things are gone with no shim.
+
+### Breaking changes
+
+Migrating from 0.3.0:
+
+- `Station` builder keywords are the names of the data fields they fill. `course` is `course_degrees`, `speed` is `speed_knots`, `altitude` is `altitude_feet`, `precise` is `dao`, and Mic-E `message` is `mic_e_message`. In `weather`: `wind_direction` is `wind_direction_degrees`, `wind_speed` is `wind_speed_mph`, `gust` is `wind_gust_mph`, `temperature` is `temperature_f`, `rain_1h`, `rain_24h` and `rain_since_midnight` are `rain_1h_in`, `rain_24h_in` and `rain_midnight_in`, `rain_since_midnight_mm` is `rain_midnight_mm`, `humidity` is `humidity_percent`, `pressure` is `pressure_mbar`, `luminosity` is `luminosity_w_m2`, `snow_24h` is `snow_24h_in`. The metric siblings (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`, `rain_24h_mm`) keep their names.
+- `Station.message`, `ack` and `reject` take `addressee` instead of `to`; the four `telemetry_*` metadata builders take `addressee=` instead of `station=`; `Station.bulletin` takes `id` instead of `identifier`.
+- `Station(callsign, via=...)` is `Station(callsign, path=...)`: one field, given as text or a list and held as a tuple. The derived attribute is gone (`path` is now the field itself).
+- The `tone` and `offset_khz` keywords of `position`, `object`, `item` and `mic_e` are gone. `frequency` is a number in MHz (rounded to the field's step) or a `VoiceFrequency`, which carries the tone kind, its whole value and the offset: `frequency=VoiceFrequency(145.5, tone=ToneType.TONE, tone_value=77, offset_khz=-600)`.
+- `Station.telemetry` takes the sequence as a whole number only (text sequences remain possible by building a `TelemetryReport` yourself), and refuses one outside 0-999 with `EncodeError` instead of `ValueError`. `EncodeError` is now what every refusal of the data raises; `ValueError` stays for calls that mean nothing (a quantity given in both units, no symbol anywhere, a latitude without a longitude).
+- `pdn_aprs.decode` is gone; use `decode_tnc2`.
+- `pdn_aprs.neutral` is now the private `pdn_aprs._neutral`. The vectors' neutral form is not public API; use the data classes, `Packet.to_tnc2()` and the other accessors.
+- `PathEntry.call` is `PathEntry.address` (and the constructor's first argument).
+- `Fix` and `NmeaSource` are `CompressionFix` and `CompressionSource`.
+- `Phg.gain_dbi` is `Phg.gain_db`.
+- `MicEReport.mic_e_message` has no default; give it.
+- `NeutralFormError` (now private) subclasses `AprsError`.
+- Made private: `pdn_aprs.packet.tnc2_path`, `is_q_construct` and `Q_CONSTRUCTS` (deleted), `pdn_aprs.devices.identify` and `mic_e_suffixes`, `pdn_aprs.builder.KMH_PER_KNOT` and `MM_PER_INCH`, `pdn_aprs.symbols.PRIMARY_TABLE` and `ALTERNATE_TABLE`, `pdn_aprs.options.LENIENT` and `STRICT` (use `ParseOptions.lenient()` and `ParseOptions.strict()`).
+
+### Changed
+
+- `PositionedData.course_degrees`, `Weather.wind_direction_degrees`, `humidity_percent` and `luminosity_w_m2` are `float`, so hand-built data can carry 88.6 degrees. Decoded values are still whole; the encoder rounds once, halves away from zero. The builder keywords for these take `float` too.
+- `MicEReport.altitude_in_comment` is set by the decoder when the altitude came from a `/A=`, so encoding a copy of decoded data writes the same bytes. It is still left out of the neutral form and of equality.
+- `DEFAULT_DESTINATION`, `MESSAGE_TEXT_LIMIT` and `DATABASE_VERSION` are exported at the top level.
+
 ## [0.3.0] - 2026-11-10
 
 The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batches 1 and 2), and the builders close the gaps listed under Added. Some bytes the encoder writes differ from 0.2.0 (see Changed: comment order, rounding, newly refused input), so check any stored expected output. The vectors are pinned at 130fc04.
