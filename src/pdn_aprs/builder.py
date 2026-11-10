@@ -6,27 +6,28 @@ has one method per kind of packet. Each returns a :class:`~pdn_aprs.Packet`, alr
 encoded; ``str(packet)`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame.
 
 >>> from pdn_aprs import Station, Symbol
->>> m0lte = Station("M0LTE-9", via="WIDE1-1", symbol=Symbol.CAR)
->>> print(m0lte.position(51.45, -0.98, course=88, speed=36, comment="Mobile"))
+>>> m0lte = Station("M0LTE-9", path="WIDE1-1", symbol=Symbol.CAR)
+>>> print(m0lte.position(51.45, -0.98, course_degrees=88, speed_knots=36, comment="Mobile"))
 M0LTE-9>APZ001,WIDE1-1:!5127.00N/00058.80W>088/036Mobile
 >>> print(m0lte.message("G4ABC", "Hello there", message_id="1"))
 M0LTE-9>APZ001,WIDE1-1::G4ABC    :Hello there{1
 
 Quantities are in the units APRS sends: degrees, knots, feet, miles, and for weather mph,
-degrees Fahrenheit, inches and millibars. Speed, altitude, temperature and rain can be given in
-metric units instead (``speed_kmh``, ``altitude_m``, ``temperature_c``, ``rain_1h_mm``...), and
-are converted.
+degrees Fahrenheit, inches and millibars; each keyword has the name of the data field it fills.
+Speed, altitude, temperature and rain can be given in metric units instead (``speed_kmh``,
+``altitude_m``, ``temperature_c``, ``rain_1h_mm``...), and are converted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TypedDict
 
-from ._util import FEET_PER_METRE, round_half_away
+from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
 from .encode import DEFAULT_DESTINATION, build_packet
+from .errors import EncodeError
 from .model import (
     Ack,
     AprsData,
@@ -52,7 +53,6 @@ from .model import (
     TelemetryReport,
     TelemetryUnits,
     Timestamp,
-    ToneType,
     VoiceFrequency,
     Weather,
 )
@@ -78,12 +78,6 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
 
 
-KMH_PER_KNOT = 1.852
-"""Kilometres per hour in a knot: a nautical mile is exactly 1852 m."""
-
-MM_PER_INCH = 25.4
-
-
 def _either(value: float | None, metric: float | None, per_unit: float, what: str) -> float | None:
     """A quantity given in APRS's unit or in a metric one, which is divided by ``per_unit``."""
     if metric is None:
@@ -93,25 +87,15 @@ def _either(value: float | None, metric: float | None, per_unit: float, what: st
     return metric / per_unit
 
 
-def _frequency(
-    value: float | VoiceFrequency | None, tone: float | None, offset_khz: int | None
-) -> VoiceFrequency | None:
-    if value is None:
-        if tone is not None or offset_khz is not None:
-            raise ValueError("a tone or offset goes with a frequency")
-        return None
-    if isinstance(value, VoiceFrequency):
+def _frequency(value: float | VoiceFrequency | None) -> VoiceFrequency | None:
+    """A frequency in MHz, or a whole :class:`VoiceFrequency` (a tone, an offset...)."""
+    if value is None or isinstance(value, VoiceFrequency):
         return value
-    return VoiceFrequency(
-        float(value),
-        tone=None if tone is None else ToneType.TONE,
-        tone_value=None if tone is None else int(tone),
-        offset_khz=offset_khz,
-    )
+    return VoiceFrequency(float(value))
 
 
 class _Extras(TypedDict):
-    course_degrees: int | None
+    course_degrees: float | None
     speed_knots: float | None
     altitude_feet: float | None
     compressed: bool
@@ -126,9 +110,9 @@ class _Extras(TypedDict):
 
 def _extras(
     *,
-    course: int | None,
-    speed: float | None,
-    altitude: float | None,
+    course_degrees: float | None,
+    speed_knots: float | None,
+    altitude_feet: float | None,
     speed_kmh: float | None,
     altitude_m: float | None,
     compressed: bool,
@@ -136,48 +120,66 @@ def _extras(
     phg: Phg | None,
     range_miles: float | None,
     frequency: float | VoiceFrequency | None,
-    tone: float | None,
-    offset_khz: int | None,
     telemetry: CommentTelemetry | None,
-    precise: bool,
+    dao: bool,
 ) -> _Extras:
     """The fields a position, object or item report share, from the builder's arguments."""
-    speed = _either(speed, speed_kmh, KMH_PER_KNOT, "speed")
+    speed = _either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
     return {
-        "course_degrees": course,
+        "course_degrees": course_degrees,
         "speed_knots": speed,
-        "altitude_feet": _either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
+        "altitude_feet": _either(altitude_feet, altitude_m, 1 / FEET_PER_METRE, "altitude"),
         "compressed": compressed,
-        "compression": CompressionType() if compressed and (course is not None or speed is not None) else None,
+        "compression": CompressionType() if compressed and (course_degrees is not None or speed is not None) else None,
         "ambiguity": ambiguity,
         "phg": phg,
         "range_miles": range_miles,
-        "frequency": _frequency(frequency, tone, offset_khz),
+        "frequency": _frequency(frequency),
         "telemetry": telemetry,
-        "dao": Dao("W", DaoPrecision.BASE91) if precise else None,
+        "dao": Dao("W", DaoPrecision.BASE91) if dao else None,
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Station:
     """A sending station: its callsign, path and habits, and a method for each packet it sends.
 
-    ``via`` is the digipeater path (``"WIDE1-1,WIDE2-1"`` or a list). ``destination`` is the
-    tocall: use the one allocated to your application (the default, ``APZ001``, is
-    experimental). ``messaging`` says whether the station can receive messages, which position
-    reports and Mic-E reports announce. ``symbol`` is used when a report does not give one.
+    ``path`` is the digipeater path (``"WIDE1-1,WIDE2-1"`` or a list), held as a tuple.
+    ``destination`` is the tocall: use the one allocated to your application (the default,
+    ``APZ001``, is experimental). ``messaging`` says whether the station can receive messages,
+    which position reports and Mic-E reports announce. ``symbol`` is used when a report does not
+    give one.
+
+    Every keyword is the name of the field it fills in the data model (``course_degrees``,
+    ``wind_gust_mph``...); a metric alternative changes only the unit (``speed_kmh``,
+    ``altitude_m``, ``temperature_c``, ``rain_1h_mm``).
+
+    A request the data cannot be sent as (a telemetry sequence over 999, a name too long, a
+    value out of range) raises :class:`~pdn_aprs.EncodeError`. A call that cannot mean anything
+    (a quantity given in both units, no symbol anywhere, a latitude without a longitude) raises
+    ``ValueError``.
     """
 
     callsign: str
-    via: str | Sequence[str] = ()
-    destination: str = DEFAULT_DESTINATION
-    messaging: bool = False
-    symbol: Symbol | None = None
-    path: tuple[str, ...] = field(init=False, repr=False)
+    path: tuple[str, ...]
+    destination: str
+    messaging: bool
+    symbol: Symbol | None
 
-    def __post_init__(self) -> None:
-        via = self.via.split(",") if isinstance(self.via, str) else list(self.via)
-        object.__setattr__(self, "path", tuple(v.strip() for v in via if v.strip()))
+    def __init__(
+        self,
+        callsign: str,
+        path: str | Iterable[str] = (),
+        destination: str = DEFAULT_DESTINATION,
+        messaging: bool = False,
+        symbol: Symbol | None = None,
+    ) -> None:
+        entries = path.split(",") if isinstance(path, str) else list(path)
+        object.__setattr__(self, "callsign", callsign)
+        object.__setattr__(self, "path", tuple(v.strip() for v in entries if v.strip()))
+        object.__setattr__(self, "destination", destination)
+        object.__setattr__(self, "messaging", messaging)
+        object.__setattr__(self, "symbol", symbol)
 
     def send(self, data: AprsData) -> Packet:
         """Any data as a packet from this station."""
@@ -198,9 +200,9 @@ class Station:
         symbol: Symbol | None = None,
         *,
         comment: str = "",
-        course: int | None = None,
-        speed: float | None = None,
-        altitude: float | None = None,
+        course_degrees: float | None = None,
+        speed_knots: float | None = None,
+        altitude_feet: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
         timestamp: TimestampLike = None,
@@ -209,17 +211,15 @@ class Station:
         phg: Phg | None = None,
         range_miles: float | None = None,
         frequency: float | VoiceFrequency | None = None,
-        tone: float | None = None,
-        offset_khz: int | None = None,
         telemetry: CommentTelemetry | None = None,
-        precise: bool = False,
+        dao: bool = False,
     ) -> Packet:
-        """A position report. ``course`` in degrees, ``speed`` in knots (or ``speed_kmh``),
-        ``altitude`` in feet (or ``altitude_m``).
+        """A position report. ``course_degrees`` in degrees, ``speed_knots`` in knots (or
+        ``speed_kmh``), ``altitude_feet`` in feet (or ``altitude_m``).
 
-        ``timestamp=True`` stamps it with the time now. ``precise`` adds a ``!DAO!`` for about
-        a foot of precision. ``frequency`` (MHz, with ``tone`` in Hz and ``offset_khz``) is the
-        voice frequency the station listens on.
+        ``timestamp=True`` stamps it with the time now. ``dao`` adds a ``!DAO!`` for about
+        a foot of precision. ``frequency`` is the voice frequency the station listens on: MHz,
+        or a :class:`~pdn_aprs.VoiceFrequency` to give a tone or an offset as well.
         """
         data = PositionReport(
             latitude=latitude,
@@ -229,9 +229,9 @@ class Station:
             messaging=self.messaging,
             comment=comment,
             **_extras(
-                course=course,
-                speed=speed,
-                altitude=altitude,
+                course_degrees=course_degrees,
+                speed_knots=speed_knots,
+                altitude_feet=altitude_feet,
                 speed_kmh=speed_kmh,
                 altitude_m=altitude_m,
                 compressed=compressed,
@@ -239,10 +239,8 @@ class Station:
                 phg=phg,
                 range_miles=range_miles,
                 frequency=frequency,
-                tone=tone,
-                offset_khz=offset_khz,
                 telemetry=telemetry,
-                precise=precise,
+                dao=dao,
             ),
         )
         return self.send(data)
@@ -257,9 +255,9 @@ class Station:
         comment: str = "",
         killed: bool = False,
         timestamp: TimestampLike = True,
-        course: int | None = None,
-        speed: float | None = None,
-        altitude: float | None = None,
+        course_degrees: float | None = None,
+        speed_knots: float | None = None,
+        altitude_feet: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
         compressed: bool = False,
@@ -267,10 +265,8 @@ class Station:
         phg: Phg | None = None,
         range_miles: float | None = None,
         frequency: float | VoiceFrequency | None = None,
-        tone: float | None = None,
-        offset_khz: int | None = None,
         telemetry: CommentTelemetry | None = None,
-        precise: bool = False,
+        dao: bool = False,
     ) -> Packet:
         """An object report: something else's position, under a name of up to 9 characters.
 
@@ -289,9 +285,9 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
-                course=course,
-                speed=speed,
-                altitude=altitude,
+                course_degrees=course_degrees,
+                speed_knots=speed_knots,
+                altitude_feet=altitude_feet,
                 speed_kmh=speed_kmh,
                 altitude_m=altitude_m,
                 compressed=compressed,
@@ -299,10 +295,8 @@ class Station:
                 phg=phg,
                 range_miles=range_miles,
                 frequency=frequency,
-                tone=tone,
-                offset_khz=offset_khz,
                 telemetry=telemetry,
-                precise=precise,
+                dao=dao,
             ),
         )
         return self.send(data)
@@ -316,9 +310,9 @@ class Station:
         *,
         comment: str = "",
         killed: bool = False,
-        course: int | None = None,
-        speed: float | None = None,
-        altitude: float | None = None,
+        course_degrees: float | None = None,
+        speed_knots: float | None = None,
+        altitude_feet: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
         compressed: bool = False,
@@ -326,10 +320,8 @@ class Station:
         phg: Phg | None = None,
         range_miles: float | None = None,
         frequency: float | VoiceFrequency | None = None,
-        tone: float | None = None,
-        offset_khz: int | None = None,
         telemetry: CommentTelemetry | None = None,
-        precise: bool = False,
+        dao: bool = False,
     ) -> Packet:
         """An item report: a named thing's position (3-9 characters), without a timestamp."""
         data = ItemReport(
@@ -340,9 +332,9 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
-                course=course,
-                speed=speed,
-                altitude=altitude,
+                course_degrees=course_degrees,
+                speed_knots=speed_knots,
+                altitude_feet=altitude_feet,
                 speed_kmh=speed_kmh,
                 altitude_m=altitude_m,
                 compressed=compressed,
@@ -350,10 +342,8 @@ class Station:
                 phg=phg,
                 range_miles=range_miles,
                 frequency=frequency,
-                tone=tone,
-                offset_khz=offset_khz,
                 telemetry=telemetry,
-                precise=precise,
+                dao=dao,
             ),
         )
         return self.send(data)
@@ -364,19 +354,17 @@ class Station:
         longitude: float,
         symbol: Symbol | None = None,
         *,
-        message: MicEMessage = MicEMessage.IN_SERVICE,
-        course: int | None = None,
-        speed: float | None = None,
-        altitude: float | None = None,
+        mic_e_message: MicEMessage = MicEMessage.IN_SERVICE,
+        course_degrees: float | None = None,
+        speed_knots: float | None = None,
+        altitude_feet: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
         comment: str = "",
         ambiguity: int = 0,
         frequency: float | VoiceFrequency | None = None,
-        tone: float | None = None,
-        offset_khz: int | None = None,
         telemetry: CommentTelemetry | None = None,
-        precise: bool = False,
+        dao: bool = False,
     ) -> Packet:
         """A Mic-E report: the compact position format of trackers and radios. The destination
         address carries half the position and is computed; the type code says whether this
@@ -385,28 +373,28 @@ class Station:
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
         to the metre; one in feet goes in a ``/A=``."""
-        if course is not None and round_half_away(course) == 0:
-            course = None
+        if course_degrees is not None and round_half_away(course_degrees) == 0:
+            course_degrees = None
         if altitude_m is not None:
-            if altitude is not None:
+            if altitude_feet is not None:
                 raise ValueError("give the altitude once, not in both units")
             feet: float | None = round_half_away(altitude_m) * FEET_PER_METRE
         else:
-            feet = altitude
+            feet = altitude_feet
         data = MicEReport(
             latitude=latitude,
             longitude=longitude,
             symbol=self._symbol(symbol),
-            mic_e_message=message,
-            course_degrees=course,
-            speed_knots=_either(speed, speed_kmh, KMH_PER_KNOT, "speed") or 0,
+            mic_e_message=mic_e_message,
+            course_degrees=course_degrees,
+            speed_knots=_either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
             altitude_feet=feet,
-            altitude_in_comment=altitude is not None,
+            altitude_in_comment=altitude_feet is not None,
             comment=comment,
             ambiguity=ambiguity,
-            frequency=_frequency(frequency, tone, offset_khz),
+            frequency=_frequency(frequency),
             telemetry=telemetry,
-            dao=Dao("W", DaoPrecision.BASE91) if precise else None,
+            dao=Dao("W", DaoPrecision.BASE91) if dao else None,
             type_code="`" if self.messaging else "'",
         )
         return self.send(data)
@@ -418,17 +406,17 @@ class Station:
         latitude: float | None = None,
         longitude: float | None = None,
         *,
-        wind_direction: int | None = None,
-        wind_speed: float | None = None,
-        gust: float | None = None,
-        temperature: float | None = None,
-        rain_1h: float | None = None,
-        rain_24h: float | None = None,
-        rain_since_midnight: float | None = None,
-        humidity: int | None = None,
-        pressure: float | None = None,
-        luminosity: int | None = None,
-        snow_24h: float | None = None,
+        wind_direction_degrees: float | None = None,
+        wind_speed_mph: float | None = None,
+        wind_gust_mph: float | None = None,
+        temperature_f: float | None = None,
+        rain_1h_in: float | None = None,
+        rain_24h_in: float | None = None,
+        rain_midnight_in: float | None = None,
+        humidity_percent: float | None = None,
+        pressure_mbar: float | None = None,
+        luminosity_w_m2: float | None = None,
+        snow_24h_in: float | None = None,
         timestamp: TimestampLike = None,
         symbol: Symbol = Symbol.WEATHER_STATION,
         software: str | None = None,
@@ -436,7 +424,7 @@ class Station:
         temperature_c: float | None = None,
         rain_1h_mm: float | None = None,
         rain_24h_mm: float | None = None,
-        rain_since_midnight_mm: float | None = None,
+        rain_midnight_mm: float | None = None,
     ) -> Packet:
         """A weather report: with a position, a complete weather report (the ``_`` symbol, or the
         ``symbol`` given, an overlay say); without one, a positionless report (always timestamped,
@@ -444,26 +432,27 @@ class Station:
 
         Wind in degrees and mph, temperature in degrees Fahrenheit (or ``temperature_c``), rain
         in inches (or ``rain_1h_mm`` and so on), humidity in percent, pressure in millibars,
-        luminosity in W/m2, snow in inches.
+        luminosity in W/m2, snow in inches. Each keyword is the name of the field it fills in
+        :class:`~pdn_aprs.Weather`.
         """
         if temperature_c is not None:
-            if temperature is not None:
+            if temperature_f is not None:
                 raise ValueError("give the temperature once, not in both units")
-            temperature = temperature_c * 9 / 5 + 32
+            temperature_f = temperature_c * 9 / 5 + 32
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
             raise ValueError("a positionless weather report has no symbol")
         weather = Weather(
-            wind_direction_degrees=wind_direction,
-            wind_speed_mph=wind_speed,
-            wind_gust_mph=gust,
-            temperature_f=temperature,
-            rain_1h_in=_either(rain_1h, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
-            rain_24h_in=_either(rain_24h, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
-            rain_midnight_in=_either(rain_since_midnight, rain_since_midnight_mm, MM_PER_INCH, "rain since midnight"),
-            humidity_percent=humidity,
-            pressure_mbar=pressure,
-            luminosity_w_m2=luminosity,
-            snow_24h_in=snow_24h,
+            wind_direction_degrees=wind_direction_degrees,
+            wind_speed_mph=wind_speed_mph,
+            wind_gust_mph=wind_gust_mph,
+            temperature_f=temperature_f,
+            rain_1h_in=_either(rain_1h_in, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
+            rain_24h_in=_either(rain_24h_in, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
+            rain_midnight_in=_either(rain_midnight_in, rain_midnight_mm, MM_PER_INCH, "rain since midnight"),
+            humidity_percent=humidity_percent,
+            pressure_mbar=pressure_mbar,
+            luminosity_w_m2=luminosity_w_m2,
+            snow_24h_in=snow_24h_in,
             software=software,
             unit=unit,
         )
@@ -491,21 +480,25 @@ class Station:
 
     # ------------------------------------------------------------ messages
 
-    def message(self, to: str, text: str, *, message_id: str | None = None, reply_ack: str | None = None) -> Packet:
+    def message(
+        self, addressee: str, text: str, *, message_id: str | None = None, reply_ack: str | None = None
+    ) -> Packet:
         """A message to one station. Give a ``message_id`` to ask for an acknowledgement."""
-        return self.send(Message(to, text, message_id, reply_ack))
+        return self.send(Message(addressee, text, message_id, reply_ack))
 
-    def ack(self, to: str, message_id: str) -> Packet:
-        """Acknowledge message ``message_id`` from ``to``."""
-        return self.send(Ack(to, message_id))
+    def ack(self, addressee: str, message_id: str) -> Packet:
+        """Acknowledge message ``message_id`` from ``addressee``."""
+        return self.send(Ack(addressee, message_id))
 
-    def reject(self, to: str, message_id: str) -> Packet:
-        """Reject message ``message_id`` from ``to``."""
-        return self.send(Reject(to, message_id))
+    def reject(self, addressee: str, message_id: str) -> Packet:
+        """Reject message ``message_id`` from ``addressee``."""
+        return self.send(Reject(addressee, message_id))
 
-    def bulletin(self, identifier: str, text: str, *, group: str = "") -> Packet:
-        """A bulletin (``identifier`` a digit), announcement (a letter) or group bulletin."""
-        return self.send(Bulletin(f"BLN{identifier}{group}", text))
+    def bulletin(self, id: str, text: str, *, group: str = "") -> Packet:
+        """A bulletin (``id`` a digit), announcement (a letter) or group bulletin."""
+        if len(id) != 1:
+            raise EncodeError(f"a bulletin id is exactly one character, not {id!r}")
+        return self.send(Bulletin(f"BLN{id}{group}", text))
 
     def status(
         self,
@@ -527,7 +520,7 @@ class Station:
 
     def telemetry(
         self,
-        sequence: int | str,
+        sequence: int,
         analog: Iterable[float | None],
         bits: str = "00000000",
         *,
@@ -535,23 +528,24 @@ class Station:
     ) -> Packet:
         """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
         refused, not wrapped), five analog values and eight bits."""
-        if isinstance(sequence, int) and not 0 <= sequence <= 999:
-            raise ValueError(f"telemetry sequence {sequence} is not 0-999")
-        seq = f"{sequence:03d}" if isinstance(sequence, int) else sequence
-        return self.send(TelemetryReport(seq, tuple(analog), bits, comment))
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
+        if not 0 <= sequence <= 999:
+            raise EncodeError(f"telemetry sequence {sequence} is not 0-999")
+        return self.send(TelemetryReport(f"{sequence:03d}", tuple(analog), bits, comment))
 
-    def telemetry_names(self, names: Iterable[str], *, station: str | None = None) -> Packet:
-        """Names for the telemetry channels (``PARM.``), for ``station`` (this one by default)."""
-        return self.send(TelemetryNames(station or self.callsign, tuple(names)))
+    def telemetry_names(self, names: Iterable[str], *, addressee: str | None = None) -> Packet:
+        """Names for the telemetry channels (``PARM.``), for ``addressee`` (this station by default)."""
+        return self.send(TelemetryNames(addressee or self.callsign, tuple(names)))
 
-    def telemetry_units(self, units: Iterable[str], *, station: str | None = None) -> Packet:
+    def telemetry_units(self, units: Iterable[str], *, addressee: str | None = None) -> Packet:
         """Units and labels for the telemetry channels (``UNIT.``)."""
-        return self.send(TelemetryUnits(station or self.callsign, tuple(units)))
+        return self.send(TelemetryUnits(addressee or self.callsign, tuple(units)))
 
-    def telemetry_coefficients(self, coefficients: Iterable[float], *, station: str | None = None) -> Packet:
+    def telemetry_coefficients(self, coefficients: Iterable[float], *, addressee: str | None = None) -> Packet:
         """Equation coefficients a, b, c for each analog channel (``EQNS.``)."""
-        return self.send(TelemetryCoefficients(station or self.callsign, tuple(coefficients)))
+        return self.send(TelemetryCoefficients(addressee or self.callsign, tuple(coefficients)))
 
-    def telemetry_bits(self, bits: str, project: str = "", *, station: str | None = None) -> Packet:
+    def telemetry_bits(self, bits: str, project: str = "", *, addressee: str | None = None) -> Packet:
         """The bits' sense and the project title (``BITS.``)."""
-        return self.send(TelemetryBits(station or self.callsign, bits, project))
+        return self.send(TelemetryBits(addressee or self.callsign, bits, project))

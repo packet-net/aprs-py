@@ -26,7 +26,7 @@ The import name is `pdn_aprs`.
 
 ```python
 >>> import pdn_aprs as aprs
->>> packet = aprs.decode("M0LTE-9>APDR16,WIDE1-1,qAR,M0LTE-10:=5127.00N/00058.80W>088/036/A=000123Mobile")
+>>> packet = aprs.decode_tnc2("M0LTE-9>APDR16,WIDE1-1,qAR,M0LTE-10:=5127.00N/00058.80W>088/036/A=000123Mobile")
 >>> packet.source, packet.destination, packet.q_construct
 ('M0LTE-9', 'APDR16', QConstruct(construct='qAR', station='M0LTE-10'))
 >>> packet.data
@@ -41,7 +41,7 @@ Open Source APRSdroid
 Fields keep the units APRS sends, with the unit in the name (`speed_knots`, `altitude_feet`, `temperature_f`). `packet.data` is always there: when nothing could be decoded it is an `Unrecognized`, and the diagnostics say why.
 
 ```python
->>> packet = aprs.decode("N0CALL>APZ001:@092345z4903.50N/07201.75W_220/004g005t-07r000p000P000h50b09900wRSW")
+>>> packet = aprs.decode_tnc2("N0CALL>APZ001:@092345z4903.50N/07201.75W_220/004g005t-07r000p000P000h50b09900wRSW")
 >>> weather = packet.data.weather
 >>> weather.wind_direction_degrees, weather.wind_speed_mph, weather.temperature_f, weather.pressure_mbar
 (220, 4, -7, 990)
@@ -51,7 +51,7 @@ Fields keep the units APRS sends, with the unit in the name (`speed_knots`, `alt
 Mic-E reports carry half their position in the destination address; the device that sent one is identified by its type code and suffix:
 
 ```python
->>> packet = aprs.decode("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
+>>> packet = aprs.decode_tnc2("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
 >>> packet.data.latitude, packet.data.longitude, packet.data.mic_e_message
 (42.179, -71.1985, <MicEMessage.OFF_DUTY: 'off-duty'>)
 >>> print(packet.device)
@@ -74,14 +74,14 @@ Real packets have defects. By default the decoder accepts every defect it can ma
 
 ```python
 >>> line = "N1EOE>APN391,N1NCI-3*,WIDE2-1:!4216.95n/07243.20w#phg6230/ Easthampton MA"
->>> packet = aprs.decode(line)
+>>> packet = aprs.decode_tnc2(line)
 >>> packet.data.latitude, [str(d) for d in packet.diagnostics]
 (42.2825, ['warning:lowercase-hemisphere', 'warning:lowercase-hemisphere'])
->>> strict = aprs.decode(line, aprs.ParseOptions.strict())
+>>> strict = aprs.decode_tnc2(line, aprs.ParseOptions.strict())
 >>> strict.data, [str(d) for d in strict.diagnostics]
 (Unrecognized(reason=<UnrecognizedReason.MALFORMED: 'malformed'>), ['error:lowercase-hemisphere'])
 >>> options = aprs.ParseOptions.lenient().without(aprs.DiagnosticCode.LOWERCASE_HEMISPHERE)
->>> aprs.decode(line, options).data.kind
+>>> aprs.decode_tnc2(line, options).data.kind
 'unrecognized'
 
 ```
@@ -94,21 +94,21 @@ A `Station` holds what stays the same from packet to packet, and has a method fo
 
 ```python
 >>> from pdn_aprs import Station, Symbol
->>> m0lte = Station("M0LTE-9", via="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
->>> print(m0lte.position(51.45, -0.98, course=88, speed=36, comment="Mobile"))
+>>> m0lte = Station("M0LTE-9", path="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
+>>> print(m0lte.position(51.45, -0.98, course_degrees=88, speed_knots=36, comment="Mobile"))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1:=5127.00N/00058.80W>088/036Mobile
->>> print(m0lte.position(51.45, -0.98, compressed=True, frequency=145.5, tone=77))
+>>> print(m0lte.position(51.45, -0.98, compressed=True, frequency=aprs.VoiceFrequency(145.5, tone=aprs.ToneType.TONE, tone_value=77)))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1:=/4M<<N7Jo> sT145.500MHz T077
->>> print(m0lte.mic_e(51.4575, -0.9811, speed=12, course=94))
+>>> print(m0lte.mic_e(51.4575, -0.9811, speed_knots=12, course_degrees=94))
 M0LTE-9>U1RWTU,WIDE1-1,WIDE2-1:`vVsm4z>/`
 >>> print(m0lte.message("G4ABC", "See you at the club", message_id="42"))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1::G4ABC    :See you at the club{42
 >>> print(m0lte.ack("G4ABC", "7"))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1::G4ABC    :ack7
->>> print(m0lte.object("LEADER", 49.0583, -72.0292, timestamp=aprs.Timestamp.dhm(9, 23, 45), course=88, speed=36))
+>>> print(m0lte.object("LEADER", 49.0583, -72.0292, timestamp=aprs.Timestamp.dhm(9, 23, 45), course_degrees=88, speed_knots=36))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1:;LEADER   *092345z4903.50N/07201.75W>088/036
 >>> wx = Station("M0LTE-13")
->>> print(wx.weather(51.45, -0.98, wind_direction=220, wind_speed=4, gust=5, temperature=58, humidity=81, pressure=1013.2))
+>>> print(wx.weather(51.45, -0.98, wind_direction_degrees=220, wind_speed_mph=4, wind_gust_mph=5, temperature_f=58, humidity_percent=81, pressure_mbar=1013.2))
 M0LTE-13>APZ001:!5127.00N/00058.80W_220/004g005t058h81b10132
 >>> print(wx.telemetry(5, [199, 0, 255, 73, 123], "01101001"))
 M0LTE-13>APZ001:T#005,199,000,255,073,123,01101001
@@ -117,7 +117,7 @@ M0LTE-13>APZ001::M0LTE-13 :PARM.Battery,Temp
 
 ```
 
-The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (with `tone` and `offset_khz`), `telemetry` and `precise` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
+The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Every keyword has the name of the data field it fills (`course_degrees`, `speed_knots`, `wind_gust_mph`...); a metric alternative changes only the unit (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`). Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (MHz, or a `VoiceFrequency` to give a tone or offset), `telemetry` and `dao` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. A request that cannot be sent (a telemetry sequence over 999, say) raises `EncodeError`; one that cannot mean anything (a quantity given in both units) raises `ValueError`. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
 
 ## Encoding
 
@@ -154,17 +154,6 @@ Symbol('S#')
 'Digi (green star)'
 >>> Symbol.from_name("fire truck")
 Symbol('/f')
-
-```
-
-## The neutral form
-
-`pdn_aprs.neutral` converts data to and from the conformance vectors' neutral form: plain dicts and lists, ready for JSON.
-
-```python
->>> from pdn_aprs.neutral import to_neutral
->>> to_neutral(aprs.decode("N0CALL>APZ001::WU2Z     :Testing{003").data)
-{'type': 'message', 'addressee': 'WU2Z', 'text': 'Testing', 'message_id': '003'}
 
 ```
 

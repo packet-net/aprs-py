@@ -43,6 +43,7 @@ from multiprocessing import Pool
 from typing import Any
 
 from pdn_aprs import (
+    DEFAULT_DESTINATION,
     Beam,
     CommentTelemetry,
     EncodeError,
@@ -60,9 +61,10 @@ from pdn_aprs import (
     Unrecognized,
     VoiceFrequency,
     decode_tnc2,
+    encode_info,
+    mic_e_destination,
 )
-from pdn_aprs.encode import DEFAULT_DESTINATION, encode_info, mic_e_destination
-from pdn_aprs.neutral import NeutralFormError, from_neutral, packet_to_neutral, to_neutral
+from pdn_aprs._neutral import NeutralFormError, from_neutral, packet_to_neutral, to_neutral
 
 LENIENT = ParseOptions.lenient()
 STRICT = ParseOptions.strict()
@@ -170,7 +172,7 @@ def api_view(packet: Packet) -> dict[str, Any]:
         view["phg"] = {
             "watts": phg.power_watts,
             "height_feet": phg.height_feet,
-            "gain_db": phg.gain_dbi,
+            "gain_db": phg.gain_db,
             "directivity_degrees": phg.directivity_degrees,
         }
     if isinstance(data, ThirdParty):
@@ -274,19 +276,19 @@ _POSITIONED: dict[str, tuple[str, Callable[[Any], Any]]] = {
     "comment": ("comment", _same),
     "killed": ("killed", _same),
     "timestamp": ("timestamp", _timestamp),
-    "course_degrees": ("course", _same),
-    "speed_knots": ("speed", _same),
+    "course_degrees": ("course_degrees", _same),
+    "speed_knots": ("speed_knots", _same),
     "speed_kmh": ("speed_kmh", _same),
-    "altitude_feet": ("altitude", _same),
+    "altitude_feet": ("altitude_feet", _same),
     "altitude_m": ("altitude_m", _same),
     "phg": ("phg", lambda d: Phg(**d)),
     "range_miles": ("range_miles", _same),
     "frequency": ("frequency", _frequency),
     "compressed": ("compressed", _same),
     "ambiguity": ("ambiguity", _same),
-    "dao": ("precise", _same),
+    "dao": ("dao", _same),
     "telemetry": ("telemetry", lambda t: CommentTelemetry(t["sequence"], tuple(t["analog"]), t.get("digital"))),
-    "mic_e_message": ("message", MicEMessage),
+    "mic_e_message": ("mic_e_message", MicEMessage),
 }
 
 _UNITS = {"course_degrees", "speed_knots", "speed_kmh", "altitude_feet", "altitude_m"}
@@ -366,25 +368,25 @@ _TAKES: dict[str, set[str]] = {
     "telemetry-bits": {"bits", "project", "addressee"},
 }
 
-# The keyword each weather recipe key goes to Station.weather as.
+# The recipe keys that go to Station.weather by the same name.
 _WEATHER = {
-    "latitude": "latitude",
-    "longitude": "longitude",
-    "wind_direction_degrees": "wind_direction",
-    "wind_speed_mph": "wind_speed",
-    "wind_gust_mph": "gust",
-    "temperature_f": "temperature",
-    "temperature_c": "temperature_c",
-    "rain_1h_in": "rain_1h",
-    "rain_24h_in": "rain_24h",
-    "rain_midnight_in": "rain_since_midnight",
-    "rain_1h_mm": "rain_1h_mm",
-    "rain_24h_mm": "rain_24h_mm",
-    "rain_midnight_mm": "rain_since_midnight_mm",
-    "humidity_percent": "humidity",
-    "pressure_mbar": "pressure",
-    "luminosity_w_m2": "luminosity",
-    "snow_24h_in": "snow_24h",
+    "latitude",
+    "longitude",
+    "wind_direction_degrees",
+    "wind_speed_mph",
+    "wind_gust_mph",
+    "temperature_f",
+    "temperature_c",
+    "rain_1h_in",
+    "rain_24h_in",
+    "rain_midnight_in",
+    "rain_1h_mm",
+    "rain_24h_mm",
+    "rain_midnight_mm",
+    "humidity_percent",
+    "pressure_mbar",
+    "luminosity_w_m2",
+    "snow_24h_in",
 }
 
 
@@ -400,7 +402,7 @@ def build(recipe: dict[str, Any]) -> Packet:
     messaging = args.pop("messaging", False) if report in ("position", "mic-e") else False
     station = Station(
         header["source"],
-        via=header.get("path", ()),
+        path=header.get("path", ()),
         destination=header.get("destination", DEFAULT_DESTINATION),
         messaging=bool(messaging),
     )
@@ -424,7 +426,7 @@ def build(recipe: dict[str, Any]) -> Packet:
             return station.item(**kwargs)
         return station.mic_e(**kwargs)
     if report == "weather":
-        weather = {_WEATHER[key]: value for key, value in args.items() if key in _WEATHER}
+        weather = {key: value for key, value in args.items() if key in _WEATHER}
         if "symbol" in args:
             if "latitude" not in args:
                 raise UnsupportedError("weather: a positionless report has no symbol")
@@ -455,12 +457,12 @@ def build(recipe: dict[str, Any]) -> Packet:
             args["sequence"], args["analog"], args.get("bits", "00000000"), comment=args.get("comment", "")
         )
     if report == "telemetry-names":
-        return station.telemetry_names(args["names"], station=args.get("addressee"))
+        return station.telemetry_names(args["names"], addressee=args.get("addressee"))
     if report == "telemetry-units":
-        return station.telemetry_units(args["units"], station=args.get("addressee"))
+        return station.telemetry_units(args["units"], addressee=args.get("addressee"))
     if report == "telemetry-coefficients":
-        return station.telemetry_coefficients(args["coefficients"], station=args.get("addressee"))
-    return station.telemetry_bits(args["bits"], args.get("project", ""), station=args.get("addressee"))
+        return station.telemetry_coefficients(args["coefficients"], addressee=args.get("addressee"))
+    return station.telemetry_bits(args["bits"], args.get("project", ""), addressee=args.get("addressee"))
 
 
 def build_line(n: int, text: str) -> str:

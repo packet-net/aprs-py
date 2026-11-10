@@ -17,7 +17,7 @@ from . import _deviceid_data as _db
 if TYPE_CHECKING:
     from .packet import Packet
 
-__all__ = ["DATABASE_VERSION", "Device", "identify", "identify_mic_e", "identify_tocall"]
+__all__ = ["DATABASE_VERSION", "Device", "identify_mic_e", "identify_tocall"]
 
 DATABASE_VERSION: str = _db.VERSION
 
@@ -47,7 +47,7 @@ def _device(entry: _db.Entry) -> Device:
 
 
 @cache
-def mic_e_suffixes(type_code: str) -> tuple[str, ...]:
+def _mic_e_suffixes(type_code: str) -> tuple[str, ...]:
     """The device suffixes the database knows after this Mic-E type code, longest first."""
     if type_code in ("`", "'"):
         suffixes = list(_db.MICE)
@@ -96,7 +96,7 @@ def identify_tocall(destination: str) -> Device | None:
     return _device(_db.TOCALLS[best[1]]) if best else None
 
 
-def identify(packet: Packet) -> Device | None:
+def _identify(packet: Packet) -> Device | None:
     """The device that sent a packet: by Mic-E type code and suffix, else by tocall."""
     from .model import MicEReport
 

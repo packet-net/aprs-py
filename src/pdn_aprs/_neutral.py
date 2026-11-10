@@ -5,9 +5,9 @@ lists are left out (except ``reply_ack``, where ``""`` says the sender supports 
 booleans are written only when true, enumerations are kebab-case strings, timestamps and
 symbols are written as on air.
 
->>> from pdn_aprs import decode
->>> from pdn_aprs.neutral import to_neutral
->>> to_neutral(decode("N0CALL>APZ001:>Net Control Center").data)
+>>> from pdn_aprs import decode_tnc2
+>>> from pdn_aprs._neutral import to_neutral
+>>> to_neutral(decode_tnc2("N0CALL>APZ001:>Net Control Center").data)
 {'type': 'status', 'text': 'Net Control Center'}
 """
 
@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any
 
 from .diagnostics import Diagnostic
+from .errors import AprsError
 from .model import (
     Ack,
     AgreloDf,
@@ -29,14 +30,15 @@ from .model import (
     Bulletin,
     Capabilities,
     CommentTelemetry,
+    CompressionFix,
     CompressionOrigin,
+    CompressionSource,
     CompressionType,
     Dao,
     DaoPrecision,
     DfBearing,
     Dfs,
     DirectedQuery,
-    Fix,
     Footprint,
     ItemReport,
     MaidenheadBeacon,
@@ -45,7 +47,6 @@ from .model import (
     MicEReport,
     NmeaFix,
     NmeaSentence,
-    NmeaSource,
     NwsBulletin,
     ObjectReport,
     Phg,
@@ -80,7 +81,7 @@ from .symbols import Symbol
 __all__ = ["NeutralFormError", "from_neutral", "header_to_neutral", "packet_to_neutral", "to_neutral"]
 
 
-class NeutralFormError(ValueError):
+class NeutralFormError(AprsError):
     """The neutral form holds something the data model cannot."""
 
 
@@ -199,8 +200,8 @@ def packet_to_neutral(packet: Packet, *, inner: bool = False) -> dict[str, Any]:
 
 def _compression(d: dict[str, Any]) -> CompressionType:
     return CompressionType(
-        Fix(d.get("fix", "current")),
-        NmeaSource(d.get("source", "other")),
+        CompressionFix(d.get("fix", "current")),
+        CompressionSource(d.get("source", "other")),
         CompressionOrigin(d.get("origin", "software")),
     )
 

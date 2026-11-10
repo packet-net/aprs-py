@@ -61,5 +61,4 @@ class ParseOptions:
         return not self.tolerated
 
 
-LENIENT = ParseOptions.lenient()
-STRICT = ParseOptions.strict()
+_LENIENT = ParseOptions.lenient()

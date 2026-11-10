@@ -28,14 +28,15 @@ __all__ = [
     "Bulletin",
     "Capabilities",
     "CommentTelemetry",
+    "CompressionFix",
     "CompressionOrigin",
+    "CompressionSource",
     "CompressionType",
     "Dao",
     "DaoPrecision",
     "DfBearing",
     "Dfs",
     "DirectedQuery",
-    "Fix",
     "Footprint",
     "ItemReport",
     "MaidenheadBeacon",
@@ -44,7 +45,6 @@ __all__ = [
     "MicEReport",
     "NmeaFix",
     "NmeaSentence",
-    "NmeaSource",
     "NwsBulletin",
     "ObjectReport",
     "Phg",
@@ -100,14 +100,14 @@ class _Enum(str, Enum):
 # ---------------------------------------------------------------- enumerations
 
 
-class Fix(_Enum):
+class CompressionFix(_Enum):
     """Compression type: whether the GPS fix is current."""
 
     OLD = "old"
     CURRENT = "current"
 
 
-class NmeaSource(_Enum):
+class CompressionSource(_Enum):
     """Compression type: the NMEA sentence the position came from."""
 
     OTHER = "other"
@@ -377,16 +377,16 @@ class Timestamp:
 class CompressionType:
     """A compressed position's type byte: GPS fix, NMEA source and compression origin."""
 
-    fix: Fix = Fix.CURRENT
-    source: NmeaSource = NmeaSource.OTHER
+    fix: CompressionFix = CompressionFix.CURRENT
+    source: CompressionSource = CompressionSource.OTHER
     origin: CompressionOrigin = CompressionOrigin.SOFTWARE
 
     @property
     def value(self) -> int:
         """The type byte's value, 0-63 (before 33 is added)."""
         return (
-            (32 if self.fix is Fix.CURRENT else 0)
-            | (list(NmeaSource).index(self.source) << 3)
+            (32 if self.fix is CompressionFix.CURRENT else 0)
+            | (list(CompressionSource).index(self.source) << 3)
             | list(CompressionOrigin).index(self.origin)
         )
 
@@ -394,8 +394,8 @@ class CompressionType:
     def from_value(cls, value: int) -> CompressionType:
         """From the type byte's value; the two unused high bits are ignored."""
         return cls(
-            Fix.CURRENT if value & 32 else Fix.OLD,
-            list(NmeaSource)[(value >> 3) & 3],
+            CompressionFix.CURRENT if value & 32 else CompressionFix.OLD,
+            list(CompressionSource)[(value >> 3) & 3],
             list(CompressionOrigin)[value & 7],
         )
 
@@ -424,7 +424,7 @@ class Phg:
         return int(10 * 2**self.height)
 
     @property
-    def gain_dbi(self) -> int:
+    def gain_db(self) -> int:
         return self.gain
 
     @property
@@ -547,11 +547,15 @@ class WeatherExtra:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class Weather:
-    """Weather data, in the units sent. A field left ``None`` was not sent, or sent as unknown."""
+    """Weather data, in the units sent. A field left ``None`` was not sent, or sent as unknown.
+
+    ``wind_direction_degrees``, ``humidity_percent`` and ``luminosity_w_m2`` are whole when
+    decoded and rounded once, by the encoder, when written.
+    """
 
     __repr__ = _compact_repr
 
-    wind_direction_degrees: int | None = None
+    wind_direction_degrees: float | None = None
     wind_speed_mph: float | None = None
     wind_gust_mph: float | None = None
     temperature_f: float | None = None
@@ -559,9 +563,9 @@ class Weather:
     rain_24h_in: float | None = None
     rain_midnight_in: float | None = None
     rain_raw: int | None = None
-    humidity_percent: int | None = None
+    humidity_percent: float | None = None
     pressure_mbar: float | None = None
-    luminosity_w_m2: int | None = None
+    luminosity_w_m2: float | None = None
     snow_24h_in: float | None = None
     software: str | None = None
     unit: str | None = None
@@ -621,7 +625,8 @@ class PositionedData(AprsData):
     precision applied; an ambiguous position gives the centre of its box, and ``ambiguity``
     says how many digits were blanked (0-4). The data extensions and the elements lifted out
     of the comment (altitude, telemetry, frequency...) each have a field; ``comment`` is the
-    free text left over.
+    free text left over. ``course_degrees`` is whole when decoded and rounded once, by the
+    encoder, when written.
     """
 
     latitude: float
@@ -630,7 +635,7 @@ class PositionedData(AprsData):
     ambiguity: int = 0
     compressed: bool = False
     compression: CompressionType | None = None
-    course_degrees: int | None = None
+    course_degrees: float | None = None
     speed_knots: float | None = None
     altitude_feet: float | None = None
     phg: Phg | None = None
@@ -669,14 +674,14 @@ class MicEReport(PositionedData):
     """
 
     kind: ClassVar[str] = "mic-e"
-    mic_e_message: MicEMessage = MicEMessage.OFF_DUTY
+    mic_e_message: MicEMessage
     old_data: bool = False
     type_code: str | None = None
     device_suffix: str | None = None
     locator: str | None = None
     legacy_telemetry: tuple[int, ...] = ()
     destination_ssid: int = 0
-    altitude_in_comment: bool = field(default=False, compare=False, repr=False)
+    altitude_in_comment: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, repr=False)
@@ -740,7 +745,7 @@ class Bulletin(AprsData):
     message_id: str | None = None
 
     @property
-    def identifier(self) -> str:
+    def id(self) -> str:
         """The bulletin or announcement identifier: the character after ``BLN``."""
         return self.addressee[3:4]
 
@@ -751,7 +756,7 @@ class Bulletin(AprsData):
 
     @property
     def is_announcement(self) -> bool:
-        return self.identifier.isalpha() and not self.group
+        return self.id.isalpha() and not self.group
 
 
 @dataclass(frozen=True, slots=True, repr=False)

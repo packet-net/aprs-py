@@ -23,6 +23,7 @@ from .model import (
     Beam,
     Bulletin,
     Capabilities,
+    CompressionSource,
     CompressionType,
     DirectedQuery,
     Footprint,
@@ -33,7 +34,6 @@ from .model import (
     MicEReport,
     NmeaFix,
     NmeaSentence,
-    NmeaSource,
     NwsBulletin,
     ObjectReport,
     PositionlessWeather,
@@ -56,7 +56,7 @@ from .model import (
     UserDefined,
     Weather,
 )
-from .options import LENIENT, ParseOptions
+from .options import _LENIENT, ParseOptions
 from .packet import Packet, PathEntry
 from .symbols import Symbol
 
@@ -194,7 +194,7 @@ def parse_tnc2_header(header: str, ctx: Ctx, *, third_party: bool = False) -> tu
     return source, destination, path
 
 
-def decode_tnc2(line: bytes | str, options: ParseOptions = LENIENT) -> Packet:
+def decode_tnc2(line: bytes | str, options: ParseOptions = _LENIENT) -> Packet:
     """Decode a TNC2 / APRS-IS line. A ``str`` is encoded as UTF-8 first."""
     raw = line.encode("utf-8") if isinstance(line, str) else bytes(line)
     ctx = Ctx(options)
@@ -229,7 +229,7 @@ def _ax25_address(ctx: Ctx, raw: bytes) -> tuple[str, bool]:
     return name, bool(raw[6] & 0x80)
 
 
-def decode_ax25(frame: bytes, options: ParseOptions = LENIENT) -> Packet:
+def decode_ax25(frame: bytes, options: ParseOptions = _LENIENT) -> Packet:
     """Decode an AX.25 UI frame without flags or FCS (the KISS payload)."""
     frame = bytes(frame)
     ctx = Ctx(options)
@@ -267,7 +267,7 @@ def decode_ax25(frame: bytes, options: ParseOptions = LENIENT) -> Packet:
     return Packet(source, destination, path, info, data, tuple(ctx.diags))
 
 
-def decode_kiss(frame: bytes, options: ParseOptions = LENIENT) -> Packet:
+def decode_kiss(frame: bytes, options: ParseOptions = _LENIENT) -> Packet:
     """Decode a KISS data frame: optional ``FEND`` delimiters, the command byte, then an
     escaped AX.25 frame."""
     data = bytes(frame).strip(b"\xc0")
@@ -507,7 +507,7 @@ def _compressed_cs(p: Pos, ctx: Ctx, fields: dict[str, Any]) -> str | None:
     c, s, t = p.cs
     ctype = CompressionType.from_value(t)
     fields["compression"] = ctype
-    if ctype.source is NmeaSource.GGA:
+    if ctype.source is CompressionSource.GGA:
         fields["altitude_feet"] = 1.002 ** (c * 91 + s)
         return "altitude"
     if c == 90:
@@ -792,7 +792,7 @@ def _mic_e_destination(destination: str, ctx: Ctx) -> tuple[float, int, str, boo
 
 
 def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
-    from .devices import mic_e_suffixes
+    from .devices import _mic_e_suffixes
 
     if s[0] in "\x1c\x1d":
         # the Rev 0 beta data type identifiers, obsolete (APRS12c ch. 10): said at the DTI,
@@ -881,7 +881,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx.info(C.MIC_E_MISSING_DEVICE_TYPE)
     suffix: str | None = None
     if type_code is not None and type_code != " ":
-        for candidate in mic_e_suffixes(type_code):
+        for candidate in _mic_e_suffixes(type_code):
             if candidate and rest.endswith(candidate) and len(rest) >= len(candidate):
                 suffix = candidate
                 rest = rest[: -len(candidate)]
@@ -941,6 +941,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     )
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(
+        altitude_in_comment=parts.altitude_feet is not None,
         mic_e_message=MicEMessage(message),
         old_data=s[0] in ("'", "\x1d"),
         type_code=type_code,

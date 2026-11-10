@@ -33,6 +33,7 @@ from .model import (
     Bulletin,
     Capabilities,
     CommentTelemetry,
+    CompressionSource,
     CompressionType,
     DaoPrecision,
     DirectedQuery,
@@ -42,7 +43,6 @@ from .model import (
     MicEMessage,
     MicEReport,
     NmeaSentence,
-    NmeaSource,
     NwsBulletin,
     ObjectReport,
     PositionedData,
@@ -70,8 +70,8 @@ from .model import (
     VoiceFrequency,
     Weather,
 )
-from .options import LENIENT
-from .packet import Packet, PathEntry, tnc2_path
+from .options import _LENIENT
+from .packet import Packet, PathEntry, _tnc2_path
 
 __all__ = [
     "DEFAULT_DESTINATION",
@@ -162,9 +162,9 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
     """Whether ``info`` decodes, leniently and without defects, to data of ``data``'s shape (and,
     with ``numbers``, the same numbers too)."""
     from ._decode import Ctx, decode_info
-    from .neutral import to_neutral
+    from ._neutral import to_neutral
 
-    ctx = Ctx(LENIENT)
+    ctx = Ctx(_LENIENT)
     decoded = decode_info(info, destination, ctx)
     if any(d.severity is not Severity.INFO for d in ctx.diags):
         return False
@@ -384,7 +384,7 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
         if data.altitude_feet is not None:
             raise _refuse("a weather report's cs bytes carry the wind, not an altitude")
         cs = _course_speed(w.wind_direction_degrees, w.wind_speed_mph / _util.KNOTS_TO_MPH, is_course=False)
-    elif ctype is not None and ctype.source is NmeaSource.GGA:
+    elif ctype is not None and ctype.source is CompressionSource.GGA:
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
             raise _refuse("a GGA compressed position carries altitude, not course, speed or range")
         if data.altitude_feet is None:
@@ -962,9 +962,9 @@ def _mic_e(data: MicEReport) -> bytes:
         raise _refuse(f"Mic-E type code {type_code!r} is not ` ' > ] or a space")
     suffix = data.device_suffix or ""
     if suffix:
-        from .devices import mic_e_suffixes
+        from .devices import _mic_e_suffixes
 
-        if suffix not in mic_e_suffixes(type_code):
+        if suffix not in _mic_e_suffixes(type_code):
             raise _refuse(f"device suffix {suffix!r} is not one the database knows after {type_code!r}")
     altitude_first = ""
     altitude_later = ""
@@ -1325,12 +1325,12 @@ def _third_party(data: ThirdParty) -> bytes:
     else:
         info = encode_info(inner.data)
         destination = mic_e_destination(inner.data) if isinstance(inner.data, MicEReport) else inner.destination
-    if not _ADDRESS.match(destination) or any(not _ADDRESS.match(p.call) for p in inner.path):
+    if not _ADDRESS.match(destination) or any(not _ADDRESS.match(p.address) for p in inner.path):
         raise _refuse("a third-party destination or path entry is not 1-9 letters, digits or -")
     used = [p.used for p in inner.path]
     if used != sorted(used, reverse=True):
         raise _refuse("in TNC2 a path entry before a used one is used too")
-    path = tnc2_path(inner.path)
+    path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
     return b"}" + header.encode("ascii") + b":" + info
 
@@ -1418,7 +1418,7 @@ def build_packet(
     _check_address(source, "source")
     entries = tuple(p if isinstance(p, PathEntry) else PathEntry(p.rstrip("*"), p.endswith("*")) for p in path)
     for entry in entries:
-        _check_address(entry.call, "path entry")
+        _check_address(entry.address, "path entry")
     if len(entries) > 8:
         raise _refuse("at most 8 digipeaters")
     if isinstance(data, MicEReport):

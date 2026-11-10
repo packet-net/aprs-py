@@ -54,7 +54,7 @@ def test_mutated_packets_do_not_crash(seed: int) -> None:
         line = f"N0CALL>{destination}:".encode() + _mutate(rng, info)
         for options in (aprs.ParseOptions.lenient(), aprs.ParseOptions.strict()):
             try:
-                packet = aprs.decode(line, options)
+                packet = aprs.decode_tnc2(line, options)
             except aprs.HeaderError:
                 continue
             try:

@@ -24,8 +24,8 @@ from pdn_aprs import (
     decode_ax25,
     decode_tnc2,
 )
+from pdn_aprs._neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
 from pdn_aprs.encode import encode_info, mic_e_destination
-from pdn_aprs.neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
 
 ROOT = Path(__file__).resolve().parent.parent
 VECTORS = ROOT / "vectors"

@@ -13,33 +13,30 @@ if TYPE_CHECKING:
     from .devices import Device
     from .model import AprsData
 
-__all__ = ["Packet", "PathEntry", "QConstruct", "tnc2_path"]
-
-Q_CONSTRUCTS = frozenset({"qAC", "qAX", "qAU", "qAo", "qAO", "qAS", "qAr", "qAR", "qAZ", "qAI"})
-"""The q-constructs the APRS-IS algorithm defines, ``qAr`` and ``qAo`` beside ``qAR`` and ``qAO``."""
+__all__ = ["Packet", "PathEntry", "QConstruct"]
 
 
-def is_q_construct(call: str) -> bool:
+def _is_q_construct(call: str) -> bool:
     """``qA`` and a letter: a q-construct, whether or not the APRS-IS algorithm defines it."""
     return len(call) == 3 and call.startswith("qA") and call[2].isascii() and call[2].isalpha()
 
 
-def tnc2_path(path: tuple[PathEntry, ...]) -> str:
+def _tnc2_path(path: tuple[PathEntry, ...]) -> str:
     """A path as TNC2 writes it: a ``*`` after the last entry used, which implies the ones
     before it."""
     last = max((i for i, p in enumerate(path) if p.used), default=-1)
-    return ",".join(p.call + ("*" if i == last else "") for i, p in enumerate(path))
+    return ",".join(p.address + ("*" if i == last else "") for i, p in enumerate(path))
 
 
 @dataclass(frozen=True, slots=True)
 class PathEntry:
     """One digipeater path entry. ``used``: the packet has been through it (``*`` in TNC2)."""
 
-    call: str
+    address: str
     used: bool = False
 
     def __str__(self) -> str:
-        return self.call + ("*" if self.used else "")
+        return self.address + ("*" if self.used else "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +72,9 @@ class Packet:
         if self.third_party:
             return None
         for i, entry in enumerate(self.path):
-            if is_q_construct(entry.call):
-                station = self.path[i + 1].call if i + 1 < len(self.path) else None
-                return QConstruct(entry.call, station)
+            if _is_q_construct(entry.address):
+                station = self.path[i + 1].address if i + 1 < len(self.path) else None
+                return QConstruct(entry.address, station)
         return None
 
     @property
@@ -92,14 +89,14 @@ class Packet:
     def device(self) -> Device | None:
         """The sending device, from the aprs-deviceid database: by Mic-E type code and suffix,
         or else by the destination address (the "tocall")."""
-        from .devices import identify
+        from .devices import _identify
 
-        return identify(self)
+        return _identify(self)
 
     @property
     def header(self) -> str:
         """The TNC2 header, ``SOURCE>DEST,PATH``."""
-        path = tnc2_path(self.path)
+        path = _tnc2_path(self.path)
         return f"{self.source}>{self.destination}" + ("," + path if path else "")
 
     def to_tnc2(self) -> bytes:
@@ -118,7 +115,7 @@ class Packet:
         frame = bytearray(_ax25_address(self.destination, command=True))
         frame += _ax25_address(self.source, last=not path)
         for i, entry in enumerate(path):
-            frame += _ax25_address(entry.call, last=i == len(path) - 1, repeated=entry.used)
+            frame += _ax25_address(entry.address, last=i == len(path) - 1, repeated=entry.used)
         frame += b"\x03\xf0" + self.info
         return bytes(frame)
 
