@@ -384,6 +384,87 @@ def test_rounding_is_half_away_from_zero() -> None:
     assert b"t-03r013" in info
 
 
+def test_mic_e_speed_190_to_199_knots_is_a_slash() -> None:
+    # APRS12c ch. 10 gives / and DEL for 190-199 knots; DEL is a control character (ruling E5)
+    info = aprs.encode_info(aprs.MicEReport(latitude=33.0, longitude=-112.0, symbol=Symbol("/", ">"), speed_knots=195))
+    assert info[4:5] == b"/"
+
+
+def test_mic_e_comment_after_rev0_telemetry_starting_0x1d_is_text() -> None:
+    # after Rev 0 telemetry a comment starting with 0x1D is text, written straight on (ruling E6)
+    line = b"N0CALL>SUSPU4:`c'wl|+>/\x1dABCD/\x1dABCDEhello"
+    packet = aprs.decode(line)
+    assert aprs.encode_info(packet.data) == packet.info
+
+
+@pytest.mark.parametrize(
+    ("course", "c"),
+    [(358, "!"), (360, "!"), (2, '"'), (6, "#")],
+)
+def test_compressed_course_rounds_and_360_is_north(course: float, c: str) -> None:
+    # a course or wind direction is rounded to the nearest 4 degrees, halves away from zero, and
+    # one that rounds to 360 is c = 0 (ruling E9)
+    data = aprs.PositionReport(
+        latitude=49.5,
+        longitude=-72.75,
+        symbol=Symbol("/", ">"),
+        compressed=True,
+        course_degrees=course,
+        speed_knots=10,
+        compression=aprs.CompressionType(),
+    )
+    assert aprs.encode_info(data)[11:12] == c.encode()
+    wind = aprs.PositionReport(
+        latitude=49.5,
+        longitude=-72.75,
+        symbol=Symbol("/", "_"),
+        compressed=True,
+        weather=aprs.Weather(wind_direction_degrees=course, wind_speed_mph=10),
+        compression=aprs.CompressionType(),
+    )
+    assert aprs.encode_info(wind)[11:12] == c.encode()
+
+
+def test_compressed_speed_byte_of_90_is_written() -> None:
+    # APRS12c ch. 9 limits only the course byte to !-z; s = { (90) is a speed (ruling E10)
+    packet = aprs.decode("N0CALL>APZ001:=/5L!!<*e7>{?!")
+    assert aprs.encode_info(packet.data) == packet.info
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        # no / before text that reads back as itself without one (ruling E7)
+        "!/5L!!<*e7> sT.../...g...",
+        "=4903.50N/07201.75W-444.900MHz \x00173",
+    ],
+)
+def test_delimiter_only_where_needed(info: str) -> None:
+    packet = aprs.decode("N0CALL>APZ001:" + info)
+    assert aprs.encode_info(packet.data) == packet.info
+
+
+def test_mic_e_type_code_then_locator_needs_no_slash() -> None:
+    packet = aprs.decode(b"N0CALL>SUSPU4:`c'wl|+>/]wO91SX/G")
+    assert aprs.encode_info(packet.data) == packet.info
+
+
+def test_late_altitude_and_phg_in_mic_e_are_written_not_refused() -> None:
+    # a clean form exists, so the encoder writes it (ruling E12)
+    line = "JA1YKX-1>SUSPU4:'C=?l <1C>#S]PH}#S]PHG33302/W1,KNn-N YOKOHAMA 1200bps="
+    packet = aprs.decode(line.encode("latin-1"))
+    info = aprs.encode_info(packet.data)
+    again = aprs.decode(b"JA1YKX-1>SUSPU4:" + info)
+    assert to_neutral(again.data) == to_neutral(packet.data)
+
+
+def test_no_size_limit() -> None:
+    # refused means the Encoding rule declines the data, never that a buffer is full (ruling E11)
+    text = "\u00e9" * 2000
+    info = aprs.encode_info(aprs.StatusReport(text))
+    assert len(info) == 4001
+
+
 def test_directed_query_targets() -> None:
     def written(query_type: str) -> bytes:
         return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))
