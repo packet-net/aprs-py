@@ -42,7 +42,8 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 ### Fixed (batch 2)
 
-- Strict decoding rejects Mic-E status text with `mic-e-altitude-not-first` only when there is a later altitude to decline; with none it reads as lenient.
+- Strict decoding rejects Mic-E status text with `mic-e-altitude-not-first` only when there is a later altitude to decline and lifting telemetry or the `!DAO!` would form an altitude across the place it came from; one the bytes already held is kept as text.
+- `Packet.to_ax25` refuses an address with a dash and no SSID (`WIDE1-`).
 - Storm data fields are digits or dots: a field with a space (`> 90`) means no storm data, and the text is comment.
 
 - `Packet.to_ax25` refuses an address whose SSID has a leading zero (`-00`, `-0`, `-07`), which the frame would bring back as a different SSID.

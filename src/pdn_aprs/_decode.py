@@ -12,7 +12,7 @@ import re
 from typing import Any, NoReturn
 
 from . import _util
-from ._comment import CommentParts, lift_comment, lift_telemetry_dao, parse_extension
+from ._comment import CommentParts, lift_comment, lift_telemetry_dao, lifted_places, parse_extension
 from ._weather import parse_weather_fields, raise_field_defects, weather_tail
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .errors import HeaderError
@@ -919,11 +919,16 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
             rest = rest[: found.start()] + rest[found.end() :]
             cuts = (found.start(),)
         elif not ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
-            # the altitude is looked for before the !DAO! is lifted; left as text, lifting the
-            # DAO must not join the bytes either side of it into a new one (vectors README, Mic-E)
-            joined = _MICE_ALTITUDE.search(lift_telemetry_dao(rest, CommentParts()))
-            # only when there is a later altitude to decline; with none, strict reads as lenient
-            if found is not None and joined is not None and joined.group() != found.group():
+            # the altitude is looked for before telemetry and the !DAO! are lifted; left as text,
+            # lifting them must not join the bytes either side of a place they came from into
+            # one. Only with a later altitude to decline; with none, strict reads as lenient
+            # (vectors README, Mic-E)
+            left, places = lifted_places(rest)
+            if found is not None and any(
+                _MICE_ALTITUDE.match(left, i) and i < place < i + 4
+                for place in places
+                for i in range(max(place - 3, 0), place)
+            ):
                 ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE

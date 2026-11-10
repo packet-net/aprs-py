@@ -824,3 +824,19 @@ def test_storm_data_with_a_space_in_a_field_is_text() -> None:
     assert isinstance(packet.data, aprs.ObjectReport)
     assert packet.data.storm is None
     assert packet.data.comment == "HC/150^200/0980> 90&030%040"
+
+
+def test_ax25_refuses_a_dash_with_no_ssid() -> None:
+    packet = aprs.decode("N0CALL>APZ001:}N0CALL>APZ,WIDE1-*,WIDE2-1*:>x")
+    assert isinstance(packet.data, aprs.ThirdParty)
+    with pytest.raises(EncodeError, match="dash"):
+        packet.data.packet.to_ax25()
+
+
+def test_strict_mic_e_rejects_only_an_altitude_joined_across_a_lifted_place() -> None:
+    # "3z} was in the bytes already: kept; II!} forms across the place of the DAO lifted: rejected
+    kept = aprs.decode('N0CALL>PURWS8:`l(tmz#<X|!wII!}3/"3z}</"3z}', STRICT)
+    assert isinstance(kept.data, aprs.MicEReport)
+    assert kept.data.dao is not None
+    joined = aprs.decode("N0CALL>U5TVQS:`0)1839h0654.57S/10742fl!X>/'\";X|!wII!!wII!}3", STRICT)
+    assert isinstance(joined.data, aprs.Unrecognized)

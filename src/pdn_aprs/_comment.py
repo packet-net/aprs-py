@@ -316,6 +316,24 @@ def lift_comment(
     return parts
 
 
+def lifted_places(text: str, cuts: tuple[int, ...] = ()) -> tuple[str, tuple[int, ...]]:
+    """The text left once base-91 telemetry and a ``!DAO!`` are lifted, and the places in it
+    where something was taken out."""
+    tel = _telemetry(text) if "|" in text else None
+    dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
+    spans = sorted(
+        ([(tel[1], tel[2])] if tel is not None else []) + ([(dao[3], dao[3] + 5)] if dao is not None else [])
+    )
+    places: list[int] = []
+    removed = 0
+    for start, end in spans:
+        places.append(start - removed)
+        removed += end - start
+    for start, end in reversed(spans):
+        text = text[:start] + text[end:]
+    return text, tuple(places)
+
+
 def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:
     """Lift base-91 telemetry and a ``!DAO!`` into ``parts``; returns the text left.
 

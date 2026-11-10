@@ -134,7 +134,10 @@ class Packet:
 
 
 def _ax25_address(name: str, *, last: bool = False, command: bool = False, repeated: bool = False) -> bytes:
-    call, _, ssid_text = name.partition("-")
+    call, dash, ssid_text = name.partition("-")
+    if dash and not ssid_text:
+        # a dash with no SSID would come back from the frame as no dash
+        raise EncodeError(f"{name!r} is not an AX.25 address as sent: a dash with no SSID")
     if not 1 <= len(call) <= 6 or not all("A" <= c <= "Z" or "0" <= c <= "9" for c in call):
         raise EncodeError(f"{name!r} is not an AX.25 address: 1-6 upper-case letters and digits")
     if ssid_text and not (ssid_text.isascii() and ssid_text.isdigit() and int(ssid_text) <= 15):
