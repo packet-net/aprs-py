@@ -895,9 +895,11 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     if loc is not None:
         locator, consumed = loc
         rest = rest[consumed:]
-        if rest and rest[0] != " ":
+        # base-91 telemetry and a !DAO! are lifted out of the status text before the locator is
+        # read, so a locator followed straight by either has no missing space (vectors ruling F16)
+        if rest and rest[0] != " " and lift_telemetry_dao(rest, CommentParts())[:1] not in ("", " "):
             ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-        elif rest:
+        elif rest[:1] == " ":
             rest = rest[1:]
     p = Pos(lat, lon, Symbol(table, code), ambiguity, False, None)
     ext = parse_extension(rest, p.symbol, ctx, mic_e=True)

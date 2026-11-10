@@ -310,10 +310,20 @@ def test_snowfall_is_written_exactly(snow: float, text: str) -> None:
     )
 
 
-@pytest.mark.parametrize("snow", [12.5, 0.325, 1000, -1])
-def test_snowfall_that_three_characters_cannot_hold_is_refused(snow: float) -> None:
+@pytest.mark.parametrize("snow", [999.5, 1000, -1])
+def test_snowfall_that_rounds_past_three_digits_is_refused(snow: float) -> None:
     with pytest.raises(EncodeError):
         aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+
+
+@pytest.mark.parametrize(
+    ("snow", "text"),
+    [(12.5, b"s013"), (0.325, b"s.33"), (0.995, b"s001"), (9.96, b"s010"), (9.94, b"s9.9"), (0.001, b"s000")],
+)
+def test_snowfall_is_rounded_into_its_three_forms(snow: float, text: bytes) -> None:
+    # F3: hundredths if under 1, else tenths if under 10, else whole; a whole result in three digits
+    info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
+    assert info.endswith(text)
 
 
 @pytest.mark.parametrize(
@@ -384,14 +394,21 @@ def test_rounding_is_half_away_from_zero() -> None:
     assert b"t-03r013" in info
 
 
-def test_rounding_takes_the_number_as_written() -> None:
-    # 1.275 inches is a half of a hundredth as written, though its binary value is just below it,
-    # and 25.548583333333333 degrees is just under 32.915 minutes as written: the nearest step of
-    # the decimal number, halves away from zero, whatever floating point does on the way
-    weather = aprs.Weather(rain_24h_in=1.275, rain_midnight_in=8.415)
-    assert b"p128P842" in aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), weather))
+def test_rounding_takes_halves_within_the_tolerance() -> None:
+    # F2: halves are judged on the binary value, measured in steps, and one within 1e-6 of a half
+    # is the half and goes away from zero. 1.275 inches is just below the half in binary;
+    # 25.548583333333333 degrees is 1532.9149999999... minutes, the half 32.915; 0.9764166666666666
+    # degrees is 58.584999999999996 minutes; 986.9499999999999 mbar is 9869.5 tenths
+    weather = aprs.Weather(rain_24h_in=1.275, rain_midnight_in=8.415, pressure_mbar=986.9499999999999)
+    assert b"p128P842b09870" in aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), weather))
     position = aprs.PositionReport(latitude=-58.73025, longitude=-25.548583333333333, symbol=Symbol("/", "k"))
-    assert aprs.encode_info(position) == b"!5843.82S/02532.91Wk"
+    assert aprs.encode_info(position) == b"!5843.82S/02532.92Wk"
+    near = aprs.PositionReport(latitude=0.9764166666666666, longitude=-0.9764166666666666, symbol=Symbol("/", "-"))
+    assert aprs.encode_info(near) == b"!0058.59N/00058.59W-"
+    # outside the tolerance the nearer step wins
+    assert aprs.encode_info(
+        aprs.PositionReport(latitude=1.2 / 60 + 0.00499 / 60, longitude=0, symbol=Symbol("/", "-"))
+    ).startswith(b"!0001.20N")
     assert aprs.encode_info(
         aprs.PositionReport(
             latitude=0, longitude=0, symbol=Symbol("/", ">"), comment="", frequency=aprs.VoiceFrequency(146.5205)
@@ -504,9 +521,9 @@ def test_no_size_limit() -> None:
     assert len(info) == 4001
 
 
-def test_compressed_weather_altitude_off_the_cs_steps_is_refused() -> None:
-    # the GGA cs bytes hold an altitude in steps, and a weather report has no comment for the /A=
-    # that would carry it exactly
+def test_compressed_weather_altitude_off_the_cs_steps_is_rounded() -> None:
+    # F14: the GGA cs bytes hold an altitude in steps, and a weather report has no comment for a
+    # /A=, so the altitude is the nearest cs step
     data = aprs.PositionReport(
         latitude=50.7,
         longitude=10.4,
@@ -516,8 +533,12 @@ def test_compressed_weather_altitude_off_the_cs_steps_is_refused() -> None:
         weather=aprs.Weather(),
         compression=aprs.CompressionType(source=aprs.NmeaSource.GGA),
     )
-    with pytest.raises(EncodeError, match="/A="):
-        aprs.encode_info(data)
+    info = aprs.encode_info(data)
+    assert b"/A=" not in info
+    back = aprs.decode(b"N0CALL>APZ001:" + info).data
+    assert isinstance(back, aprs.PositionReport)
+    assert back.altitude_feet is not None
+    assert abs(back.altitude_feet - 837.29) < 1
 
 
 def test_device_wildcard_n_is_a_digit() -> None:
@@ -564,3 +585,92 @@ def test_neutral_form_leaves_empty_text_and_addresses_out() -> None:
 def test_neutral_round_trip() -> None:
     packet = aprs.decode("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
     assert from_neutral(to_neutral(packet.data)) == packet.data
+
+
+@pytest.mark.parametrize(
+    ("course", "written"), [(360.4, b">360/010"), (360.25, b">360/010"), (-0.3, b">000/010"), (0.3, b">000/010")]
+)
+def test_course_is_rounded_before_it_is_checked(course: float, written: bytes) -> None:
+    # F2 then F1: 360.4 is 360; -0.3 is 0, written 000 uncompressed
+    data = aprs.PositionReport(latitude=0, longitude=0, symbol=Symbol("/", ">"), course_degrees=course, speed_knots=10)
+    assert aprs.encode_info(data).endswith(written)
+
+
+@pytest.mark.parametrize("course", [0, -0.3, 0.4])
+def test_course_0_is_refused_where_it_reads_back_otherwise(course: float) -> None:
+    # F1: Mic-E 0 reads back as no course, a compressed c of 0 as 360
+    mic_e = aprs.MicEReport(
+        latitude=33.4, longitude=-112.1, symbol=Symbol("/", "j"), course_degrees=course, speed_knots=20
+    )
+    with pytest.raises(EncodeError):
+        aprs.encode_info(mic_e)
+    compressed = aprs.PositionReport(
+        latitude=49.5,
+        longitude=-72.75,
+        symbol=Symbol("/", ">"),
+        compressed=True,
+        compression=aprs.CompressionType(),
+        course_degrees=course,
+        speed_knots=36,
+    )
+    with pytest.raises(EncodeError):
+        aprs.encode_info(compressed)
+
+
+@pytest.mark.parametrize(("direction", "written"), [(360.25, b"_360/004"), (360.4, b"_360/004"), (-0.3, b"_000/004")])
+def test_wind_direction_is_rounded_before_it_is_checked(direction: float, written: bytes) -> None:
+    weather = aprs.Weather(wind_direction_degrees=direction, wind_speed_mph=4, wind_gust_mph=5, temperature_f=77)
+    data = aprs.PositionReport(latitude=0, longitude=0, symbol=Symbol("/", "_"), weather=weather)
+    assert written in aprs.encode_info(data)
+
+
+def test_numbers_given_as_data_are_plain_decimals() -> None:
+    # F11: no exponent, no +, no trailing .0
+    data = aprs.TelemetryCoefficients(addressee="N0CALL", coefficients=(0.53, 190.0, 1e61, -94.0))
+    assert aprs.encode_info(data) == b":N0CALL   :EQNS.0.53,190,1" + b"0" * 61 + b",-94"
+
+
+def test_footprint_radius_is_rounded_and_0_takes_the_space() -> None:
+    # F2 rounds the radius to whole miles; F15: a coordinate of 0 takes the leading space
+    footprint = aprs.Footprint(latitude=0, longitude=-117.15, radius_miles=199.5)
+    assert aprs.encode_info(aprs.Query("APRS", footprint=footprint)) == b"?APRS? 0,-117.15,0200"
+
+
+def test_mic_e_with_an_empty_first_channel_is_refused() -> None:
+    # F12: T#MIC,,033 reads back otherwise
+    data = aprs.TelemetryReport(sequence="MIC", analog=(None, 33, None, None, None), bits="00000000")
+    with pytest.raises(EncodeError, match="MIC"):
+        aprs.encode_info(data)
+
+
+@pytest.mark.parametrize(
+    ("extra", "status"),
+    [
+        ({"telemetry": aprs.CommentTelemetry(sequence=25, analog=(470, 625))}, b"`IO91/G|!:&0'p|"),
+        ({"dao": aprs.Dao("W", aprs.DaoPrecision.BASE91)}, b"`IO91/G!w"),
+    ],
+)
+def test_mic_e_locator_then_telemetry_or_dao(extra: dict[str, object], status: bytes) -> None:
+    # F16: telemetry and a DAO are lifted before the locator is read, so nothing is missing
+    data = aprs.MicEReport(
+        latitude=33.42733333333334,
+        longitude=-112.129,
+        symbol=Symbol("/", "j"),
+        course_degrees=251,
+        speed_knots=20,
+        type_code="`",
+        locator="IO91",
+        **extra,  # type: ignore[arg-type]
+    )
+    info = aprs.encode_info(data)
+    assert status in info
+    back = aprs.decode(b"N0CALL>" + aprs.mic_e_destination(data).encode() + b":" + info)
+    assert not back.diagnostics
+
+
+def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
+    # F17: a locator is read only at the start of the status text
+    back = aprs.decode('N0CALL>S32UVT:`(_fn"Oj/]PHG3330IO91SX/G')
+    assert isinstance(back.data, aprs.MicEReport)
+    assert back.data.locator is None
+    assert back.data.comment == "IO91SX/G"

@@ -18,7 +18,7 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable, Iterable
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from fractions import Fraction
 from typing import Any, TypeVar
 
@@ -209,11 +209,12 @@ def _checked(data: AprsData, info: str) -> bytes:
 def _minutes_units(value: float | Fraction, per_minute: int) -> int:
     """|value| in units of 1/``per_minute`` of a minute of arc, rounded to the nearest.
 
-    The product is taken exactly on the number as written in decimal, so that the answer does not
-    depend on how floating point rounds on the way, and a coordinate that is a half of a step
-    (1.69475 degrees is 101.685 minutes) goes away from zero."""
-    exact = abs(value) * 60 * per_minute if isinstance(value, Fraction) else abs(_util.decimal(value)) * 60 * per_minute
-    return _nearest(exact)
+    The product is taken in binary floating point (exactly for a Fraction) and rounded once, a
+    value within the tolerance of a half going away from zero (vectors ruling F2: 0.9764166666666666
+    degrees is 58.584999999999996 minutes, the half 58.585, written 58.59)."""
+    if isinstance(value, Fraction):
+        return _nearest(abs(value) * 60 * per_minute)
+    return _nearest(abs(float(value)) * 60 * per_minute)
 
 
 _AMBIGUITY_BOX = (1, 10, 100, 1000, 6000)
@@ -234,11 +235,11 @@ def _is_negative(value: float) -> bool:
 
 
 def _compressed_y(lat: float) -> int:
-    return _nearest(380926 * (90 - _util.decimal(lat)))
+    return _nearest(380926 * (90 - float(lat)))
 
 
 def _compressed_x(lon: float) -> int:
-    return _nearest(190463 * (180 + _util.decimal(lon)))
+    return _nearest(190463 * (180 + float(lon)))
 
 
 def _dao_digits(data: PositionedData) -> tuple[str, str, int, int]:
@@ -319,9 +320,16 @@ def _base91(value: int, width: int) -> str:
     return _util.base91_text(min(max(value, 0), top), width)
 
 
-def _course_speed(course: float, knots: float) -> str:
-    if not 0 <= course <= 360:
+def _course_speed(course: float, knots: float, *, is_course: bool = True) -> str:
+    # rounded first, then checked (vectors ruling F2)
+    whole = _nearest(course)
+    if not 0 <= whole <= 360:
         raise _refuse(f"course {course} is not 0-360")
+    if is_course and whole == 0:
+        # a c of 0 reads back as 360, and the cs bytes have no unknown course (vectors ruling F1)
+        raise _refuse("a compressed course of 0 has no form; north is 360")
+    if _nearest(knots) < 0:
+        raise _refuse(f"speed {knots} is negative")
     # a course that rounds to 360 is north, c = 0 (vectors interpretations.md, "Re-encoding into
     # compressed bytes rounds")
     c = _nearest(_util.decimal(course) / 4) % 90
@@ -369,7 +377,7 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
             raise _refuse("a weather report's cs bytes carry the wind")
         if data.altitude_feet is not None:
             raise _refuse("a weather report's cs bytes carry the wind, not an altitude")
-        cs = _course_speed(w.wind_direction_degrees, w.wind_speed_mph / _util.KNOTS_TO_MPH)
+        cs = _course_speed(w.wind_direction_degrees, w.wind_speed_mph / _util.KNOTS_TO_MPH, is_course=False)
     elif ctype is not None and ctype.source is NmeaSource.GGA:
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
             raise _refuse("a GGA compressed position carries altitude, not course, speed or range")
@@ -379,7 +387,9 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
         value = _nearest(math.log(alt) / math.log(1.002)) if alt >= 1 else 0
         value = min(max(value, 0), 91 * 91 - 1)
         cs = _base91(value, 2)
-        if not _util.number_equal(1.002**value, alt):
+        if not _util.number_equal(1.002**value, alt) and not weather:
+            # a weather report has no comment for a /A=, so there the altitude is the cs step
+            # nearest it (vectors ruling F14)
             altitude_text = _altitude(alt)
     else:
         if data.altitude_feet is not None:
@@ -475,7 +485,9 @@ def _extension(data: PositionedData) -> str:
     if data.course_degrees is not None or data.speed_knots is not None or data.df_bearing or data.storm:
         course = data.course_degrees
         speed = data.speed_knots
-        if course is not None and not 0 <= course <= 360:
+        # rounded first, then checked (vectors ruling F2); 000 is the spec's unknown and reads
+        # back as 0 (F1)
+        if course is not None and not 0 <= _nearest(course) <= 360:
             raise _refuse(f"course {course} is not 0-360")
         if speed is not None and not 0 <= _nearest(speed) <= 999:
             raise _refuse(f"speed {speed} is not 0-999 knots")
@@ -513,22 +525,23 @@ def _extension(data: PositionedData) -> str:
 
 def _frequency_text(f: VoiceFrequency) -> str:
     mhz = f.mhz
-    step = Decimal("0.01") if f.ten_khz_resolution else Decimal("0.001")
+    places = 2 if f.ten_khz_resolution else 3
 
-    def digits(value: Decimal, width: int) -> str:
-        # to the nearest 10 kHz or 1 kHz, halves away from zero
-        return f"{value.quantize(step, rounding=ROUND_HALF_UP):0{width}f}"
+    def digits(value: float, width: int) -> str:
+        # to the nearest 10 kHz or 1 kHz, halves away from zero (vectors ruling F2)
+        n = _nearest(value * 10**places)
+        return f"{n // 10**places}.{n % 10**places:0{places}d}".rjust(width, "0")
 
     if mhz >= 1000:
         for letter, base in MICROWAVE_BASE.items():
             if base <= mhz < base + 100:
-                rest = _util.decimal(mhz) - base
+                rest = float(mhz) - base
                 head = letter + (digits(rest, 5) if f.ten_khz_resolution else digits(rest, 6))
                 break
         else:
             raise _refuse(f"frequency {mhz} MHz has no APRS form")
     elif mhz >= 0:
-        head = digits(_util.decimal(mhz), 6) if f.ten_khz_resolution else digits(_util.decimal(mhz), 7)
+        head = digits(float(mhz), 6) if f.ten_khz_resolution else digits(float(mhz), 7)
     else:
         raise _refuse("a frequency is positive")
     if len(head) != (6 if f.ten_khz_resolution else 7):
@@ -547,7 +560,7 @@ def _frequency_text(f: VoiceFrequency) -> str:
     elif f.narrow:
         raise _refuse("narrow is set by a tone letter")
     if f.offset_khz is not None:
-        tens = _nearest(_util.decimal(f.offset_khz) / 10)
+        tens = _nearest(float(f.offset_khz) / 10)
         if abs(tens) > 999:
             raise _refuse("offset too large")
         text += f" {'-' if tens < 0 else '+'}{abs(tens):03d}"
@@ -594,20 +607,22 @@ def _braces(data: PositionedData) -> str:
 
 
 def _snowfall_text(snow: float) -> str:
-    """Snowfall exactly in its three characters, one form for each value: a whole number as three
-    digits (12 as ``012``), a number under 1 as ``.`` and two digits (0.32 as ``.32``, 0.5 as
-    ``.50``), and any other as a digit, ``.`` and a digit (1.5 as ``1.5``). Refused when three
-    characters cannot hold it."""
-    if snow >= 0:
-        if float(snow).is_integer():
-            text = f"{snow:03.0f}"
-        elif snow < 1:
-            text = f"{snow:.2f}".removeprefix("0")
-        else:
-            text = f"{snow:3.1f}"
-        if len(text) == 3 and _util.number_equal(float(text), snow):
-            return text
-    raise _refuse(f"snowfall of {snow} inches cannot be written exactly in three characters")
+    """Snowfall in its three characters (vectors rulings E8 and F3): rounded to hundredths if that
+    leaves it under 1 (0.32 as ``.32``), else to tenths if that leaves it under 10 (1.5 as
+    ``1.5``), else to a whole number; a result that is whole is written as three digits (12 as
+    ``012``, 0.995 as ``001``, 9.96 as ``010``). Refused when it rounds past 999."""
+    hundredths = _nearest(float(snow) * 100)
+    if hundredths < 0:
+        raise _refuse(f"snowfall of {snow} inches is negative")
+    if hundredths < 100:
+        return "000" if hundredths == 0 else f".{hundredths:02d}"
+    tenths = _nearest(float(snow) * 10)
+    if tenths < 100:
+        return f"{tenths // 10:03d}" if tenths % 10 == 0 else f"{tenths // 10}.{tenths % 10}"
+    whole = _nearest(snow)
+    if whole > 999:
+        raise _refuse(f"snowfall of {snow} inches does not fit three digits")
+    return f"{whole:03d}"
 
 
 def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
@@ -618,13 +633,13 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     def num(v: float | None, width: int, scale: float = 1) -> str:
         if v is None:
             return "." * width
-        value = _nearest(_util.decimal(v) * _util.decimal(scale))
+        value = _nearest(float(v) * scale)
         if value < 0 or value >= 10**width:
             raise _refuse(f"weather value {v} does not fit {width} digits")
         return f"{value:0{width}d}"
 
     direction = w.wind_direction_degrees
-    if direction is not None and not 0 <= direction <= 360:
+    if direction is not None and not 0 <= _nearest(direction) <= 360:
         raise _refuse("wind direction is not 0-360")
     if positionless:
         out.append("c" + num(direction, 3) + "s" + num(w.wind_speed_mph, 3))
@@ -913,6 +928,9 @@ def _mic_e(data: MicEReport) -> bytes:
         raise _refuse("Mic-E speed is 0-799 knots")
     if not 0 <= course <= 360:
         raise _refuse("Mic-E course is 0-360")
+    if data.course_degrees is not None and course == 0:
+        # Mic-E course 0 reads back as no course (vectors ruling F1); north is 360
+        raise _refuse("a Mic-E course of 0 has no form; north is 360")
     sp = speed // 10
     sp_char = sp + 80 + 28 if sp <= 18 else sp + 28
     dc = (speed % 10) * 10 + course // 100 + 4
@@ -1166,6 +1184,9 @@ def _telemetry(data: TelemetryReport) -> bytes:
             values.append(f"{iv:03d}" if 0 <= iv <= 999 else str(iv))
         else:
             values.append(_util.number_text(v))
+    if seq == "MIC" and data.analog[0] is None:
+        # no form reads back with the first channel empty after MIC (vectors ruling F12)
+        raise _refuse("T#MIC with an empty first channel has no form")
     head = "T#" + seq + ("" if seq == "MIC" else ",")
     return _checked(data, head + ",".join(values) + "," + data.bits + data.comment)
 
@@ -1228,7 +1249,9 @@ def _query(data: Query) -> bytes:
     text = "?" + data.query_type + "?"
     if data.footprint is not None:
         f = data.footprint
-        if not 0 <= f.radius_miles <= 9999:
+        # whole miles, rounded first (vectors ruling F2)
+        radius = _nearest(f.radius_miles)
+        if not 0 <= radius <= 9999:
             raise _refuse("footprint radius is 0-9999 miles")
         if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
             raise _refuse("footprint latitude or longitude out of range")
@@ -1242,7 +1265,7 @@ def _query(data: Query) -> bytes:
                 if not sent.startswith("-"):
                     sent = " " + sent
             numbers.append(sent)
-        text += f"{numbers[0]},{numbers[1]},{f.radius_miles:04d}"
+        text += f"{numbers[0]},{numbers[1]},{radius:04d}"
     return _checked(data, text)
 
 
