@@ -18,6 +18,8 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable, Iterable
+from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from typing import Any, TypeVar
 
 from . import _util
@@ -204,13 +206,39 @@ def _checked(data: AprsData, info: str) -> bytes:
 # ---------------------------------------------------------------- positions
 
 
-def _minutes_units(value: float, per_minute: int) -> int:
-    """|value| in units of 1/``per_minute`` of a minute of arc, rounded."""
-    return _nearest(abs(value) * 60 * per_minute)
+def _minutes_units(value: float | Fraction, per_minute: int) -> int:
+    """|value| in units of 1/``per_minute`` of a minute of arc, rounded to the nearest.
+
+    The product is taken exactly on the number as written in decimal, so that the answer does not
+    depend on how floating point rounds on the way, and a coordinate that is a half of a step
+    (1.69475 degrees is 101.685 minutes) goes away from zero."""
+    exact = abs(value) * 60 * per_minute if isinstance(value, Fraction) else abs(_util.decimal(value)) * 60 * per_minute
+    return _nearest(exact)
+
+
+_AMBIGUITY_BOX = (1, 10, 100, 1000, 6000)
+"""The box each ambiguity level leaves, in hundredths of a minute: 0.1', 1', 10', 1 degree."""
+
+
+def _ambiguous_units(value: float, ambiguity: int) -> int:
+    """|value| in hundredths of a minute, down to the start of the box that holds it, so that the
+    centre a decoder reports is the one nearest the value (rounding first could move it into the
+    next box)."""
+    box = _AMBIGUITY_BOX[ambiguity]
+    exact = abs(_util.decimal(value)) * 6000 + Decimal("1e-9")
+    return math.floor(exact) // box * box
 
 
 def _is_negative(value: float) -> bool:
     return value < 0 or (value == 0 and math.copysign(1.0, value) < 0)
+
+
+def _compressed_y(lat: float) -> int:
+    return _nearest(380926 * (90 - _util.decimal(lat)))
+
+
+def _compressed_x(lon: float) -> int:
+    return _nearest(190463 * (180 + _util.decimal(lon)))
 
 
 def _dao_digits(data: PositionedData) -> tuple[str, str, int, int]:
@@ -218,12 +246,19 @@ def _dao_digits(data: PositionedData) -> tuple[str, str, int, int]:
     minute to write in the position itself.
 
     A compressed position's DAO adds no precision, so a decoder ignores its digits; they are
-    written as the same DAO would give the position written uncompressed, so that a reader that
-    did apply them would land on the position reported (vectors ruling E2)."""
+    written as the same DAO would give the position the compressed bytes report, written
+    uncompressed, so that a reader that did apply them would land on it (vectors ruling E2)."""
     dao = data.dao
-    lat, lon = data.latitude, data.longitude
+    lat: float | Fraction = data.latitude
+    lon: float | Fraction = data.longitude
     if dao is None or dao.precision is DaoPrecision.NONE:
+        amb = data.ambiguity
+        if amb and 0 < amb < len(_AMBIGUITY_BOX):
+            return " ", " ", _ambiguous_units(data.latitude, amb), _ambiguous_units(data.longitude, amb)
         return " ", " ", _minutes_units(lat, 100), _minutes_units(lon, 100)
+    if data.compressed and -90 <= lat <= 90 and -180 <= lon <= 180:
+        lat = 90 - Fraction(min(max(_compressed_y(data.latitude), 0), 91**4 - 1), 380926)
+        lon = Fraction(min(max(_compressed_x(data.longitude), 0), 91**4 - 1), 190463) - 180
     if dao.precision is DaoPrecision.THOUSANDTHS:
         la, lo = _minutes_units(lat, 1000), _minutes_units(lon, 1000)
         return str(la % 10), str(lo % 10), la // 10, lo // 10
@@ -289,7 +324,7 @@ def _course_speed(course: float, knots: float) -> str:
         raise _refuse(f"course {course} is not 0-360")
     # a course that rounds to 360 is north, c = 0 (vectors interpretations.md, "Re-encoding into
     # compressed bytes rounds")
-    c = _nearest(course / 4) % 90
+    c = _nearest(_util.decimal(course) / 4) % 90
     s = _nearest(math.log(knots + 1) / math.log(1.08)) if knots > 0 else 0
     if not 0 <= s <= 90:
         raise _refuse(f"speed {knots} knots is too high for the compressed format")
@@ -321,8 +356,8 @@ def _compressed(data: PositionedData, weather: bool) -> tuple[str, str]:
     table = data.symbol.table
     if "0" <= table <= "9":
         table = chr(ord(table) - ord("0") + ord("a"))
-    y = _base91(_nearest(380926 * (90 - lat)), 4)
-    x = _base91(_nearest(190463 * (180 + lon)), 4)
+    y = _base91(_compressed_y(lat), 4)
+    x = _base91(_compressed_x(lon), 4)
     ctype = data.compression
     altitude_text = ""
     cs: str | None = None
@@ -478,18 +513,26 @@ def _extension(data: PositionedData) -> str:
 
 def _frequency_text(f: VoiceFrequency) -> str:
     mhz = f.mhz
+    step = Decimal("0.01") if f.ten_khz_resolution else Decimal("0.001")
+
+    def digits(value: Decimal, width: int) -> str:
+        # to the nearest 10 kHz or 1 kHz, halves away from zero
+        return f"{value.quantize(step, rounding=ROUND_HALF_UP):0{width}f}"
+
     if mhz >= 1000:
         for letter, base in MICROWAVE_BASE.items():
             if base <= mhz < base + 100:
-                rest = mhz - base
-                head = f"{letter}{rest:05.2f}" if f.ten_khz_resolution else f"{letter}{rest:06.3f}"
+                rest = _util.decimal(mhz) - base
+                head = letter + (digits(rest, 5) if f.ten_khz_resolution else digits(rest, 6))
                 break
         else:
             raise _refuse(f"frequency {mhz} MHz has no APRS form")
     elif mhz >= 0:
-        head = f"{mhz:06.2f}" if f.ten_khz_resolution else f"{mhz:07.3f}"
+        head = digits(_util.decimal(mhz), 6) if f.ten_khz_resolution else digits(_util.decimal(mhz), 7)
     else:
         raise _refuse("a frequency is positive")
+    if len(head) != (6 if f.ten_khz_resolution else 7):
+        raise _refuse(f"frequency {mhz} MHz rounds past what its digits hold")
     text = head + (" MHz" if f.ten_khz_resolution else "MHz")
     if f.tone is not None:
         if f.tone is ToneType.OFF:
@@ -504,7 +547,7 @@ def _frequency_text(f: VoiceFrequency) -> str:
     elif f.narrow:
         raise _refuse("narrow is set by a tone letter")
     if f.offset_khz is not None:
-        tens = _nearest(f.offset_khz / 10)
+        tens = _nearest(_util.decimal(f.offset_khz) / 10)
         if abs(tens) > 999:
             raise _refuse("offset too large")
         text += f" {'-' if tens < 0 else '+'}{abs(tens):03d}"
@@ -575,7 +618,7 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool) -> str:
     def num(v: float | None, width: int, scale: float = 1) -> str:
         if v is None:
             return "." * width
-        value = _nearest(v * scale)
+        value = _nearest(_util.decimal(v) * _util.decimal(scale))
         if value < 0 or value >= 10**width:
             raise _refuse(f"weather value {v} does not fit {width} digits")
         return f"{value:0{width}d}"
@@ -667,6 +710,10 @@ def _position_body(data: PositionedData) -> Callable[[str], str]:
     if weather:
         if data.comment:
             raise _refuse("a weather report has no comment")
+        if altitude:
+            # the GGA cs bytes hold the altitude only in steps, and the /A= that would carry it
+            # exactly has no comment to go in
+            raise _refuse("a weather report has no comment for an /A= altitude the cs bytes cannot hold")
         if telemetry:
             raise _refuse("a weather report has no comment to carry telemetry")
         others = (data.phg, data.dfs, data.area, data.df_bearing, data.storm, data.frequency, data.signpost)
@@ -842,6 +889,11 @@ def _mic_e(data: MicEReport) -> bytes:
     if data.weather is not None or data.area is not None or data.df_bearing or data.storm or data.signpost:
         raise _refuse("a Mic-E report cannot carry weather, area, DF, storm or signpost data")
     a, o, _, lon_units = _dao_digits(data)
+    no_dao = data.dao is None or data.dao.precision is DaoPrecision.NONE
+    if data.ambiguity and no_dao and 0 < data.ambiguity < len(_AMBIGUITY_BOX):
+        # the longitude digits the latitude's ambiguity covers are ignored by a decoder, which
+        # reports the centre of the box; they are written as that centre
+        lon_units += _AMBIGUITY_BOX[data.ambiguity] // 2
     deg, rem = divmod(lon_units, 6000)
     minutes, hundredths = divmod(rem, 100)
     if deg > 179:

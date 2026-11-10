@@ -384,6 +384,45 @@ def test_rounding_is_half_away_from_zero() -> None:
     assert b"t-03r013" in info
 
 
+def test_rounding_takes_the_number_as_written() -> None:
+    # 1.275 inches is a half of a hundredth as written, though its binary value is just below it,
+    # and 25.548583333333333 degrees is just under 32.915 minutes as written: the nearest step of
+    # the decimal number, halves away from zero, whatever floating point does on the way
+    weather = aprs.Weather(rain_24h_in=1.275, rain_midnight_in=8.415)
+    assert b"p128P842" in aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), weather))
+    position = aprs.PositionReport(latitude=-58.73025, longitude=-25.548583333333333, symbol=Symbol("/", "k"))
+    assert aprs.encode_info(position) == b"!5843.82S/02532.91Wk"
+    assert aprs.encode_info(
+        aprs.PositionReport(
+            latitude=0, longitude=0, symbol=Symbol("/", ">"), comment="", frequency=aprs.VoiceFrequency(146.5205)
+        )
+    ).endswith(b"146.521MHz")
+
+
+def test_ambiguity_writes_the_box_the_value_is_in() -> None:
+    # 3.596 minutes is in the box 3.5 to 3.6 (centre 3.55); rounding it to 3.60 first would put it
+    # in the next box
+    position = aprs.PositionReport(
+        latitude=49 + 3.596 / 60, longitude=-(72 + 1.75 / 60), symbol=Symbol("/", "-"), ambiguity=1
+    )
+    assert aprs.encode_info(position) == b"!4903.5 N/07201.7 W-"
+    # Mic-E longitude digits under ambiguity are ignored, and written as the centre reported
+    for ambiguity, written in ((1, 5), (2, 50)):
+        mic_e = aprs.MicEReport(
+            latitude=36.0,
+            longitude=136 + 0.056 / 60,
+            symbol=Symbol("/", "v"),
+            ambiguity=ambiguity,
+            course_degrees=90,
+            speed_knots=0,
+        )
+        info = aprs.encode_info(mic_e)
+        assert info[3] - 28 == written
+        assert aprs.decode(
+            b"N0CALL>" + aprs.mic_e_destination(mic_e).encode() + b":" + info
+        ).data.longitude == pytest.approx(136 + (0.055 if ambiguity == 1 else 0.5) / 60)
+
+
 def test_mic_e_speed_190_to_199_knots_is_a_slash() -> None:
     # APRS12c ch. 10 gives / and DEL for 190-199 knots; DEL is a control character (ruling E5)
     info = aprs.encode_info(aprs.MicEReport(latitude=33.0, longitude=-112.0, symbol=Symbol("/", ">"), speed_knots=195))
@@ -463,6 +502,22 @@ def test_no_size_limit() -> None:
     text = "\u00e9" * 2000
     info = aprs.encode_info(aprs.StatusReport(text))
     assert len(info) == 4001
+
+
+def test_compressed_weather_altitude_off_the_cs_steps_is_refused() -> None:
+    # the GGA cs bytes hold an altitude in steps, and a weather report has no comment for the /A=
+    # that would carry it exactly
+    data = aprs.PositionReport(
+        latitude=50.7,
+        longitude=10.4,
+        symbol=Symbol("/", "_"),
+        compressed=True,
+        altitude_feet=837.29,
+        weather=aprs.Weather(),
+        compression=aprs.CompressionType(source=aprs.NmeaSource.GGA),
+    )
+    with pytest.raises(EncodeError, match="/A="):
+        aprs.encode_info(data)
 
 
 def test_directed_query_targets() -> None:

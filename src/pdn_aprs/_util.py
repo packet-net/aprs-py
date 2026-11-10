@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal
+from fractions import Fraction
 
 KNOTS_TO_MPH = 1852 / 1609.344
 """Miles per hour in a knot: a nautical mile is 1852 m, a statute mile 1609.344 m."""
@@ -90,13 +92,20 @@ def number_text(value: float) -> str:
     return text
 
 
-def round_half_away(value: float) -> int:
+def decimal(value: float) -> Decimal:
+    """``value`` as the decimal number its shortest text says (``1.69475``, not the binary
+    fraction just below it), so that a value written as a half rounds as a half, and the step a
+    value rounds to does not depend on how floating point rounds on the way."""
+    return Decimal(repr(float(value)))
+
+
+def round_half_away(value: float | Decimal | Fraction) -> int:
     """``value`` rounded to the nearest whole number, halves away from zero (2.5 to 3, -2.5 to
     -3), as the vectors' rules round wherever they say "nearest". Python's ``round`` takes
     halves to the even number instead."""
-    magnitude = abs(value)
+    magnitude = abs(Fraction(value))
     whole = math.floor(magnitude)
-    if magnitude - whole >= 0.5:
+    if magnitude - whole >= Fraction(1, 2):
         whole += 1
     return -whole if value < 0 else whole
 
