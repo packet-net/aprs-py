@@ -4,11 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batches 1 and 2).
+## [0.3.0] - 2026-11-10
+
+The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batches 1 and 2), and the builders close the gaps listed under Added. Some bytes the encoder writes differ from 0.2.0 (see Changed: comment order, rounding, newly refused input), so check any stored expected output. The vectors are pinned at 130fc04.
 
 ### Added
 
-- `Station.object` takes `phg`, `compressed`, `ambiguity`, `precise`, `telemetry` and `range_miles`; `Station.item` takes `course`, `speed`, `speed_kmh`, `altitude`, `altitude_m`, `phg`, `frequency` (with `tone` and `offset_khz`), `compressed`, `range_miles`, `ambiguity`, `precise` and `telemetry`; `Station.mic_e` takes `frequency` (with `tone` and `offset_khz`), `ambiguity`, `precise` and `telemetry`; `Station.weather` takes a `symbol` (default the weather station symbol, as before); `Station.status` takes a `beam`. They share the position builder's code, so units are converted and rounded once as there. Nothing existing changes, so this is a minor version bump.
+- `Station.object` takes `phg`, `compressed`, `ambiguity`, `precise`, `telemetry` and `range_miles`; `Station.item` takes `course`, `speed`, `speed_kmh`, `altitude`, `altitude_m`, `phg`, `frequency` (with `tone` and `offset_khz`), `compressed`, `range_miles`, `ambiguity`, `precise` and `telemetry`; `Station.mic_e` takes `frequency` (with `tone` and `offset_khz`), `ambiguity`, `precise` and `telemetry`; `Station.weather` takes a `symbol` (default the weather station symbol, as before); `Station.status` takes a `beam`. They share the position builder's code, so units are converted and rounded once as there.
 - `tools/diff_dump.py --build` maps all of these recipe keys instead of reporting them `unsupported`.
 - `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
 
@@ -42,7 +44,7 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - A compressed position whose cs bytes carry a range, a course and speed or wind, with no compression type, is written with the default type byte `C` (it used to be refused for anything but a range).
 - Strict decoding rejects a Mic-E status text where lifting a `!DAO!` would join the bytes either side of it into a Mic-E altitude, since the altitude is looked for before the DAO is lifted.
 
-### Fixed (batch 2)
+### Fixed (decoder)
 
 - Strict decoding rejects Mic-E status text with `mic-e-altitude-not-first` only when there is a later altitude to decline and lifting telemetry or the `!DAO!` would form an altitude across the place it came from; one the bytes already held is kept as text.
 - `Packet.to_ax25` refuses an address with a dash and no SSID (`WIDE1-`).
@@ -115,7 +117,8 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/packet-net/aprs-py/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/packet-net/aprs-py/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/packet-net/aprs-py/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/packet-net/aprs-py/releases/tag/v0.1.0
