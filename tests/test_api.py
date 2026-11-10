@@ -19,14 +19,15 @@ from pdn_aprs import (
     Symbol,
     Timestamp,
     TimestampKind,
+    ToneType,
+    VoiceFrequency,
 )
-from pdn_aprs.neutral import from_neutral, to_neutral
-from pdn_aprs.options import STRICT
+from pdn_aprs._neutral import NeutralFormError, from_neutral, to_neutral
 
 
 def _round_trip(packet: aprs.Packet) -> aprs.Packet:
     """Decode a built packet again: it must read back as the same data, without defects."""
-    again = aprs.decode(packet.to_tnc2())
+    again = aprs.decode_tnc2(packet.to_tnc2())
     assert not [d for d in again.diagnostics if d.severity is not Severity.INFO], again.diagnostics
     assert _close(to_neutral(again.data), to_neutral(packet.data)), (to_neutral(again.data), to_neutral(packet.data))
     return again
@@ -43,27 +44,48 @@ def _close(a: object, b: object) -> bool:
     return a == b
 
 
-STATION = Station("M0LTE-9", via="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
+STATION = Station("M0LTE-9", path="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
 
 
 @pytest.mark.parametrize(
     "packet",
     [
-        STATION.position(51.45, -0.98, course=88, speed=36, altitude=120, comment="Mobile"),
+        STATION.position(51.45, -0.98, course_degrees=88, speed_knots=36, altitude_feet=120, comment="Mobile"),
         STATION.position(-33.8688, 151.2093, timestamp=Timestamp.dhm(1, 2, 3), comment="Sydney"),
-        STATION.position(51.45, -0.98, compressed=True, course=88, speed=0),
-        STATION.position(51.4512, -0.9812, frequency=145.5, tone=77, offset_khz=-600, comment="QRV"),
+        STATION.position(51.45, -0.98, compressed=True, course_degrees=88, speed_knots=0),
+        STATION.position(
+            51.4512,
+            -0.9812,
+            frequency=VoiceFrequency(145.5, tone=ToneType.TONE, tone_value=77, offset_khz=-600),
+            comment="QRV",
+        ),
         STATION.position(51.45, -0.98, ambiguity=2),
         STATION.position(51.45, -0.98, comment=" starts with a space"),
         STATION.position(51.45, -0.98, comment="088/036 looks like course and speed"),
-        STATION.object("LEADER", 49.0583, -72.0292, timestamp=Timestamp.dhm(9, 23, 45), course=88, speed=36),
+        STATION.object(
+            "LEADER", 49.0583, -72.0292, timestamp=Timestamp.dhm(9, 23, 45), course_degrees=88, speed_knots=36
+        ),
         STATION.object("LEADER", 49.0583, -72.0292, timestamp=Timestamp.dhm(9, 23, 45), killed=True),
         STATION.item("AID #2", 49.0583, -72.0292, Symbol.AID_STATION),
-        STATION.mic_e(51.4575, -0.9811, speed=12, course=94, comment="Hello"),
-        STATION.mic_e(-33.8688, 151.2093, message=MicEMessage.EMERGENCY, speed=0),
-        STATION.mic_e(42.3, -71.3, speed=153, course=200, altitude_m=1764),
-        STATION.weather(49.05, -72.03, wind_direction=220, wind_speed=4, gust=5, temperature=-7, humidity=100),
-        STATION.weather(wind_direction=220, wind_speed=4, gust=5, temperature=77, timestamp=Timestamp.mdhm(1, 2, 3, 4)),
+        STATION.mic_e(51.4575, -0.9811, speed_knots=12, course_degrees=94, comment="Hello"),
+        STATION.mic_e(-33.8688, 151.2093, mic_e_message=MicEMessage.EMERGENCY, speed_knots=0),
+        STATION.mic_e(42.3, -71.3, speed_knots=153, course_degrees=200, altitude_m=1764),
+        STATION.weather(
+            49.05,
+            -72.03,
+            wind_direction_degrees=220,
+            wind_speed_mph=4,
+            wind_gust_mph=5,
+            temperature_f=-7,
+            humidity_percent=100,
+        ),
+        STATION.weather(
+            wind_direction_degrees=220,
+            wind_speed_mph=4,
+            wind_gust_mph=5,
+            temperature_f=77,
+            timestamp=Timestamp.mdhm(1, 2, 3, 4),
+        ),
         STATION.message("G4ABC", "Hello", message_id="1"),
         STATION.message("G4ABC", "Hi", message_id="01", reply_ack=""),
         STATION.ack("G4ABC", "1"),
@@ -73,7 +95,6 @@ STATION = Station("M0LTE-9", via="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging
         STATION.status("On the air"),
         STATION.status(locator="IO91SX", symbol=Symbol.GRID_SQUARE),
         STATION.telemetry(5, [199, 0, 255, 73, 123], "01101001"),
-        STATION.telemetry("MIC", [1.5, None, 3, 4, 5]),
         STATION.telemetry_names(["Battery", "Temp"]),
         STATION.telemetry_units(["V", "degC"]),
         STATION.telemetry_coefficients([0, 5.2, 0, 0, 0.53, -32]),
@@ -90,13 +111,13 @@ def test_station_needs_a_symbol() -> None:
 
 
 def test_station_metric_units() -> None:
-    packet = STATION.position(51.45, -0.98, course=88, speed_kmh=100, altitude_m=30.48)
+    packet = STATION.position(51.45, -0.98, course_degrees=88, speed_kmh=100, altitude_m=30.48)
     assert packet.info.endswith(b">088/054/A=000100")
-    assert STATION.mic_e(51.45, -0.98, speed_kmh=18.52).data == STATION.mic_e(51.45, -0.98, speed=10).data
+    assert STATION.mic_e(51.45, -0.98, speed_kmh=18.52).data == STATION.mic_e(51.45, -0.98, speed_knots=10).data
     weather = STATION.weather(49.05, -72.03, temperature_c=25, rain_1h_mm=25.4)
     assert b"t077r100" in weather.info
     with pytest.raises(ValueError, match="both units"):
-        STATION.position(51.45, -0.98, speed=10, speed_kmh=18.52)
+        STATION.position(51.45, -0.98, speed_knots=10, speed_kmh=18.52)
 
 
 def test_station_mic_e_altitude_in_metres_or_feet() -> None:
@@ -105,31 +126,67 @@ def test_station_mic_e_altitude_in_metres_or_feet() -> None:
     assert in_metres.info.endswith(b'"4{}')
     assert isinstance(in_metres.data, aprs.MicEReport)
     for feet, written in ((0, b"/A=000000"), (1250, b"/A=001250"), (-12.5, b"/A=-00013")):
-        assert STATION.mic_e(51.45, -0.98, altitude=feet).info.endswith(written)
+        assert STATION.mic_e(51.45, -0.98, altitude_feet=feet).info.endswith(written)
 
 
 @pytest.mark.parametrize("course", [0, 0.3])
 def test_station_course_0_is_unknown(course: float) -> None:
     # B1: a builder's course of 0 is the spec's unknown; north is 360
-    assert STATION.position(51.45, -0.98, course=course, speed=5).info.endswith(b">000/005")  # type: ignore[arg-type]
-    mic_e = STATION.mic_e(51.45, -0.98, course=course, speed=5)  # type: ignore[arg-type]
+    assert STATION.position(51.45, -0.98, course_degrees=course, speed_knots=5).info.endswith(b">000/005")
+    mic_e = STATION.mic_e(51.45, -0.98, course_degrees=course, speed_knots=5)
     assert isinstance(mic_e.data, aprs.MicEReport)
     assert mic_e.data.course_degrees is None
-    assert aprs.decode(mic_e.to_tnc2()).data == mic_e.data
+    assert aprs.decode_tnc2(mic_e.to_tnc2()).data == mic_e.data
     with pytest.raises(EncodeError):
-        STATION.position(51.45, -0.98, course=course, speed=5, compressed=True)  # type: ignore[arg-type]
+        STATION.position(51.45, -0.98, course_degrees=course, speed_knots=5, compressed=True)
 
 
 def test_station_telemetry_sequence_over_999_is_refused() -> None:
     # B6: refused, not wrapped
     assert STATION.telemetry(999, [1, 2, 3, 4, 5]).info.startswith(b"T#999,")
-    with pytest.raises(ValueError, match="0-999"):
+    with pytest.raises(EncodeError, match="0-999"):
         STATION.telemetry(1000, [1, 2, 3, 4, 5])
+    with pytest.raises(EncodeError):
+        STATION.telemetry(-1, [1, 2, 3, 4, 5])
+
+
+def test_mic_e_altitude_in_comment_is_set_by_the_decoder() -> None:
+    # D8: data says how its altitude is written, so a copy encodes to the same bytes
+    in_feet = STATION.mic_e(51.45, -0.98, altitude_feet=100.5, comment="x")
+    decoded = aprs.decode_tnc2(str(in_feet)).data
+    assert isinstance(decoded, aprs.MicEReport)
+    assert decoded.altitude_in_comment
+    assert aprs.encode_info(decoded) == in_feet.info
+    in_metres = aprs.decode_tnc2(str(STATION.mic_e(51.45, -0.98, altitude_m=100, comment="x"))).data
+    assert isinstance(in_metres, aprs.MicEReport)
+    assert not in_metres.altitude_in_comment
+
+
+def test_one_voice_frequency_keyword() -> None:
+    # D4: MHz or a whole VoiceFrequency, rounded to the field's step, never a bare tone
+    assert STATION.position(51.45, -0.98, frequency=145.5).info.endswith(b"145.500MHz")
+    assert STATION.position(51.45, -0.98, frequency=145.5004).info.endswith(b"145.500MHz")
+    with pytest.raises(TypeError):
+        STATION.position(51.45, -0.98, frequency=145.5, tone=77)  # type: ignore[call-arg]
+
+
+def test_public_surface_after_cleanup() -> None:
+    assert aprs.DEFAULT_DESTINATION == "APZ001"
+    assert aprs.MESSAGE_TEXT_LIMIT == 67
+    assert aprs.DATABASE_VERSION
+    assert not hasattr(aprs, "decode")
+    assert not hasattr(aprs, "Fix")
+    assert not hasattr(aprs, "NmeaSource")
+    assert aprs.Phg(3, 3, 3, 3, None).gain_db == 3
+    assert aprs.PathEntry("WIDE1-1", True).address == "WIDE1-1"
+    assert issubclass(NeutralFormError, aprs.AprsError)
+    with pytest.raises(ImportError):
+        __import__("pdn_aprs.neutral")
 
 
 def test_station_path_forms() -> None:
-    assert Station("M0LTE", via="WIDE1-1, WIDE2-1").path == ("WIDE1-1", "WIDE2-1")
-    assert Station("M0LTE", via=["WIDE1-1"]).path == ("WIDE1-1",)
+    assert Station("M0LTE", path="WIDE1-1, WIDE2-1").path == ("WIDE1-1", "WIDE2-1")
+    assert Station("M0LTE", path=["WIDE1-1"]).path == ("WIDE1-1",)
 
 
 def test_timestamp_from_datetime() -> None:
@@ -141,7 +198,12 @@ def test_timestamp_from_datetime() -> None:
 
 def test_mic_e_destination_is_computed() -> None:
     packet = STATION.mic_e(
-        33.42733333333334, -112.129, Symbol.JEEP, message=MicEMessage.RETURNING, speed=20, course=251
+        33.42733333333334,
+        -112.129,
+        Symbol.JEEP,
+        mic_e_message=MicEMessage.RETURNING,
+        speed_knots=20,
+        course_degrees=251,
     )
     assert packet.destination == "S32UVT"
 
@@ -167,7 +229,7 @@ def test_kiss_round_trip_with_escapes() -> None:
 
 
 def test_ax25_needs_ax25_addresses() -> None:
-    packet = aprs.decode("M0LTE>APZ001,TCPIP*,qAC,T2TEST:>hi")
+    packet = aprs.decode_tnc2("M0LTE>APZ001,TCPIP*,qAC,T2TEST:>hi")
     with pytest.raises(EncodeError, match=r"AX\.25"):
         packet.to_ax25()
 
@@ -182,24 +244,24 @@ def test_kiss_rejects_non_data_frames() -> None:
 
 def test_decode_str_and_bytes_agree() -> None:
     line = "N0CALL>APZ001:>73 de M0LTE °"
-    assert aprs.decode(line).data == aprs.decode(line.encode("utf-8")).data
+    assert aprs.decode_tnc2(line).data == aprs.decode_tnc2(line.encode("utf-8")).data
 
 
 def test_header_error_carries_diagnostics() -> None:
     with pytest.raises(HeaderError) as info:
-        aprs.decode("no header at all")
+        aprs.decode_tnc2("no header at all")
     assert [str(d) for d in info.value.diagnostics] == ["error:invalid-header"]
 
 
 def test_non_utf8_text_is_latin1_with_a_warning() -> None:
-    packet = aprs.decode(b"N0CALL>APZ001:>DX: 67\xf8 22:18")
+    packet = aprs.decode_tnc2(b"N0CALL>APZ001:>DX: 67\xf8 22:18")
     assert isinstance(packet.data, aprs.StatusReport)
     assert packet.data.text == "DX: 67ø 22:18"
     assert [str(d) for d in packet.diagnostics] == ["warning:non-utf8-text"]
 
 
 def test_warnings_and_errors() -> None:
-    packet = aprs.decode("N0CALL>APZ001:!4903.50n/07201.75W-")
+    packet = aprs.decode_tnc2("N0CALL>APZ001:!4903.50n/07201.75W-")
     assert [d.code for d in packet.warnings] == [DiagnosticCode.LOWERCASE_HEMISPHERE]
     assert packet.errors == ()
 
@@ -244,11 +306,11 @@ def test_symbols() -> None:
 
 
 def test_devices() -> None:
-    device = aprs.decode("N0CALL>APDW18:>hi").device
+    device = aprs.decode_tnc2("N0CALL>APDW18:>hi").device
     assert device is not None
     assert (device.vendor, device.model) == ("WB2OSZ", "DireWolf")
-    assert aprs.decode("N0CALL>APZZZZ:>hi").device is not None
-    assert aprs.decode("N0CALL>QQQQQQ:>hi").device is None
+    assert aprs.decode_tnc2("N0CALL>APZZZZ:>hi").device is not None
+    assert aprs.decode_tnc2("N0CALL>QQQQQQ:>hi").device is None
 
 
 def test_timestamps() -> None:
@@ -319,7 +381,7 @@ def test_encoder_refuses(data: aprs.AprsData) -> None:
 
 def test_nmea_comment_after_checksum() -> None:
     line = "N0CALL>APT311:$GPRMC,204717,A,3242.4549,N,08527.2835,W,000,340,090207,,*0C/Home Station by TinyTrack"
-    packet = aprs.decode(line)
+    packet = aprs.decode_tnc2(line)
     assert isinstance(packet.data, aprs.NmeaSentence)
     assert packet.data.sentence.endswith(",*0C")
     assert packet.data.comment == "/Home Station by TinyTrack"
@@ -334,7 +396,7 @@ def test_nmea_comment_after_checksum() -> None:
 def test_snowfall_is_written_exactly(snow: float, text: str) -> None:
     info = aprs.encode_info(aprs.PositionlessWeather(Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)))
     assert info.endswith(text.encode())
-    assert aprs.decode(b"N0CALL>APZ001:" + info).data == aprs.PositionlessWeather(
+    assert aprs.decode_tnc2(b"N0CALL>APZ001:" + info).data == aprs.PositionlessWeather(
         Timestamp("10090556"), aprs.Weather(snow_24h_in=snow)
     )
 
@@ -365,8 +427,8 @@ def test_snowfall_is_rounded_into_its_three_forms(snow: float, text: bytes) -> N
 def test_footprint_space_only_before_a_positive_value(latitude: float, longitude: float, info: bytes) -> None:
     query = aprs.Query("APRS", aprs.Footprint(latitude, longitude, 200))
     assert aprs.encode_info(query) == info
-    assert aprs.decode(b"N0CALL>APZ001:" + info).data == query
-    assert isinstance(aprs.decode("N0CALL>APZ001:?APRS? 34.02,- 17.15,0200").data, aprs.Unrecognized)
+    assert aprs.decode_tnc2(b"N0CALL>APZ001:" + info).data == query
+    assert isinstance(aprs.decode_tnc2("N0CALL>APZ001:?APRS? 34.02,- 17.15,0200").data, aprs.Unrecognized)
 
 
 @pytest.mark.parametrize(
@@ -374,7 +436,7 @@ def test_footprint_space_only_before_a_positive_value(latitude: float, longitude
 )
 def test_footprint_numbers_as_sent(info: str) -> None:
     # a footprint number is one as a telemetry value is, so it keeps its text as sent
-    assert aprs.encode_info(aprs.decode("N0CALL>APZ001:" + info).data) == info.encode()
+    assert aprs.encode_info(aprs.decode_tnc2("N0CALL>APZ001:" + info).data) == info.encode()
 
 
 @pytest.mark.parametrize(
@@ -398,17 +460,17 @@ def test_footprint_numbers_as_sent(info: str) -> None:
     ],
 )
 def test_encoder_writes_the_canonical_bytes(info: str, written: str | None) -> None:
-    got = aprs.encode_info(aprs.decode("N0CALL>APZ001:" + info).data).decode("utf-8")
+    got = aprs.encode_info(aprs.decode_tnc2("N0CALL>APZ001:" + info).data).decode("utf-8")
     if written is None:
         assert got != info
         # what it wrote is canonical: it writes it again byte for byte
-        assert aprs.encode_info(aprs.decode("N0CALL>APZ001:" + got).data).decode("utf-8") == got
+        assert aprs.encode_info(aprs.decode_tnc2("N0CALL>APZ001:" + got).data).decode("utf-8") == got
     else:
         assert got == (info if written == "=" else written)
 
 
 def test_mic_e_phgr_then_frequency_has_one_slash() -> None:
-    packet = aprs.decode('N0CALL>S32UVT:`(_fn"Oj/`PHG72604/146.520MHz')
+    packet = aprs.decode_tnc2('N0CALL>S32UVT:`(_fn"Oj/`PHG72604/146.520MHz')
     assert isinstance(packet.data, aprs.MicEReport)
     assert packet.data.phg is not None
     assert packet.data.frequency is not None
@@ -440,7 +502,7 @@ def test_rounding_takes_halves_within_the_tolerance() -> None:
     ).startswith(b"!0001.20N")
     assert aprs.encode_info(
         aprs.PositionReport(
-            latitude=0, longitude=0, symbol=Symbol("/", ">"), comment="", frequency=aprs.VoiceFrequency(146.5205)
+            latitude=0, longitude=0, symbol=Symbol("/", ">"), comment="", frequency=VoiceFrequency(146.5205)
         )
     ).endswith(b"146.521MHz")
 
@@ -455,6 +517,7 @@ def test_ambiguity_writes_the_box_the_value_is_in() -> None:
     # Mic-E longitude digits under ambiguity are ignored, and written as the centre reported
     for ambiguity, written in ((1, 5), (2, 50)):
         mic_e = aprs.MicEReport(
+            mic_e_message=MicEMessage.OFF_DUTY,
             latitude=36.0,
             longitude=136 + 0.056 / 60,
             symbol=Symbol("/", "v"),
@@ -464,21 +527,29 @@ def test_ambiguity_writes_the_box_the_value_is_in() -> None:
         )
         info = aprs.encode_info(mic_e)
         assert info[3] - 28 == written
-        assert aprs.decode(
+        assert aprs.decode_tnc2(
             b"N0CALL>" + aprs.mic_e_destination(mic_e).encode() + b":" + info
         ).data.longitude == pytest.approx(136 + (0.055 if ambiguity == 1 else 0.5) / 60)
 
 
 def test_mic_e_speed_190_to_199_knots_is_a_slash() -> None:
     # APRS12c ch. 10 gives / and DEL for 190-199 knots; DEL is a control character (ruling E5)
-    info = aprs.encode_info(aprs.MicEReport(latitude=33.0, longitude=-112.0, symbol=Symbol("/", ">"), speed_knots=195))
+    info = aprs.encode_info(
+        aprs.MicEReport(
+            latitude=33.0,
+            longitude=-112.0,
+            symbol=Symbol("/", ">"),
+            mic_e_message=MicEMessage.OFF_DUTY,
+            speed_knots=195,
+        )
+    )
     assert info[4:5] == b"/"
 
 
 def test_mic_e_comment_after_rev0_telemetry_starting_0x1d_is_text() -> None:
     # after Rev 0 telemetry a comment starting with 0x1D is text, written straight on (ruling E6)
     line = b"N0CALL>SUSPU4:`c'wl|+>/\x1dABCD/\x1dABCDEhello"
-    packet = aprs.decode(line)
+    packet = aprs.decode_tnc2(line)
     assert aprs.encode_info(packet.data) == packet.info
 
 
@@ -512,7 +583,7 @@ def test_compressed_course_rounds_and_360_is_north(course: float, c: str) -> Non
 
 def test_compressed_speed_byte_of_90_is_written() -> None:
     # APRS12c ch. 9 limits only the course byte to !-z; s = { (90) is a speed (ruling E10)
-    packet = aprs.decode("N0CALL>APZ001:=/5L!!<*e7>{?!")
+    packet = aprs.decode_tnc2("N0CALL>APZ001:=/5L!!<*e7>{?!")
     assert aprs.encode_info(packet.data) == packet.info
 
 
@@ -525,21 +596,21 @@ def test_compressed_speed_byte_of_90_is_written() -> None:
     ],
 )
 def test_delimiter_only_where_needed(info: str) -> None:
-    packet = aprs.decode("N0CALL>APZ001:" + info)
+    packet = aprs.decode_tnc2("N0CALL>APZ001:" + info)
     assert aprs.encode_info(packet.data) == packet.info
 
 
 def test_mic_e_type_code_then_locator_needs_no_slash() -> None:
-    packet = aprs.decode(b"N0CALL>SUSPU4:`c'wl|+>/]wO91SX/G")
+    packet = aprs.decode_tnc2(b"N0CALL>SUSPU4:`c'wl|+>/]wO91SX/G")
     assert aprs.encode_info(packet.data) == packet.info
 
 
 def test_late_altitude_and_phg_in_mic_e_are_written_not_refused() -> None:
     # a clean form exists, so the encoder writes it (ruling E12)
     line = "JA1YKX-1>SUSPU4:'C=?l <1C>#S]PH}#S]PHG33302/W1,KNn-N YOKOHAMA 1200bps="
-    packet = aprs.decode(line.encode("latin-1"))
+    packet = aprs.decode_tnc2(line.encode("latin-1"))
     info = aprs.encode_info(packet.data)
-    again = aprs.decode(b"JA1YKX-1>SUSPU4:" + info)
+    again = aprs.decode_tnc2(b"JA1YKX-1>SUSPU4:" + info)
     assert to_neutral(again.data) == to_neutral(packet.data)
 
 
@@ -560,11 +631,11 @@ def test_compressed_weather_altitude_off_the_cs_steps_is_rounded() -> None:
         compressed=True,
         altitude_feet=837.29,
         weather=aprs.Weather(),
-        compression=aprs.CompressionType(source=aprs.NmeaSource.GGA),
+        compression=aprs.CompressionType(source=aprs.CompressionSource.GGA),
     )
     info = aprs.encode_info(data)
     assert b"/A=" not in info
-    back = aprs.decode(b"N0CALL>APZ001:" + info).data
+    back = aprs.decode_tnc2(b"N0CALL>APZ001:" + info).data
     assert isinstance(back, aprs.PositionReport)
     assert back.altitude_feet is not None
     assert abs(back.altitude_feet - 837.29) < 1
@@ -572,9 +643,12 @@ def test_compressed_weather_altitude_off_the_cs_steps_is_rounded() -> None:
 
 def test_device_wildcard_n_is_a_digit() -> None:
     # aprs-deviceid's n matches a digit: APWnnn is WinAPRS, APDnnn aprsd
-    assert aprs.decode("N0CALL>APW290:>hi").device is not None
-    assert aprs.decode("N0CALL>APD225:>hi").device is not None
-    assert aprs.decode("N0CALL>APWXYZ:>hi").device is None or aprs.decode("N0CALL>APWXYZ:>hi").device.model != "WinAPRS"
+    assert aprs.decode_tnc2("N0CALL>APW290:>hi").device is not None
+    assert aprs.decode_tnc2("N0CALL>APD225:>hi").device is not None
+    assert (
+        aprs.decode_tnc2("N0CALL>APWXYZ:>hi").device is None
+        or aprs.decode_tnc2("N0CALL>APWXYZ:>hi").device.model != "WinAPRS"
+    )
 
 
 def test_station_locator_is_upper_case() -> None:
@@ -593,7 +667,7 @@ def test_directed_query_targets() -> None:
 
 def test_third_party_inner_packet_has_no_q_construct() -> None:
     # a q-construct is only read in the outer header (vectors README, "Addresses and path")
-    packet = aprs.decode("N0CALL>APZ001:}N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello")
+    packet = aprs.decode_tnc2("N0CALL>APZ001:}N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello")
     assert isinstance(packet.data, aprs.ThirdParty)
     inner = packet.data.packet
     assert [str(p) for p in inner.path] == ["WIDE2-1", "qAR", "N2CALL"]
@@ -601,7 +675,7 @@ def test_third_party_inner_packet_has_no_q_construct() -> None:
     again = from_neutral(to_neutral(packet.data))
     assert isinstance(again, aprs.ThirdParty)
     assert again.packet.q_construct is None
-    assert aprs.decode("N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello").q_construct == aprs.QConstruct("qAR", "N2CALL")
+    assert aprs.decode_tnc2("N1CALL>APZ001,WIDE2-1,qAR,N2CALL:>hello").q_construct == aprs.QConstruct("qAR", "N2CALL")
 
 
 def test_neutral_form_leaves_empty_text_and_addresses_out() -> None:
@@ -612,15 +686,15 @@ def test_neutral_form_leaves_empty_text_and_addresses_out() -> None:
 
 
 def test_neutral_round_trip() -> None:
-    packet = aprs.decode("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
+    packet = aprs.decode_tnc2("N1JCM-9>TRQP7T,WA1PLE-4*:`c'wl|+>/`\"4-}_%")
     assert from_neutral(to_neutral(packet.data)) == packet.data
 
 
 def test_device_lookup_is_case_sensitive() -> None:
     # A1: the database lists tocalls in upper case, and a destination is a callsign
-    assert aprs.decode("N0CALL>APN102:>hi").device is not None
-    assert aprs.decode("N0CALL>APNl02:>hi").device is None
-    assert aprs.decode("N0CALL>apn102:>hi").device is None
+    assert aprs.decode_tnc2("N0CALL>APN102:>hi").device is not None
+    assert aprs.decode_tnc2("N0CALL>APNl02:>hi").device is None
+    assert aprs.decode_tnc2("N0CALL>apn102:>hi").device is None
 
 
 @pytest.mark.parametrize(
@@ -636,7 +710,12 @@ def test_course_is_rounded_before_it_is_checked(course: float, written: bytes) -
 def test_course_0_is_refused_where_it_reads_back_otherwise(course: float) -> None:
     # F1: Mic-E 0 reads back as no course, a compressed c of 0 as 360
     mic_e = aprs.MicEReport(
-        latitude=33.4, longitude=-112.1, symbol=Symbol("/", "j"), course_degrees=course, speed_knots=20
+        mic_e_message=MicEMessage.OFF_DUTY,
+        latitude=33.4,
+        longitude=-112.1,
+        symbol=Symbol("/", "j"),
+        course_degrees=course,
+        speed_knots=20,
     )
     with pytest.raises(EncodeError):
         aprs.encode_info(mic_e)
@@ -689,6 +768,7 @@ def test_mic_e_with_an_empty_first_channel_is_refused() -> None:
 def test_mic_e_locator_then_telemetry_or_dao(extra: dict[str, object], status: bytes) -> None:
     # F16: telemetry and a DAO are lifted before the locator is read, so nothing is missing
     data = aprs.MicEReport(
+        mic_e_message=MicEMessage.OFF_DUTY,
         latitude=33.42733333333334,
         longitude=-112.129,
         symbol=Symbol("/", "j"),
@@ -696,17 +776,17 @@ def test_mic_e_locator_then_telemetry_or_dao(extra: dict[str, object], status: b
         speed_knots=20,
         type_code="`",
         locator="IO91",
-        **extra,  # type: ignore[arg-type]
+        **extra,
     )
     info = aprs.encode_info(data)
     assert status in info
-    back = aprs.decode(b"N0CALL>" + aprs.mic_e_destination(data).encode() + b":" + info)
+    back = aprs.decode_tnc2(b"N0CALL>" + aprs.mic_e_destination(data).encode() + b":" + info)
     assert not back.diagnostics
 
 
 def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
     # F17: a locator is read only at the start of the status text
-    back = aprs.decode('N0CALL>S32UVT:`(_fn"Oj/]PHG3330IO91SX/G')
+    back = aprs.decode_tnc2('N0CALL>S32UVT:`(_fn"Oj/]PHG3330IO91SX/G')
     assert isinstance(back.data, aprs.MicEReport)
     assert back.data.locator is None
     assert back.data.comment == "IO91SX/G"
@@ -715,9 +795,9 @@ def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
 @pytest.mark.parametrize("comment", ["{5}", "{}", "}:LoRa iGate"])
 def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) -> None:
     # E12: after /A=000101, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
-    packet = STATION.mic_e(33.46, -2.69, altitude=100.5, comment=comment)
+    packet = STATION.mic_e(33.46, -2.69, altitude_feet=100.5, comment=comment)
     assert packet.info.endswith(b"/A=000101 " + comment.encode())
-    back = aprs.decode(packet.to_tnc2())
+    back = aprs.decode_tnc2(packet.to_tnc2())
     assert not back.diagnostics
     assert isinstance(back.data, aprs.MicEReport)
     assert back.data.comment == comment
@@ -777,13 +857,13 @@ def test_compressed_cs_values_without_a_compression_type_get_the_default() -> No
         range_miles=2,
     )
     assert aprs.encode_info(data) == b"!/5`=k<;>x>{!C"
-    late = aprs.decode("N0CALL>APZ001:!/5L!!<*e7>  G RNG0025hello").data
+    late = aprs.decode_tnc2("N0CALL>APZ001:!/5L!!<*e7>  G RNG0025hello").data
     assert aprs.encode_info(late) == b"!/5L!!<*e7>{BChello"
 
 
 def test_area_offsets_are_digits() -> None:
     # Tyy/Cxx takes digits: 7 0/310 is comment text, not an area
-    packet = aprs.decode("N0CALL>APZ001:;SEARCH 1 *092345z4903.50N\\07201.75Wl7 0/310 0/310")
+    packet = aprs.decode_tnc2("N0CALL>APZ001:;SEARCH 1 *092345z4903.50N\\07201.75Wl7 0/310 0/310")
     assert isinstance(packet.data, aprs.ObjectReport)
     assert packet.data.area is None
     assert packet.data.comment == "7 0/310 0/310"
@@ -793,14 +873,14 @@ def test_area_offsets_are_digits() -> None:
 @pytest.mark.parametrize("ssid", ["00", "0", "07"])
 def test_ax25_refuses_an_ssid_it_cannot_carry_as_sent(ssid: str) -> None:
     # -00 would come back from the frame as no SSID
-    packet = aprs.decode(f"N0CALL>APZ001:}}WB4APR-{ssid}>APRS,TCPIP,G9RXG*:>hi")
+    packet = aprs.decode_tnc2(f"N0CALL>APZ001:}}WB4APR-{ssid}>APRS,TCPIP,G9RXG*:>hi")
     assert isinstance(packet.data, aprs.ThirdParty)
     with pytest.raises(EncodeError, match="leading zero"):
         packet.data.packet.to_ax25()
 
 
 def test_unknown_snowfall_after_a_compressed_gga_position_counts_as_present() -> None:
-    packet = aprs.decode(
+    packet = aprs.decode_tnc2(
         "KA7HOS-10>APDW16,qAR,KA7HOS-10:=Aid_15oum_wuxs   *111111z3714.14N/11338.11W+`STG Marathon Aid Station 15"
     )
     assert isinstance(packet.data, aprs.PositionReport)
@@ -812,22 +892,22 @@ def test_unknown_snowfall_after_a_compressed_gga_position_counts_as_present() ->
 def test_strict_mic_e_with_no_later_altitude_reads_as_lenient() -> None:
     # lifting the telemetry leaves RWJ}, which is text: nothing to decline, so no rejection
     line = '`j.po_Tk/`"=K3RW|)>%v|J}146.520MHz 146.970(127.3)_6'
-    lenient = aprs.decode(b"N0CALL>S32UVT:" + line.encode())
-    strict = aprs.decode(b"N0CALL>S32UVT:" + line.encode(), STRICT)
+    lenient = aprs.decode_tnc2(b"N0CALL>S32UVT:" + line.encode())
+    strict = aprs.decode_tnc2(b"N0CALL>S32UVT:" + line.encode(), aprs.ParseOptions.strict())
     assert isinstance(strict.data, aprs.MicEReport)
     assert strict.data == lenient.data
 
 
 def test_storm_data_with_a_space_in_a_field_is_text() -> None:
     line = ";BRENDA   *092345z4903.50N\\07202.75W@088/036/HC/150^200/0980> 90&030%040"
-    packet = aprs.decode(b"N0CALL>APZ001:" + line.encode())
+    packet = aprs.decode_tnc2(b"N0CALL>APZ001:" + line.encode())
     assert isinstance(packet.data, aprs.ObjectReport)
     assert packet.data.storm is None
     assert packet.data.comment == "HC/150^200/0980> 90&030%040"
 
 
 def test_ax25_refuses_a_dash_with_no_ssid() -> None:
-    packet = aprs.decode("N0CALL>APZ001:}N0CALL>APZ,WIDE1-*,WIDE2-1*:>x")
+    packet = aprs.decode_tnc2("N0CALL>APZ001:}N0CALL>APZ,WIDE1-*,WIDE2-1*:>x")
     assert isinstance(packet.data, aprs.ThirdParty)
     with pytest.raises(EncodeError, match="dash"):
         packet.data.packet.to_ax25()
@@ -835,26 +915,36 @@ def test_ax25_refuses_a_dash_with_no_ssid() -> None:
 
 def test_strict_mic_e_rejects_only_an_altitude_joined_across_a_lifted_place() -> None:
     # "3z} was in the bytes already: kept; II!} forms across the place of the DAO lifted: rejected
-    kept = aprs.decode('N0CALL>PURWS8:`l(tmz#<X|!wII!}3/"3z}</"3z}', STRICT)
+    kept = aprs.decode_tnc2('N0CALL>PURWS8:`l(tmz#<X|!wII!}3/"3z}</"3z}', aprs.ParseOptions.strict())
     assert isinstance(kept.data, aprs.MicEReport)
     assert kept.data.dao is not None
-    joined = aprs.decode("N0CALL>U5TVQS:`0)1839h0654.57S/10742fl!X>/'\";X|!wII!!wII!}3", STRICT)
+    joined = aprs.decode_tnc2(
+        "N0CALL>U5TVQS:`0)1839h0654.57S/10742fl!X>/'\";X|!wII!!wII!}3", aprs.ParseOptions.strict()
+    )
     assert isinstance(joined.data, aprs.Unrecognized)
 
 
 def test_object_and_item_take_the_position_options() -> None:
     st = Station("N0CALL", symbol=Symbol.CAR)
     phg = aprs.Phg(2, 3, 4, 0)
-    obj = st.object("OBJ", 51.5, -1.0, course=90, speed_kmh=37.04, altitude_m=100, ambiguity=1)
+    obj = st.object("OBJ", 51.5, -1.0, course_degrees=90, speed_kmh=37.04, altitude_m=100, ambiguity=1)
     assert obj.data.ambiguity == 1
     assert obj.data.speed_knots == pytest.approx(20)
     assert st.object("OBJ", 51.5, -1.0, phg=phg).data.phg == phg
-    item = st.item("ITEM", 51.5, -1.0, compressed=True, course=88, speed=36, frequency=146.52, tone=100)
+    item = st.item(
+        "ITEM",
+        51.5,
+        -1.0,
+        compressed=True,
+        course_degrees=88,
+        speed_knots=36,
+        frequency=VoiceFrequency(146.52, tone=ToneType.TONE, tone_value=100),
+    )
     assert item.data.compressed
     assert item.data.frequency.mhz == 146.52
-    assert st.item("ITEM", 51.5, -1.0, precise=True, range_miles=20).data.dao is not None
+    assert st.item("ITEM", 51.5, -1.0, dao=True, range_miles=20).data.dao is not None
     with pytest.raises(ValueError, match="once"):
-        st.item("ITEM", 51.5, -1.0, speed=1, speed_kmh=2)
+        st.item("ITEM", 51.5, -1.0, speed_knots=1, speed_kmh=2)
 
 
 def test_mic_e_takes_frequency_ambiguity_dao_and_telemetry() -> None:
@@ -862,14 +952,14 @@ def test_mic_e_takes_frequency_ambiguity_dao_and_telemetry() -> None:
     got = _round_trip(st.mic_e(51.5, -1.0, ambiguity=2, frequency=145.5)).data
     assert got.ambiguity == 2
     assert got.frequency.mhz == 145.5
-    got = _round_trip(st.mic_e(51.5, -1.0, precise=True, telemetry=aprs.CommentTelemetry(1, (2, 3)))).data
+    got = _round_trip(st.mic_e(51.5, -1.0, dao=True, telemetry=aprs.CommentTelemetry(1, (2, 3)))).data
     assert got.dao is not None
     assert got.telemetry.analog == (2, 3)
 
 
 def test_weather_takes_any_symbol_and_status_a_beam() -> None:
     st = Station("N0CALL")
-    wx = st.weather(51.5, -1.0, symbol=Symbol.parse("\\_"), temperature=60)
+    wx = st.weather(51.5, -1.0, symbol=Symbol.parse("\\_"), temperature_f=60)
     assert wx.to_tnc2().decode().endswith("W_.../...g...t060")
     assert st.status("hi", beam=aprs.Beam("B", "7")).to_tnc2().decode().endswith(">hi^B7")
 
@@ -877,25 +967,25 @@ def test_weather_takes_any_symbol_and_status_a_beam() -> None:
 def test_dao_with_ambiguity_is_refused_by_item_and_mic_e() -> None:
     st = Station("N0CALL", symbol=Symbol.CAR)
     with pytest.raises(EncodeError, match="ambiguous"):
-        st.item("ITEM", 51.5, -1.0, ambiguity=1, precise=True)
+        st.item("ITEM", 51.5, -1.0, ambiguity=1, dao=True)
     with pytest.raises(EncodeError, match="ambiguous"):
-        st.mic_e(51.5, -1.0, ambiguity=1, precise=True)
+        st.mic_e(51.5, -1.0, ambiguity=1, dao=True)
 
 
 def test_mic_e_speed_in_both_units_is_refused() -> None:
     st = Station("N0CALL", symbol=Symbol.CAR)
     with pytest.raises(ValueError, match="once"):
-        st.mic_e(51.5, -1.0, speed=5, speed_kmh=10)
+        st.mic_e(51.5, -1.0, speed_knots=5, speed_kmh=10)
 
 
 def test_positionless_weather_refuses_a_symbol() -> None:
     with pytest.raises(ValueError, match="no symbol"):
-        Station("N0CALL").weather(symbol=Symbol.parse("\\_"), temperature=60)
+        Station("N0CALL").weather(symbol=Symbol.parse("\\_"), temperature_f=60)
 
 
 def test_ambiguous_object_and_compressed_item_bytes() -> None:
     st = Station("N0CALL", symbol=Symbol.CAR)
     obj = st.object("OBJ", 51.5, -1.0, timestamp=Timestamp.dhm(9, 23, 45), ambiguity=2)
     assert obj.to_tnc2() == b"N0CALL>APZ001:;OBJ      *092345z5130.  N/00100.  W>"
-    item = st.item("ITEM", 51.5, -1.0, compressed=True, course=88, speed=36)
+    item = st.item("ITEM", 51.5, -1.0, compressed=True, course_degrees=88, speed_knots=36)
     assert item.to_tnc2() == b"N0CALL>APZ001:)ITEM!/4K!!N7!!>7PC"

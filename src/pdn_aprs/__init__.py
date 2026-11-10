@@ -1,7 +1,7 @@
 """APRS (Automatic Packet Reporting System) decoding and encoding.
 
 >>> import pdn_aprs
->>> packet = pdn_aprs.decode("M0LTE-9>APZ001,WIDE1-1:!5130.00N/00007.00W>088/036Mobile")
+>>> packet = pdn_aprs.decode_tnc2("M0LTE-9>APZ001,WIDE1-1:!5130.00N/00007.00W>088/036Mobile")
 >>> packet.data.latitude, packet.data.course_degrees, packet.data.comment
 (51.5, 88, 'Mobile')
 """
@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from ._decode import decode_ax25, decode_kiss, decode_tnc2
 from .builder import Station
-from .devices import Device
+from .devices import DATABASE_VERSION, Device
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
-from .encode import build_packet, encode_info, mic_e_destination
+from .encode import DEFAULT_DESTINATION, MESSAGE_TEXT_LIMIT, build_packet, encode_info, mic_e_destination
 from .errors import AprsError, EncodeError, HeaderError
 from .model import (
     Ack,
@@ -25,14 +25,15 @@ from .model import (
     Bulletin,
     Capabilities,
     CommentTelemetry,
+    CompressionFix,
     CompressionOrigin,
+    CompressionSource,
     CompressionType,
     Dao,
     DaoPrecision,
     DfBearing,
     Dfs,
     DirectedQuery,
-    Fix,
     Footprint,
     ItemReport,
     MaidenheadBeacon,
@@ -41,7 +42,6 @@ from .model import (
     MicEReport,
     NmeaFix,
     NmeaSentence,
-    NmeaSource,
     NwsBulletin,
     ObjectReport,
     Phg,
@@ -78,10 +78,10 @@ from .symbols import Symbol
 
 __version__ = "0.3.0"
 
-decode = decode_tnc2
-"""Decode a TNC2 / APRS-IS line (``str`` or ``bytes``); see :func:`decode_tnc2`."""
-
 __all__ = [
+    "DATABASE_VERSION",
+    "DEFAULT_DESTINATION",
+    "MESSAGE_TEXT_LIMIT",
     "Ack",
     "AgreloDf",
     "AprsData",
@@ -93,7 +93,9 @@ __all__ = [
     "Bulletin",
     "Capabilities",
     "CommentTelemetry",
+    "CompressionFix",
     "CompressionOrigin",
+    "CompressionSource",
     "CompressionType",
     "Dao",
     "DaoPrecision",
@@ -104,7 +106,6 @@ __all__ = [
     "DiagnosticCode",
     "DirectedQuery",
     "EncodeError",
-    "Fix",
     "Footprint",
     "HeaderError",
     "ItemReport",
@@ -114,7 +115,6 @@ __all__ = [
     "MicEReport",
     "NmeaFix",
     "NmeaSentence",
-    "NmeaSource",
     "NwsBulletin",
     "ObjectReport",
     "Packet",
@@ -153,7 +153,6 @@ __all__ = [
     "WeatherExtra",
     "__version__",
     "build_packet",
-    "decode",
     "decode_ax25",
     "decode_kiss",
     "decode_tnc2",

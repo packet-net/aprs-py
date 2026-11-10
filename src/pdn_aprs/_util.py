@@ -12,6 +12,11 @@ KNOTS_TO_MPH = 1852 / 1609.344
 
 FEET_PER_METRE = 1 / 0.3048
 
+KMH_PER_KNOT = 1.852
+"""Kilometres per hour in a knot: a nautical mile is exactly 1852 m."""
+
+MM_PER_INCH = 25.4
+
 BASE91_MIN = 33
 BASE91_MAX = 123
 

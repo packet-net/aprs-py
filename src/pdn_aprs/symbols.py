@@ -21,8 +21,8 @@ from typing import ClassVar
 
 __all__ = ["Symbol"]
 
-PRIMARY_TABLE = "/"
-ALTERNATE_TABLE = "\\"
+_PRIMARY_TABLE = "/"
+_ALTERNATE_TABLE = "\\"
 
 
 def _is_overlay(ch: str) -> bool:
@@ -233,12 +233,12 @@ class Symbol:
 
     @property
     def is_primary(self) -> bool:
-        return self.table == PRIMARY_TABLE
+        return self.table == _PRIMARY_TABLE
 
     @property
     def is_alternate(self) -> bool:
         """True for the alternate table, with or without an overlay."""
-        return self.table == ALTERNATE_TABLE or _is_overlay(self.table)
+        return self.table == _ALTERNATE_TABLE or _is_overlay(self.table)
 
     @property
     def overlay(self) -> str | None:
@@ -248,7 +248,7 @@ class Symbol:
     @property
     def base(self) -> Symbol:
         """This symbol without its overlay."""
-        return Symbol(ALTERNATE_TABLE, self.code) if self.overlay else self
+        return Symbol(_ALTERNATE_TABLE, self.code) if self.overlay else self
 
     def with_overlay(self, overlay: str | int) -> Symbol:
         """This alternate-table symbol with an overlay character (``0``-``9`` or ``A``-``Z``)."""
@@ -272,7 +272,9 @@ class Symbol:
     @property
     def is_valid(self) -> bool:
         """True when the table is ``/``, ``\\`` or an overlay and the code is printable ASCII."""
-        return (self.table in (PRIMARY_TABLE, ALTERNATE_TABLE) or _is_overlay(self.table)) and ("!" <= self.code <= "~")
+        return (self.table in (_PRIMARY_TABLE, _ALTERNATE_TABLE) or _is_overlay(self.table)) and (
+            "!" <= self.code <= "~"
+        )
 
 
 _DEFINED: tuple[tuple[str, str, str, str], ...] = (
