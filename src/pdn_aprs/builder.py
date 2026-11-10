@@ -29,6 +29,7 @@ from .encode import DEFAULT_DESTINATION, build_packet
 from .model import (
     Ack,
     AprsData,
+    Beam,
     Bulletin,
     CommentTelemetry,
     CompressionType,
@@ -108,6 +109,40 @@ def _frequency(
     )
 
 
+def _extras(
+    *,
+    course: float | None,
+    speed: float | None,
+    altitude: float | None,
+    speed_kmh: float | None,
+    altitude_m: float | None,
+    compressed: bool,
+    ambiguity: int,
+    phg: Phg | None,
+    range_miles: float | None,
+    frequency: float | VoiceFrequency | None,
+    tone: float | None,
+    offset_khz: int | None,
+    telemetry: CommentTelemetry | None,
+    precise: bool,
+) -> dict[str, object]:
+    """The fields a position, object or item report share, from the builder's arguments."""
+    speed = _either(speed, speed_kmh, KMH_PER_KNOT, "speed")
+    return {
+        "course_degrees": course,
+        "speed_knots": speed,
+        "altitude_feet": _either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
+        "compressed": compressed,
+        "compression": CompressionType() if compressed and (course is not None or speed is not None) else None,
+        "ambiguity": ambiguity,
+        "phg": phg,
+        "range_miles": range_miles,
+        "frequency": _frequency(frequency, tone, offset_khz),
+        "telemetry": telemetry,
+        "dao": Dao("W", DaoPrecision.BASE91) if precise else None,
+    }
+
+
 @dataclass(frozen=True)
 class Station:
     """A sending station: its callsign, path and habits, and a method for each packet it sends.
@@ -171,7 +206,6 @@ class Station:
         a foot of precision. ``frequency`` (MHz, with ``tone`` in Hz and ``offset_khz``) is the
         voice frequency the station listens on.
         """
-        speed = _either(speed, speed_kmh, KMH_PER_KNOT, "speed")
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -179,17 +213,22 @@ class Station:
             timestamp=_timestamp(timestamp),
             messaging=self.messaging,
             comment=comment,
-            course_degrees=course,
-            speed_knots=speed,
-            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
-            compressed=compressed,
-            compression=CompressionType() if compressed and (course is not None or speed is not None) else None,
-            ambiguity=ambiguity,
-            phg=phg,
-            range_miles=range_miles,
-            frequency=_frequency(frequency, tone, offset_khz),
-            telemetry=telemetry,
-            dao=Dao("W", DaoPrecision.BASE91) if precise else None,
+            **_extras(
+                course=course,
+                speed=speed,
+                altitude=altitude,
+                speed_kmh=speed_kmh,
+                altitude_m=altitude_m,
+                compressed=compressed,
+                ambiguity=ambiguity,
+                phg=phg,
+                range_miles=range_miles,
+                frequency=frequency,
+                tone=tone,
+                offset_khz=offset_khz,
+                telemetry=telemetry,
+                precise=precise,
+            ),
         )
         return self.send(data)
 
@@ -208,9 +247,15 @@ class Station:
         altitude: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
+        compressed: bool = False,
+        ambiguity: int = 0,
+        phg: Phg | None = None,
+        range_miles: float | None = None,
         frequency: float | VoiceFrequency | None = None,
         tone: float | None = None,
         offset_khz: int | None = None,
+        telemetry: CommentTelemetry | None = None,
+        precise: bool = False,
     ) -> Packet:
         """An object report: something else's position, under a name of up to 9 characters.
 
@@ -228,10 +273,22 @@ class Station:
             longitude=longitude,
             symbol=self._symbol(symbol),
             comment=comment,
-            course_degrees=course,
-            speed_knots=_either(speed, speed_kmh, KMH_PER_KNOT, "speed"),
-            altitude_feet=_either(altitude, altitude_m, 1 / FEET_PER_METRE, "altitude"),
-            frequency=_frequency(frequency, tone, offset_khz),
+            **_extras(
+                course=course,
+                speed=speed,
+                altitude=altitude,
+                speed_kmh=speed_kmh,
+                altitude_m=altitude_m,
+                compressed=compressed,
+                ambiguity=ambiguity,
+                phg=phg,
+                range_miles=range_miles,
+                frequency=frequency,
+                tone=tone,
+                offset_khz=offset_khz,
+                telemetry=telemetry,
+                precise=precise,
+            ),
         )
         return self.send(data)
 
@@ -244,6 +301,20 @@ class Station:
         *,
         comment: str = "",
         killed: bool = False,
+        course: int | None = None,
+        speed: float | None = None,
+        altitude: float | None = None,
+        speed_kmh: float | None = None,
+        altitude_m: float | None = None,
+        compressed: bool = False,
+        ambiguity: int = 0,
+        phg: Phg | None = None,
+        range_miles: float | None = None,
+        frequency: float | VoiceFrequency | None = None,
+        tone: float | None = None,
+        offset_khz: int | None = None,
+        telemetry: CommentTelemetry | None = None,
+        precise: bool = False,
     ) -> Packet:
         """An item report: a named thing's position (3-9 characters), without a timestamp."""
         data = ItemReport(
@@ -253,6 +324,22 @@ class Station:
             longitude=longitude,
             symbol=self._symbol(symbol),
             comment=comment,
+            **_extras(
+                course=course,
+                speed=speed,
+                altitude=altitude,
+                speed_kmh=speed_kmh,
+                altitude_m=altitude_m,
+                compressed=compressed,
+                ambiguity=ambiguity,
+                phg=phg,
+                range_miles=range_miles,
+                frequency=frequency,
+                tone=tone,
+                offset_khz=offset_khz,
+                telemetry=telemetry,
+                precise=precise,
+            ),
         )
         return self.send(data)
 
@@ -269,6 +356,12 @@ class Station:
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
         comment: str = "",
+        ambiguity: int = 0,
+        frequency: float | VoiceFrequency | None = None,
+        tone: float | None = None,
+        offset_khz: int | None = None,
+        telemetry: CommentTelemetry | None = None,
+        precise: bool = False,
     ) -> Packet:
         """A Mic-E report: the compact position format of trackers and radios. The destination
         address carries half the position and is computed; the type code says whether this
@@ -295,6 +388,10 @@ class Station:
             altitude_feet=feet,
             altitude_in_comment=altitude is not None,
             comment=comment,
+            ambiguity=ambiguity,
+            frequency=_frequency(frequency, tone, offset_khz),
+            telemetry=telemetry,
+            dao=Dao("W", DaoPrecision.BASE91) if precise else None,
             type_code="`" if self.messaging else "'",
         )
         return self.send(data)
@@ -318,6 +415,7 @@ class Station:
         luminosity: int | None = None,
         snow_24h: float | None = None,
         timestamp: TimestampLike = None,
+        symbol: Symbol = Symbol.WEATHER_STATION,
         software: str | None = None,
         unit: str | None = None,
         temperature_c: float | None = None,
@@ -325,8 +423,9 @@ class Station:
         rain_24h_mm: float | None = None,
         rain_since_midnight_mm: float | None = None,
     ) -> Packet:
-        """A weather report: with a position, a complete weather report (``_`` symbol);
-        without one, a positionless report (always timestamped, now by default).
+        """A weather report: with a position, a complete weather report (the ``_`` symbol, or the
+        ``symbol`` given, an overlay say); without one, a positionless report (always timestamped,
+        now by default).
 
         Wind in degrees and mph, temperature in degrees Fahrenheit (or ``temperature_c``), rain
         in inches (or ``rain_1h_mm`` and so on), humidity in percent, pressure in millibars,
@@ -366,7 +465,7 @@ class Station:
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
-            symbol=Symbol.WEATHER_STATION,
+            symbol=symbol,
             timestamp=_timestamp(timestamp),
             messaging=self.messaging,
             weather=weather,
@@ -398,12 +497,14 @@ class Station:
         timestamp: TimestampLike = None,
         locator: str | None = None,
         symbol: Symbol | None = None,
+        beam: Beam | None = None,
     ) -> Packet:
-        """A status report, optionally timestamped, or with a grid locator and symbol. The locator
-        is sent in upper case, as a decoder reports it."""
+        """A status report, optionally timestamped, or with a grid locator and symbol, or a
+        meteor scatter ``beam`` heading and power. The locator is sent in upper case, as a decoder
+        reports it."""
         if locator is not None:
             locator = locator.upper()
-        return self.send(StatusReport(text, _timestamp(timestamp), locator, symbol))
+        return self.send(StatusReport(text, _timestamp(timestamp), locator, symbol, beam))
 
     # ------------------------------------------------------------ telemetry
 
