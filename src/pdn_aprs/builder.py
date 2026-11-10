@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import TypedDict
 
 from ._util import FEET_PER_METRE, round_half_away
 from .encode import DEFAULT_DESTINATION, build_packet
@@ -109,9 +110,23 @@ def _frequency(
     )
 
 
+class _Extras(TypedDict):
+    course_degrees: int | None
+    speed_knots: float | None
+    altitude_feet: float | None
+    compressed: bool
+    compression: CompressionType | None
+    ambiguity: int
+    phg: Phg | None
+    range_miles: float | None
+    frequency: VoiceFrequency | None
+    telemetry: CommentTelemetry | None
+    dao: Dao | None
+
+
 def _extras(
     *,
-    course: float | None,
+    course: int | None,
     speed: float | None,
     altitude: float | None,
     speed_kmh: float | None,
@@ -125,7 +140,7 @@ def _extras(
     offset_khz: int | None,
     telemetry: CommentTelemetry | None,
     precise: bool,
-) -> dict[str, object]:
+) -> _Extras:
     """The fields a position, object or item report share, from the builder's arguments."""
     speed = _either(speed, speed_kmh, KMH_PER_KNOT, "speed")
     return {
