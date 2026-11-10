@@ -139,6 +139,9 @@ def _ax25_address(name: str, *, last: bool = False, command: bool = False, repea
         raise EncodeError(f"{name!r} is not an AX.25 address: 1-6 upper-case letters and digits")
     if ssid_text and not (ssid_text.isascii() and ssid_text.isdigit() and int(ssid_text) <= 15):
         raise EncodeError(f"{name!r} is not an AX.25 address: the SSID is 0-15")
+    if ssid_text and (ssid_text != str(int(ssid_text)) or ssid_text == "0"):
+        # -00 or -0 would come back from the frame as no SSID, so AX.25 cannot carry it as sent
+        raise EncodeError(f"{name!r} is not an AX.25 address as sent: the SSID has a leading zero")
     ssid = int(ssid_text) if ssid_text else 0
     flag = 0x80 if (command or repeated) else 0
     return bytes(ord(c) << 1 for c in call.ljust(6)) + bytes([0x60 | flag | (ssid << 1) | (1 if last else 0)])

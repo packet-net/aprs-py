@@ -42,6 +42,9 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 ### Fixed (batch 2)
 
+- `Packet.to_ax25` refuses an address whose SSID has a leading zero (`-00`, `-0`, `-07`), which the frame would bring back as a different SSID.
+- A snowfall sent as three spaces (`s   `) is a weather field sent as unknown, not comment text.
+
 - An area object's offsets are digits only (`Tyy/Cxx`), so `7 0/310` after the `\l` symbol is comment text, not an area.
 
 - A Mic-E comment that would join the `/A=` digits before it into a Mic-E altitude (`{5}` after `/A=000101`) is written after a separating space; it used to be refused (E12).

@@ -787,3 +787,22 @@ def test_area_offsets_are_digits() -> None:
     assert packet.data.area is None
     assert packet.data.comment == "7 0/310 0/310"
     assert aprs.encode_info(packet.data) == packet.info
+
+
+@pytest.mark.parametrize("ssid", ["00", "0", "07"])
+def test_ax25_refuses_an_ssid_it_cannot_carry_as_sent(ssid: str) -> None:
+    # -00 would come back from the frame as no SSID
+    packet = aprs.decode(f"N0CALL>APZ001:}}WB4APR-{ssid}>APRS,TCPIP,G9RXG*:>hi")
+    assert isinstance(packet.data, aprs.ThirdParty)
+    with pytest.raises(EncodeError, match="leading zero"):
+        packet.data.packet.to_ax25()
+
+
+def test_unknown_snowfall_after_a_compressed_gga_position_counts_as_present() -> None:
+    packet = aprs.decode(
+        "KA7HOS-10>APDW16,qAR,KA7HOS-10:=Aid_15oum_wuxs   *111111z3714.14N/11338.11W+`STG Marathon Aid Station 15"
+    )
+    assert isinstance(packet.data, aprs.PositionReport)
+    assert packet.data.comment == "*111111z3714.14N/11338.11W+`STG Marathon Aid Station 15"
+    assert packet.data.weather is not None
+    assert packet.data.weather.snow_24h_in is None
