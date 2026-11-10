@@ -4,13 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batch 1).
+The encoder writes exactly the bytes the vectors' Encoding rule gives, now that `canonical_info` is binding (packet-net/aprs-vectors, exact-bytes rulings, batches 1 and 2).
 
 ### Added
 
 - `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
 
 - `tools/diff_dump.py` has an encode mode (`--encode`, neutral data from the vectors' `tools/generate.py`) and a build mode (`--build`, builder recipes), and its decode records carry the API view: the header, path and q-construct, the diagnostics accessors, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for.
+- `MicEReport.altitude_in_comment` asks the encoder to write the altitude as a `/A=` in feet even where the Mic-E altitude bytes would hold it; `Station.mic_e` sets it for an altitude given in feet. The neutral form leaves it out.
 - `Station.position`, `object` and `mic_e` take `speed_kmh` and `altitude_m`, and `Station.weather` takes `temperature_c`, `rain_1h_mm`, `rain_24h_mm` and `rain_since_midnight_mm`, beside the units APRS sends; they are converted.
 
 ### Changed
@@ -23,10 +24,19 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - User-defined data that ends in a line break is refused: the decoder takes a trailing CR or LF as a tolerated defect and drops it, so it would not read back.
 - `from_neutral` reads a bulletin or NWS bulletin with its empty text left out, and a third-party packet whose source or destination is left out as empty.
 - Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
-- The encoder rounds the number as written in decimal, not the binary value just above or below it: 1.275 inches of rain is a half of a hundredth and is written `p128`, and the step a value lands on no longer depends on how floating point rounds on the way (a latitude of -58.73025 is `5843.82S`). A voice frequency is rounded the same way, and one that rounds past its digits is refused.
+- A half is judged on the value in binary floating point, measured in steps, and one within 1e-6 of a half is the half, which goes away from zero (vectors ruling F2): 1.275 inches of rain is `p128`, a latitude of 0.9764166666666666 degrees (58.584999999999996 minutes) is `0058.59N`, a pressure of 986.9499999999999 mbar is `b09870`. A voice frequency and a footprint radius are rounded the same way, and a frequency that rounds past its digits is refused.
+- Every value is rounded before it is checked: a course or wind direction of 360.4 is `360`, and one of -0.3 is `000` (both used to be refused).
+- A course of 0 is refused in Mic-E and compressed reports, where it would read back as no course or as 360; uncompressed it is `000` (F1).
+- A snowfall is rounded into its three forms (0.995 as `001`, 9.96 as `010`, 12.5 as `013`), where one the three characters could not hold exactly used to be refused (F3).
+- A number given as data with no text (an `EQNS.` coefficient, a telemetry value, a footprint coordinate) is the shortest plain decimal: 1e61 is `1` and 61 zeros, where it used to be `1e+61` (F11).
+- A Mic-E locator followed straight by base-91 telemetry or a `!DAO!` is no missing space, since both are lifted from the status text first (F16): the decoder no longer warns and the encoder writes them straight after it.
+- `T#MIC` with an empty first channel is refused with a reason of its own (F12).
+- `Packet.device` matches a tocall case-sensitively, so `APNl02` is nothing (A1).
+- `Station.mic_e`: a course of 0, or one that rounds to 0, is unknown and written as no course (B1); an altitude in metres goes in the Mic-E altitude bytes, rounded to the metre, and one in feet in a `/A=` (B2).
+- `Station.telemetry` refuses a sequence over 999 (B6).
 - An ambiguous position is written from the box that holds it, so a decoder reports the centre nearest the value: 3.596 minutes at ambiguity 1 is `03.5 `, where rounding first made it `03.6 `. In Mic-E the longitude digits the ambiguity covers, which a decoder ignores, are written as the centre it reports.
 - The `!DAO!` digits on a compressed position are those of the position the compressed bytes report, not of the value given before it was rounded into them.
-- A compressed weather report whose altitude the GGA cs bytes cannot hold exactly is refused: the `/A=` that would carry it has no comment to go in. It used to be dropped silently.
+- A compressed weather report whose altitude the GGA cs bytes cannot hold exactly is written with the nearest cs step, since there is no comment for a `/A=` (F14). It used to be dropped silently.
 - `Station.status` sends a grid locator in upper case, as a decoder reports it; a lower-case one used to be refused.
 
 ### Fixed
