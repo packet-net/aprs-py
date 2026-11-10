@@ -20,7 +20,7 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TypedDict
@@ -140,7 +140,7 @@ def _extras(
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Station:
     """A sending station: its callsign, path and habits, and a method for each packet it sends.
 
@@ -161,14 +161,25 @@ class Station:
     """
 
     callsign: str
-    path: str | Sequence[str] = ()
-    destination: str = DEFAULT_DESTINATION
-    messaging: bool = False
-    symbol: Symbol | None = None
+    path: tuple[str, ...]
+    destination: str
+    messaging: bool
+    symbol: Symbol | None
 
-    def __post_init__(self) -> None:
-        entries = self.path.split(",") if isinstance(self.path, str) else list(self.path)
+    def __init__(
+        self,
+        callsign: str,
+        path: str | Iterable[str] = (),
+        destination: str = DEFAULT_DESTINATION,
+        messaging: bool = False,
+        symbol: Symbol | None = None,
+    ) -> None:
+        entries = path.split(",") if isinstance(path, str) else list(path)
+        object.__setattr__(self, "callsign", callsign)
         object.__setattr__(self, "path", tuple(v.strip() for v in entries if v.strip()))
+        object.__setattr__(self, "destination", destination)
+        object.__setattr__(self, "messaging", messaging)
+        object.__setattr__(self, "symbol", symbol)
 
     def send(self, data: AprsData) -> Packet:
         """Any data as a packet from this station."""
@@ -485,6 +496,8 @@ class Station:
 
     def bulletin(self, id: str, text: str, *, group: str = "") -> Packet:
         """A bulletin (``id`` a digit), announcement (a letter) or group bulletin."""
+        if len(id) != 1:
+            raise EncodeError(f"a bulletin id is exactly one character, not {id!r}")
         return self.send(Bulletin(f"BLN{id}{group}", text))
 
     def status(
@@ -515,8 +528,10 @@ class Station:
     ) -> Packet:
         """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
         refused, not wrapped), five analog values and eight bits."""
-        if not isinstance(sequence, int) or not 0 <= sequence <= 999:
-            raise EncodeError(f"telemetry sequence {sequence!r} is not a whole number 0-999")
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
+        if not 0 <= sequence <= 999:
+            raise EncodeError(f"telemetry sequence {sequence} is not 0-999")
         return self.send(TelemetryReport(f"{sequence:03d}", tuple(analog), bits, comment))
 
     def telemetry_names(self, names: Iterable[str], *, addressee: str | None = None) -> Packet:

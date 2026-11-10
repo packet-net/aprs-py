@@ -15,6 +15,7 @@ Migrating from 0.3.0:
 - `Station(callsign, via=...)` is `Station(callsign, path=...)`: one field, given as text or a list and held as a tuple. The derived attribute is gone (`path` is now the field itself).
 - The `tone` and `offset_khz` keywords of `position`, `object`, `item` and `mic_e` are gone. `frequency` is a number in MHz (rounded to the field's step) or a `VoiceFrequency`, which carries the tone kind, its whole value and the offset: `frequency=VoiceFrequency(145.5, tone=ToneType.TONE, tone_value=77, offset_khz=-600)`.
 - `Station.telemetry` takes the sequence as a whole number only (text sequences remain possible by building a `TelemetryReport` yourself), and refuses one outside 0-999 with `EncodeError` instead of `ValueError`. `EncodeError` is now what every refusal of the data raises; `ValueError` stays for calls that mean nothing (a quantity given in both units, no symbol anywhere, a latitude without a longitude).
+- `Bulletin.identifier` is `Bulletin.id`, matching the builder keyword. `Station.bulletin` refuses an `id` that is not one character with `EncodeError`, and `Station.telemetry` raises `TypeError` for a sequence that is not an int (a bool included); out of range stays `EncodeError`.
 - `pdn_aprs.decode` is gone; use `decode_tnc2`.
 - `pdn_aprs.neutral` is now the private `pdn_aprs._neutral`. The vectors' neutral form is not public API; use the data classes, `Packet.to_tnc2()` and the other accessors.
 - `PathEntry.call` is `PathEntry.address` (and the constructor's first argument).
@@ -27,7 +28,7 @@ Migrating from 0.3.0:
 ### Changed
 
 - `PositionedData.course_degrees`, `Weather.wind_direction_degrees`, `humidity_percent` and `luminosity_w_m2` are `float`, so hand-built data can carry 88.6 degrees. Decoded values are still whole; the encoder rounds once, halves away from zero. The builder keywords for these take `float` too.
-- `MicEReport.altitude_in_comment` is set by the decoder when the altitude came from a `/A=`, so encoding a copy of decoded data writes the same bytes. It is still left out of the neutral form and of equality.
+- `MicEReport.altitude_in_comment` is set by the decoder when the comment parser lifted a `/A=`, so encoding a copy of decoded data writes the same bytes. It now takes part in equality; it is still left out of the neutral form.
 - `DEFAULT_DESTINATION`, `MESSAGE_TEXT_LIMIT` and `DATABASE_VERSION` are exported at the top level.
 
 ## [0.3.0] - 2026-11-10

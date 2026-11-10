@@ -681,7 +681,7 @@ class MicEReport(PositionedData):
     locator: str | None = None
     legacy_telemetry: tuple[int, ...] = ()
     destination_ssid: int = 0
-    altitude_in_comment: bool = field(default=False, compare=False, repr=False)
+    altitude_in_comment: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, repr=False)
@@ -745,7 +745,7 @@ class Bulletin(AprsData):
     message_id: str | None = None
 
     @property
-    def identifier(self) -> str:
+    def id(self) -> str:
         """The bulletin or announcement identifier: the character after ``BLN``."""
         return self.addressee[3:4]
 
@@ -756,7 +756,7 @@ class Bulletin(AprsData):
 
     @property
     def is_announcement(self) -> bool:
-        return self.identifier.isalpha() and not self.group
+        return self.id.isalpha() and not self.group
 
 
 @dataclass(frozen=True, slots=True, repr=False)

@@ -184,6 +184,26 @@ def test_public_surface_after_cleanup() -> None:
         __import__("pdn_aprs.neutral")
 
 
+def test_bulletin_id_and_telemetry_sequence_checks() -> None:
+    with pytest.raises(EncodeError):
+        STATION.bulletin("12", "x")
+    with pytest.raises(EncodeError):
+        STATION.bulletin("", "x")
+    assert aprs.decode_tnc2(str(STATION.bulletin("1", "x"))).data.id == "1"  # type: ignore[attr-defined]
+    for bad in ("5", True, 1.0):
+        with pytest.raises(TypeError):
+            STATION.telemetry(bad, [1, 2, 3, 4, 5])  # type: ignore[arg-type]
+
+
+def test_altitude_in_comment_follows_the_lifted_slash_a() -> None:
+    # Mic-E altitude bytes and a /A= together: the /A= is what is read, so it is what is written
+    both = aprs.decode_tnc2('N0CALL>S32UVT:`(_fn"Oj/]"4{}/A=000101x').data
+    assert isinstance(both, aprs.MicEReport)
+    assert both.altitude_feet == 101
+    assert both.altitude_in_comment
+    assert aprs.encode_info(both).endswith(b"/A=000101x")
+
+
 def test_station_path_forms() -> None:
     assert Station("M0LTE", path="WIDE1-1, WIDE2-1").path == ("WIDE1-1", "WIDE2-1")
     assert Station("M0LTE", path=["WIDE1-1"]).path == ("WIDE1-1",)

@@ -941,7 +941,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     )
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(
-        altitude_in_comment=altitude is None and fields.get("altitude_feet") is not None,
+        altitude_in_comment=parts.altitude_feet is not None,
         mic_e_message=MicEMessage(message),
         old_data=s[0] in ("'", "\x1d"),
         type_code=type_code,
