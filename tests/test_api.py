@@ -872,3 +872,30 @@ def test_weather_takes_any_symbol_and_status_a_beam() -> None:
     wx = st.weather(51.5, -1.0, symbol=Symbol.parse("\\_"), temperature=60)
     assert wx.to_tnc2().decode().endswith("W_.../...g...t060")
     assert st.status("hi", beam=aprs.Beam("B", "7")).to_tnc2().decode().endswith(">hi^B7")
+
+
+def test_dao_with_ambiguity_is_refused_by_item_and_mic_e() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    with pytest.raises(EncodeError, match="ambiguous"):
+        st.item("ITEM", 51.5, -1.0, ambiguity=1, precise=True)
+    with pytest.raises(EncodeError, match="ambiguous"):
+        st.mic_e(51.5, -1.0, ambiguity=1, precise=True)
+
+
+def test_mic_e_speed_in_both_units_is_refused() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    with pytest.raises(ValueError, match="once"):
+        st.mic_e(51.5, -1.0, speed=5, speed_kmh=10)
+
+
+def test_positionless_weather_refuses_a_symbol() -> None:
+    with pytest.raises(ValueError, match="no symbol"):
+        Station("N0CALL").weather(symbol=Symbol.parse("\\_"), temperature=60)
+
+
+def test_ambiguous_object_and_compressed_item_bytes() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    obj = st.object("OBJ", 51.5, -1.0, timestamp=Timestamp.dhm(9, 23, 45), ambiguity=2)
+    assert obj.to_tnc2() == b"N0CALL>APZ001:;OBJ      *092345z5130.  N/00100.  W>"
+    item = st.item("ITEM", 51.5, -1.0, compressed=True, course=88, speed=36)
+    assert item.to_tnc2() == b"N0CALL>APZ001:)ITEM!/4K!!N7!!>7PC"

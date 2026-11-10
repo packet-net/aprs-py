@@ -351,7 +351,7 @@ class Station:
         *,
         message: MicEMessage = MicEMessage.IN_SERVICE,
         course: int | None = None,
-        speed: float = 0,
+        speed: float | None = None,
         altitude: float | None = None,
         speed_kmh: float | None = None,
         altitude_m: float | None = None,
@@ -384,7 +384,7 @@ class Station:
             symbol=self._symbol(symbol),
             mic_e_message=message,
             course_degrees=course,
-            speed_knots=speed if speed_kmh is None else speed_kmh / KMH_PER_KNOT,
+            speed_knots=_either(speed, speed_kmh, KMH_PER_KNOT, "speed") or 0,
             altitude_feet=feet,
             altitude_in_comment=altitude is not None,
             comment=comment,
@@ -435,6 +435,8 @@ class Station:
             if temperature is not None:
                 raise ValueError("give the temperature once, not in both units")
             temperature = temperature_c * 9 / 5 + 32
+        if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
+            raise ValueError("a positionless weather report has no symbol")
         weather = Weather(
             wind_direction_degrees=wind_direction,
             wind_speed_mph=wind_speed,

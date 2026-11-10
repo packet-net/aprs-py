@@ -425,7 +425,9 @@ def build(recipe: dict[str, Any]) -> Packet:
         return station.mic_e(**kwargs)
     if report == "weather":
         weather = {_WEATHER[key]: value for key, value in args.items() if key in _WEATHER}
-        if "symbol" in args and "latitude" in args:
+        if "symbol" in args:
+            if "latitude" not in args:
+                raise UnsupportedError("weather: a positionless report has no symbol")
             weather["symbol"] = Symbol.parse(args["symbol"])
         if "timestamp" in args:
             weather["timestamp"] = _timestamp(args["timestamp"], positionless="latitude" not in args)
