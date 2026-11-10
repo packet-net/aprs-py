@@ -904,6 +904,8 @@ def _mic_e(data: MicEReport) -> bytes:
     destination = mic_e_destination(data)
     if data.compressed or data.compression is not None:
         raise _refuse("a Mic-E report is not compressed")
+    if data.dao is not None and data.ambiguity:
+        raise _refuse("a DAO cannot add precision to an ambiguous position")
     legacy = b""
     if data.legacy_telemetry:
         # A 255 would be taken for Kenwood 0xFF padding and removed on the way back in.

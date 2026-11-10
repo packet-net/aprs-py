@@ -8,6 +8,8 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 ### Added
 
+- `Station.object` takes `phg`, `compressed`, `ambiguity`, `precise`, `telemetry` and `range_miles`; `Station.item` takes `course`, `speed`, `speed_kmh`, `altitude`, `altitude_m`, `phg`, `frequency` (with `tone` and `offset_khz`), `compressed`, `range_miles`, `ambiguity`, `precise` and `telemetry`; `Station.mic_e` takes `frequency` (with `tone` and `offset_khz`), `ambiguity`, `precise` and `telemetry`; `Station.weather` takes a `symbol` (default the weather station symbol, as before); `Station.status` takes a `beam`. They share the position builder's code, so units are converted and rounded once as there. Nothing existing changes, so this is a minor version bump.
+- `tools/diff_dump.py --build` maps all of these recipe keys instead of reporting them `unsupported`.
 - `Footprint.latitude_text` and `Footprint.longitude_text`: a general query's footprint numbers as sent, leading space included, so they are written back byte for byte (`?APRS? 34.0,-117.15,0200`). They are optional when encoding.
 
 - `tools/diff_dump.py` has an encode mode (`--encode`, neutral data from the vectors' `tools/generate.py`) and a build mode (`--build`, builder recipes), and its decode records carry the API view: the header, path and q-construct, the diagnostics accessors, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for.

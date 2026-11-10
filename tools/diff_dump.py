@@ -43,6 +43,7 @@ from multiprocessing import Pool
 from typing import Any
 
 from pdn_aprs import (
+    Beam,
     CommentTelemetry,
     EncodeError,
     HeaderError,
@@ -289,6 +290,7 @@ _POSITIONED: dict[str, tuple[str, Callable[[Any], Any]]] = {
 }
 
 _UNITS = {"course_degrees", "speed_knots", "speed_kmh", "altitude_feet", "altitude_m"}
+_EXTRAS = {"phg", "range_miles", "frequency", "compressed", "ambiguity", "dao", "telemetry"}
 
 # The recipe keys each Station method takes.
 _TAKES: dict[str, set[str]] = {
@@ -307,9 +309,30 @@ _TAKES: dict[str, set[str]] = {
         "dao",
         "telemetry",
     },
-    "object": {"name", "latitude", "longitude", "symbol", "comment", "killed", "timestamp", *_UNITS, "frequency"},
-    "item": {"name", "latitude", "longitude", "symbol", "comment", "killed"},
-    "mic-e": {"latitude", "longitude", "symbol", "mic_e_message", "comment", *_UNITS},
+    "object": {
+        "name",
+        "latitude",
+        "longitude",
+        "symbol",
+        "comment",
+        "killed",
+        "timestamp",
+        *_UNITS,
+        *_EXTRAS,
+    },
+    "item": {"name", "latitude", "longitude", "symbol", "comment", "killed", *_UNITS, *_EXTRAS},
+    "mic-e": {
+        "latitude",
+        "longitude",
+        "symbol",
+        "mic_e_message",
+        "comment",
+        *_UNITS,
+        "frequency",
+        "ambiguity",
+        "dao",
+        "telemetry",
+    },
     "weather": {
         "latitude",
         "longitude",
@@ -335,7 +358,7 @@ _TAKES: dict[str, set[str]] = {
     "ack": {"addressee", "message_id"},
     "reject": {"addressee", "message_id"},
     "bulletin": {"id", "group", "text"},
-    "status": {"text", "timestamp", "locator", "symbol"},
+    "status": {"text", "timestamp", "locator", "symbol", "beam"},
     "telemetry": {"sequence", "analog", "bits", "comment"},
     "telemetry-names": {"names", "addressee"},
     "telemetry-units": {"units", "addressee"},
@@ -401,9 +424,11 @@ def build(recipe: dict[str, Any]) -> Packet:
             return station.item(**kwargs)
         return station.mic_e(**kwargs)
     if report == "weather":
-        if args.get("symbol", "/_") != "/_":
-            raise UnsupportedError(f"weather: the builder has no symbol {args['symbol']!r}, only /_")
         weather = {_WEATHER[key]: value for key, value in args.items() if key in _WEATHER}
+        if "symbol" in args:
+            if "latitude" not in args:
+                raise UnsupportedError("weather: a positionless report has no symbol")
+            weather["symbol"] = Symbol.parse(args["symbol"])
         if "timestamp" in args:
             weather["timestamp"] = _timestamp(args["timestamp"], positionless="latitude" not in args)
         return station.weather(**weather)
@@ -423,6 +448,7 @@ def build(recipe: dict[str, Any]) -> Packet:
             timestamp=_timestamp(args["timestamp"]) if "timestamp" in args else None,
             locator=args.get("locator"),
             symbol=Symbol.parse(args["symbol"]) if "symbol" in args else None,
+            beam=Beam(**args["beam"]) if "beam" in args else None,
         )
     if report == "telemetry":
         return station.telemetry(

@@ -840,3 +840,62 @@ def test_strict_mic_e_rejects_only_an_altitude_joined_across_a_lifted_place() ->
     assert kept.data.dao is not None
     joined = aprs.decode("N0CALL>U5TVQS:`0)1839h0654.57S/10742fl!X>/'\";X|!wII!!wII!}3", STRICT)
     assert isinstance(joined.data, aprs.Unrecognized)
+
+
+def test_object_and_item_take_the_position_options() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    phg = aprs.Phg(2, 3, 4, 0)
+    obj = st.object("OBJ", 51.5, -1.0, course=90, speed_kmh=37.04, altitude_m=100, ambiguity=1)
+    assert obj.data.ambiguity == 1
+    assert obj.data.speed_knots == pytest.approx(20)
+    assert st.object("OBJ", 51.5, -1.0, phg=phg).data.phg == phg
+    item = st.item("ITEM", 51.5, -1.0, compressed=True, course=88, speed=36, frequency=146.52, tone=100)
+    assert item.data.compressed
+    assert item.data.frequency.mhz == 146.52
+    assert st.item("ITEM", 51.5, -1.0, precise=True, range_miles=20).data.dao is not None
+    with pytest.raises(ValueError, match="once"):
+        st.item("ITEM", 51.5, -1.0, speed=1, speed_kmh=2)
+
+
+def test_mic_e_takes_frequency_ambiguity_dao_and_telemetry() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    got = _round_trip(st.mic_e(51.5, -1.0, ambiguity=2, frequency=145.5)).data
+    assert got.ambiguity == 2
+    assert got.frequency.mhz == 145.5
+    got = _round_trip(st.mic_e(51.5, -1.0, precise=True, telemetry=aprs.CommentTelemetry(1, (2, 3)))).data
+    assert got.dao is not None
+    assert got.telemetry.analog == (2, 3)
+
+
+def test_weather_takes_any_symbol_and_status_a_beam() -> None:
+    st = Station("N0CALL")
+    wx = st.weather(51.5, -1.0, symbol=Symbol.parse("\\_"), temperature=60)
+    assert wx.to_tnc2().decode().endswith("W_.../...g...t060")
+    assert st.status("hi", beam=aprs.Beam("B", "7")).to_tnc2().decode().endswith(">hi^B7")
+
+
+def test_dao_with_ambiguity_is_refused_by_item_and_mic_e() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    with pytest.raises(EncodeError, match="ambiguous"):
+        st.item("ITEM", 51.5, -1.0, ambiguity=1, precise=True)
+    with pytest.raises(EncodeError, match="ambiguous"):
+        st.mic_e(51.5, -1.0, ambiguity=1, precise=True)
+
+
+def test_mic_e_speed_in_both_units_is_refused() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    with pytest.raises(ValueError, match="once"):
+        st.mic_e(51.5, -1.0, speed=5, speed_kmh=10)
+
+
+def test_positionless_weather_refuses_a_symbol() -> None:
+    with pytest.raises(ValueError, match="no symbol"):
+        Station("N0CALL").weather(symbol=Symbol.parse("\\_"), temperature=60)
+
+
+def test_ambiguous_object_and_compressed_item_bytes() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    obj = st.object("OBJ", 51.5, -1.0, timestamp=Timestamp.dhm(9, 23, 45), ambiguity=2)
+    assert obj.to_tnc2() == b"N0CALL>APZ001:;OBJ      *092345z5130.  N/00100.  W>"
+    item = st.item("ITEM", 51.5, -1.0, compressed=True, course=88, speed=36)
+    assert item.to_tnc2() == b"N0CALL>APZ001:)ITEM!/4K!!N7!!>7PC"
