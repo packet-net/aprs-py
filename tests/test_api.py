@@ -587,6 +587,13 @@ def test_neutral_round_trip() -> None:
     assert from_neutral(to_neutral(packet.data)) == packet.data
 
 
+def test_device_lookup_is_case_sensitive() -> None:
+    # A1: the database lists tocalls in upper case, and a destination is a callsign
+    assert aprs.decode("N0CALL>APN102:>hi").device is not None
+    assert aprs.decode("N0CALL>APNl02:>hi").device is None
+    assert aprs.decode("N0CALL>apn102:>hi").device is None
+
+
 @pytest.mark.parametrize(
     ("course", "written"), [(360.4, b">360/010"), (360.25, b">360/010"), (-0.3, b">000/010"), (0.3, b">000/010")]
 )

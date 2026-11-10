@@ -83,8 +83,10 @@ def _matches(pattern: str, call: str) -> bool:
 
 @lru_cache(maxsize=4096)
 def identify_tocall(destination: str) -> Device | None:
-    """The device a destination address (tocall) identifies; the most specific match wins."""
-    call = destination.partition("-")[0].upper()
+    """The device a destination address (tocall) identifies; the most specific match wins. The
+    match is case-sensitive: the database lists tocalls in upper case, and a destination is a
+    callsign, so ``APNl02`` matches nothing (vectors ruling A1)."""
+    call = destination.partition("-")[0]
     best: tuple[int, str] | None = None
     for pattern in _db.TOCALLS:
         if _matches(pattern, call):
