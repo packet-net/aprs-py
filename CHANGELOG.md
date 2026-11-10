@@ -23,6 +23,15 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 - User-defined data that ends in a line break is refused: the decoder takes a trailing CR or LF as a tolerated defect and drops it, so it would not read back.
 - `from_neutral` reads a bulletin or NWS bulletin with its empty text left out, and a third-party packet whose source or destination is left out as empty.
 - Every value the encoder rounds goes to the nearest step, halves away from zero; Python's `round` took halves to the even number (a temperature of -2.5 was written `t-02`, now `t-03`).
+- The encoder rounds the number as written in decimal, not the binary value just above or below it: 1.275 inches of rain is a half of a hundredth and is written `p128`, and the step a value lands on no longer depends on how floating point rounds on the way (a latitude of -58.73025 is `5843.82S`). A voice frequency is rounded the same way, and one that rounds past its digits is refused.
+- An ambiguous position is written from the box that holds it, so a decoder reports the centre nearest the value: 3.596 minutes at ambiguity 1 is `03.5 `, where rounding first made it `03.6 `. In Mic-E the longitude digits the ambiguity covers, which a decoder ignores, are written as the centre it reports.
+- The `!DAO!` digits on a compressed position are those of the position the compressed bytes report, not of the value given before it was rounded into them.
+- A compressed weather report whose altitude the GGA cs bytes cannot hold exactly is refused: the `/A=` that would carry it has no comment to go in. It used to be dropped silently.
+- `Station.status` sends a grid locator in upper case, as a decoder reports it; a lower-case one used to be refused.
+
+### Fixed
+
+- `Packet.device`: aprs-deviceid's `n` wildcard matches a digit, so `APW290` is WinAPRS and `APD225` aprsd; they were not identified.
 - The conformance tests compare the bytes written with a case's `canonical_info` byte for byte, for `equivalent` cases once the data reads back the same, and for the new `rounded` cases, whose data differs by the rounding.
 
 ## [0.2.0]
