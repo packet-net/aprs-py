@@ -386,7 +386,10 @@ class Station:
         locator: str | None = None,
         symbol: Symbol | None = None,
     ) -> Packet:
-        """A status report, optionally timestamped, or with a grid locator and symbol."""
+        """A status report, optionally timestamped, or with a grid locator and symbol. The locator
+        is sent in upper case, as a decoder reports it."""
+        if locator is not None:
+            locator = locator.upper()
         return self.send(StatusReport(text, _timestamp(timestamp), locator, symbol))
 
     # ------------------------------------------------------------ telemetry

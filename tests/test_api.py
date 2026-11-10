@@ -527,6 +527,11 @@ def test_device_wildcard_n_is_a_digit() -> None:
     assert aprs.decode("N0CALL>APWXYZ:>hi").device is None or aprs.decode("N0CALL>APWXYZ:>hi").device.model != "WinAPRS"
 
 
+def test_station_locator_is_upper_case() -> None:
+    packet = STATION.status(locator="io91sx", symbol=Symbol("/", "-"))
+    assert packet.info == b">IO91SX/-"
+
+
 def test_directed_query_targets() -> None:
     def written(query_type: str) -> bytes:
         return aprs.encode_info(aprs.DirectedQuery("KH2Z", query_type, "N0QBF"))
