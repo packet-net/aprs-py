@@ -922,7 +922,8 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
             # the altitude is looked for before the !DAO! is lifted; left as text, lifting the
             # DAO must not join the bytes either side of it into a new one (vectors README, Mic-E)
             joined = _MICE_ALTITUDE.search(lift_telemetry_dao(rest, CommentParts()))
-            if joined is not None and (found is None or joined.group() != found.group()):
+            # only when there is a later altitude to decline; with none, strict reads as lenient
+            if found is not None and joined is not None and joined.group() != found.group():
                 ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE

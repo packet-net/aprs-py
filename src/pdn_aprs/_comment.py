@@ -43,7 +43,7 @@ _DFS = re.compile(r"DFS([0-9])([0-~])([0-9])([0-9])")
 _CSE_SPD = re.compile(r"([0-9]{3}|\.\.\.|   )/([0-9]{3}|\.\.\.|   )")
 _AREA = re.compile(r"([0-9])([0-9]{2})(/[0-9]|1[0-5])([0-9]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
-_STORM = re.compile(r"/(TS|HC|TD)/([0-9. ]{3})\^([0-9. ]{3})/([0-9. ]{4})>([0-9. ]{3})&([0-9. ]{3})(?:%([0-9. ]{3}))?")
+_STORM = re.compile(r"/(TS|HC|TD)/([0-9.]{3})\^([0-9.]{3})/([0-9.]{4})>([0-9.]{3})&([0-9.]{3})(?:%([0-9.]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
 _SIGNPOST = re.compile(r"\{([ -z|~]{1,3})\}")
 """Signpost braces: the first ``{``, 1-3 printable ASCII characters that are not braces, and ``}``,

@@ -42,6 +42,9 @@ The encoder writes exactly the bytes the vectors' Encoding rule gives, now that 
 
 ### Fixed (batch 2)
 
+- Strict decoding rejects Mic-E status text with `mic-e-altitude-not-first` only when there is a later altitude to decline; with none it reads as lenient.
+- Storm data fields are digits or dots: a field with a space (`> 90`) means no storm data, and the text is comment.
+
 - `Packet.to_ax25` refuses an address whose SSID has a leading zero (`-00`, `-0`, `-07`), which the frame would bring back as a different SSID.
 - A snowfall sent as three spaces (`s   `) is a weather field sent as unknown, not comment text.
 

@@ -21,6 +21,7 @@ from pdn_aprs import (
     TimestampKind,
 )
 from pdn_aprs.neutral import from_neutral, to_neutral
+from pdn_aprs.options import STRICT
 
 
 def _round_trip(packet: aprs.Packet) -> aprs.Packet:
@@ -806,3 +807,20 @@ def test_unknown_snowfall_after_a_compressed_gga_position_counts_as_present() ->
     assert packet.data.comment == "*111111z3714.14N/11338.11W+`STG Marathon Aid Station 15"
     assert packet.data.weather is not None
     assert packet.data.weather.snow_24h_in is None
+
+
+def test_strict_mic_e_with_no_later_altitude_reads_as_lenient() -> None:
+    # lifting the telemetry leaves RWJ}, which is text: nothing to decline, so no rejection
+    line = '`j.po_Tk/`"=K3RW|)>%v|J}146.520MHz 146.970(127.3)_6'
+    lenient = aprs.decode(b"N0CALL>S32UVT:" + line.encode())
+    strict = aprs.decode(b"N0CALL>S32UVT:" + line.encode(), STRICT)
+    assert isinstance(strict.data, aprs.MicEReport)
+    assert strict.data == lenient.data
+
+
+def test_storm_data_with_a_space_in_a_field_is_text() -> None:
+    line = ";BRENDA   *092345z4903.50N\\07202.75W@088/036/HC/150^200/0980> 90&030%040"
+    packet = aprs.decode(b"N0CALL>APZ001:" + line.encode())
+    assert isinstance(packet.data, aprs.ObjectReport)
+    assert packet.data.storm is None
+    assert packet.data.comment == "HC/150^200/0980> 90&030%040"
