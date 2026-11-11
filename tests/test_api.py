@@ -1109,3 +1109,16 @@ def test_a_huge_finite_latitude_is_out_of_range_not_a_number() -> None:
         ),
     ):
         assert _code(make) == "value-out-of-range"
+
+
+def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
+    report = aprs.MicEReport(
+        mic_e_message=MicEMessage.RETURNING,
+        latitude=33.42733333333334,
+        longitude=-112.129,
+        symbol=Symbol("/", "j"),
+        course_degrees=299,
+        speed_knots=1,
+        legacy_telemetry=(47, 79, 128, 208, 13),
+    )
+    assert _code(lambda: aprs.encode_info(report)) == "invalid-character"

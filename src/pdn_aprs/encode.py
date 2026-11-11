@@ -1188,6 +1188,9 @@ def _mic_e(data: MicEReport) -> bytes:
             text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
+    if build(data.comment).endswith((b"\r", b"\n")):
+        # a field that ends in a line break would lose it on the way back in
+        raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
     return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
 
 
