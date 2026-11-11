@@ -275,7 +275,7 @@ def _with_comment(
     # cannot say why
     weather = getattr(data, "weather", None)
     symbol = getattr(data, "symbol", None)
-    if weather is None and symbol is not None and symbol.code == "_":
+    if weather is None and symbol is not None and symbol.code == "_" and not isinstance(data, MicEReport):
         # a weather symbol with no weather data reads back as a weather report
         raise _refuse(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
     free_text = bool(comment) or (weather is not None and bool(weather.software or weather.unit))
@@ -497,19 +497,29 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                 f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report carries an altitude only in GGA cs bytes")
             else:
                 altitude_text = f.guard(_altitude, data.altitude_feet, default="")
-        if data.course_degrees is not None or data.speed_knots is not None:
+        course, knots = data.course_degrees, data.speed_knots
+        if course is not None or knots is not None:
             if weather:
                 f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report carries wind, not course and speed")
-            elif data.range_miles is not None:
-                f.add(
-                    RefusalCode.EXTENSION_CONFLICT, "a compressed position carries course and speed, or range, not both"
-                )
-            elif data.course_degrees is None or data.speed_knots is None:
-                f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
             else:
-                course, knots = data.course_degrees, data.speed_knots
-                cs = f.guard(lambda: _course_speed(course, knots), default="  ")
-        elif data.range_miles is not None:
+                before = len(f.found)
+                if course is not None:
+                    if not 0 <= _nearest(course) <= 360:
+                        f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"course {course} is not 0-360")
+                    elif _nearest(course) == 0:
+                        f.add(RefusalCode.VALUE_HAS_NO_FORM, "a compressed course of 0 has no form; north is 360")
+                if knots is not None and (knots <= -1 or not 0 <= _nearest(math.log(knots + 1) / math.log(1.08)) <= 90):
+                    f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"speed {knots} knots has no compressed step")
+                if data.range_miles is not None:
+                    f.add(
+                        RefusalCode.EXTENSION_CONFLICT,
+                        "a compressed position carries course and speed, or range, not both",
+                    )
+                elif course is None or knots is None:
+                    f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
+                elif len(f.found) == before:
+                    cs = _course_speed(course, knots)
+        if data.range_miles is not None:
             if data.range_miles <= 0:
                 f.add(RefusalCode.VALUE_OUT_OF_RANGE, "a compressed range is positive")
             else:
@@ -519,7 +529,7 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                 s = _nearest(math.log(data.range_miles / 2) / math.log(1.08))
                 if not 0 <= s <= 90:
                     f.add(RefusalCode.VALUE_OUT_OF_RANGE, "range too large for the compressed format")
-                else:
+                elif course is None and knots is None:
                     cs = "{" + chr(s + 33)
     if cs is None:
         if ctype is not None:
@@ -611,6 +621,10 @@ def _extension(data: PositionedData, f: _Faults) -> str:
             if not (0 <= b.bearing_degrees <= 360 and all(0 <= v <= 9 for v in (b.number, b.range, b.quality))):
                 f.add(RefusalCode.VALUE_OUT_OF_RANGE, "DF bearing or NRQ out of range")
             text += f"/{b.bearing_degrees:03d}/{b.number}{b.range}{b.quality}"
+        if data.df_bearing is not None and data.storm is not None:
+            f.add(RefusalCode.EXTENSION_CONFLICT, "a DF bearing and storm data both extend the course and speed")
+        if str(data.symbol) == "\\l" and data.area is None and (course is not None or speed is not None):
+            f.add(RefusalCode.SYMBOL_MISMATCH, "course and speed on the area symbol \\l read back as an area")
         text += _storm_text(data, f)
         parts.append(text)
     if data.phg is not None:
@@ -830,12 +844,11 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
     """A function that writes the position and everything after it, given the comment."""
     f.guard(_check_symbol, data, default=None)
     f.guard(_check_text, data.comment, "comment", default=None)
-    # a report is a weather report when it has the weather symbol and carries weather; one
-    # without the other is only a symbol mismatch
-    weather = data.weather is not None and data.symbol.code == "_"
-    if data.weather is not None and not weather:
+    # a report is a weather report when it carries weather; the symbol disagreeing is a fault of
+    # its own
+    weather = data.weather is not None
+    if weather and data.symbol.code != "_":
         f.add(RefusalCode.SYMBOL_MISMATCH, "weather data needs the weather symbol _")
-        _weather_text(data.weather, positionless=False, compressed=data.compressed, f=f)
     elif data.weather is None and data.symbol.code == "_":
         f.add(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
     if data.dao is not None and data.ambiguity:
