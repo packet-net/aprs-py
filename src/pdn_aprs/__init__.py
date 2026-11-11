@@ -13,7 +13,7 @@ from .builder import Station
 from .devices import DATABASE_VERSION, Device
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .encode import DEFAULT_DESTINATION, MESSAGE_TEXT_LIMIT, build_packet, encode_info, mic_e_destination
-from .errors import AprsError, EncodeError, HeaderError
+from .errors import AprsError, EncodeError, HeaderError, RefusalCode
 from .model import (
     Ack,
     AgreloDf,
@@ -128,6 +128,7 @@ __all__ = [
     "Query",
     "RawWeather",
     "RawWeatherFormat",
+    "RefusalCode",
     "Reject",
     "Severity",
     "Station",

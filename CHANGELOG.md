@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- 1.0.1: refusals carry a reason code. `EncodeError.code` is a new `RefusalCode` (a `str` enum, exported from the package) naming the rule the data broke, one of the 26 shared ids in the vectors' `codes.json`. The message text and every existing signature are unchanged, and `EncodeError("message")` still works (it gives `does-not-read-back`).
+- `Station` refusals that were a plain `ValueError` (a quantity in both units, an object with no timestamp, a positionless weather report with a symbol, a latitude without a longitude) now raise `EncodeError`, a subclass of `ValueError`, so existing handlers still catch them.
+- The dump tool writes `refusal` on refused encode and build records, `reencode_refusal` on decode records whose re-encode is refused, and `ax25_refusal` in the API view.
+
 ## [1.0.0] - 2026-11-10
 
 This is the first stable release. The public API is now frozen under semantic versioning. From 1.0 the major and minor version are shared with aprs-vectors: a ruling round is a minor version for all five implementations, this library's own fixes are patch versions, and an API break is a major version.

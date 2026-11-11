@@ -1009,3 +1009,72 @@ def test_ambiguous_object_and_compressed_item_bytes() -> None:
     assert obj.to_tnc2() == b"N0CALL>APZ001:;OBJ      *092345z5130.  N/00100.  W>"
     item = st.item("ITEM", 51.5, -1.0, compressed=True, course_degrees=88, speed_knots=36)
     assert item.to_tnc2() == b"N0CALL>APZ001:)ITEM!/4K!!N7!!>7PC"
+
+
+# ---------------------------------------------------------------- refusal codes (1.0.1)
+
+
+def _code(fn: object) -> str:
+    with pytest.raises(EncodeError) as info:
+        fn()  # type: ignore[operator]
+    return info.value.code.value
+
+
+def _pos(**kw: object) -> aprs.PositionReport:
+    return aprs.PositionReport(latitude=49.0, longitude=-72.0, symbol=Symbol.HOUSE, **kw)  # type: ignore[arg-type]
+
+
+def test_refusal_codes_cover_the_shared_list() -> None:
+    import json
+    from pathlib import Path
+
+    from pdn_aprs import RefusalCode
+
+    ids = [
+        r["id"] for r in json.loads((Path(__file__).parent.parent / "vectors" / "codes.json").read_text())["refusals"]
+    ]
+    assert [c.value for c in RefusalCode] == ids
+
+
+def test_encode_error_without_a_code_is_the_fallback() -> None:
+    assert EncodeError("x").code is aprs.RefusalCode.DOES_NOT_READ_BACK
+
+
+@pytest.mark.parametrize(
+    ("make", "expected"),
+    [
+        (lambda: aprs.encode_info(aprs.Message("N0CALL", "x" * 68)), "too-long"),
+        (lambda: aprs.encode_info(aprs.Message("N0CALL", "a{b")), "invalid-character"),
+        (lambda: aprs.encode_info(aprs.Message("", "hi")), "invalid-addressee"),
+        (lambda: aprs.encode_info(aprs.Message("N0CALL", "hi", message_id="123456")), "invalid-message-id"),
+        (
+            lambda: aprs.encode_info(aprs.PositionReport(latitude=91, longitude=0, symbol=Symbol.HOUSE)),
+            "value-out-of-range",
+        ),
+        (
+            lambda: aprs.encode_info(aprs.PositionReport(latitude=float("nan"), longitude=0, symbol=Symbol.HOUSE)),
+            "not-a-number",
+        ),
+        (lambda: aprs.encode_info(_pos(compressed=True, ambiguity=1)), "field-not-allowed"),
+        (lambda: aprs.encode_info(_pos(comment="/A=001234")), "text-reads-as-field"),
+        (
+            lambda: aprs.encode_info(aprs.ObjectReport(name="", latitude=0, longitude=0, symbol=Symbol.HOUSE)),
+            "invalid-name",
+        ),
+        (lambda: aprs.encode_info(aprs.Unrecognized(aprs.UnrecognizedReason.EMPTY)), "not-encodable"),
+        (lambda: aprs.build_packet("bad call", _pos()), "invalid-address"),
+        (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9), "ax25-cannot-carry"),
+        (lambda: Station("N0CALL").telemetry(1000, [1, 2, 3, 4, 5], "00000000"), "value-out-of-range"),
+        (
+            lambda: Station("N0CALL").weather(temperature_f=1, temperature_c=1, symbol=Symbol.WEATHER_STATION),
+            "value-given-twice",
+        ),
+    ],
+)
+def test_refusal_code(make: object, expected: str) -> None:
+    assert _code(make) == expected
+
+
+def test_to_ax25_refuses_with_ax25_cannot_carry() -> None:
+    packet = aprs.build_packet("N0CALLX", _pos())
+    assert _code(packet.to_ax25) == "ax25-cannot-carry"
