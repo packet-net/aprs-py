@@ -471,6 +471,20 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
     cs: str | None = None
     w = data.weather
     gga = ctype is not None and ctype.source is CompressionSource.GGA
+    # a range is range-checked first wherever it goes, even where the cs bytes are wanted twice
+    range_cs: str | None = None
+    if data.range_miles is not None:
+        if data.range_miles <= 0:
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "a compressed range is positive")
+        else:
+            # 2 x 1.08^s miles: a range between the steps is rounded to the nearest one, as a
+            # course or speed is (vectors interpretations.md, "Re-encoding into compressed bytes
+            # rounds")
+            step = _nearest(math.log(data.range_miles / 2) / math.log(1.08))
+            if not 0 <= step <= 90:
+                f.add(RefusalCode.VALUE_OUT_OF_RANGE, "range too large for the compressed format")
+            else:
+                range_cs = "{" + chr(step + 33)
     if weather and w is not None and (w.wind_direction_degrees is not None or w.wind_speed_mph is not None):
         if w.wind_direction_degrees is None or w.wind_speed_mph is None:
             f.add(RefusalCode.MISSING_FIELD, "compressed wind needs both a direction and a speed")
@@ -528,18 +542,8 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                     f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
                 elif len(f.found) == before:
                     cs = _course_speed(course, knots)
-        if data.range_miles is not None:
-            if data.range_miles <= 0:
-                f.add(RefusalCode.VALUE_OUT_OF_RANGE, "a compressed range is positive")
-            else:
-                # 2 x 1.08^s miles: a range between the steps is rounded to the nearest one, as a
-                # course or speed is (vectors interpretations.md, "Re-encoding into compressed bytes
-                # rounds")
-                s = _nearest(math.log(data.range_miles / 2) / math.log(1.08))
-                if not 0 <= s <= 90:
-                    f.add(RefusalCode.VALUE_OUT_OF_RANGE, "range too large for the compressed format")
-                elif course is None and knots is None:
-                    cs = "{" + chr(s + 33)
+        if range_cs is not None and course is None and knots is None:
+            cs = range_cs
     if cs is None:
         if ctype is not None:
             f.add(RefusalCode.MISSING_FIELD, "a compression type needs course/speed, range or altitude to go with it")
@@ -852,7 +856,9 @@ def _typed(data: _P) -> _P:
 def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
     """A function that writes the position and everything after it, given the comment."""
     f.guard(_check_symbol, data, default=None)
-    f.guard(_check_text, data.comment, "comment", default=None)
+    if data.weather is None:
+        # a weather report has no place for a comment, so its line breaks are not checked
+        f.guard(_check_text, data.comment, "comment", default=None)
     # a report is a weather report when it carries weather; the symbol disagreeing is a fault of
     # its own
     weather = data.weather is not None
