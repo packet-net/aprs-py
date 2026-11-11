@@ -210,6 +210,16 @@ def encode_line(n: int, text: str) -> str:
         try:
             data = from_neutral(item["data"])
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
+            if item["data"].get("type") in ("ack", "reject") and "message_id" in item["data"]:
+                # the data type has no ID of its own to hold: the encoder's rule, not a gap
+                return dumps(
+                    {
+                        "n": n,
+                        "result": "refused",
+                        "reason": f"an {item['data']['type']} carries no message ID of its own",
+                        "refusal": RefusalCode.FIELD_NOT_ALLOWED.value,
+                    }
+                )
             # this library's data cannot hold something in the neutral data
             return dumps({"n": n, "result": "unsupported", "reason": f"{type(e).__name__}: {e}"})
         try:
@@ -478,9 +488,10 @@ def build_line(n: int, text: str) -> str:
             return dumps({"n": n, "result": "unsupported", "reason": str(e)})
         except (EncodeError, ValueError) as e:
             # the builder or the encoder declined
-            # a ValueError that is not an EncodeError carries no code: the fallback, so it shows
-            code = e.code if isinstance(e, EncodeError) else RefusalCode.DOES_NOT_READ_BACK
-            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": code.value})
+            record = {"n": n, "result": "refused", "reason": str(e)}
+            if isinstance(e, EncodeError):
+                record["refusal"] = e.code.value
+            return dumps(record)
         line = packet.to_tnc2()
         try:
             again = packet_to_neutral(decode_tnc2(line, LENIENT))

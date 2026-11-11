@@ -1099,3 +1099,13 @@ def test_refusal_code(make: object, expected: str) -> None:
 def test_to_ax25_refuses_with_ax25_cannot_carry() -> None:
     packet = aprs.build_packet("N0CALLX", _pos())
     assert _code(packet.to_ax25) == "ax25-cannot-carry"
+
+
+def test_a_huge_finite_latitude_is_out_of_range_not_a_number() -> None:
+    for make in (
+        lambda: aprs.encode_info(aprs.PositionReport(latitude=1e308, longitude=0, symbol=Symbol.HOUSE)),
+        lambda: aprs.encode_info(
+            aprs.PositionReport(latitude=1e308, longitude=0, symbol=Symbol.HOUSE, compressed=True)
+        ),
+    ):
+        assert _code(make) == "value-out-of-range"

@@ -355,6 +355,14 @@ def _dao_digits(data: PositionedData) -> tuple[str, str, int, int]:
     return chr(la % 91 + 33), chr(lo % 91 + 33), la // 91, lo // 91
 
 
+def _dao_digits_in_range(data: PositionedData) -> tuple[str, str, int, int]:
+    """:func:`_dao_digits`, or placeholders when the position is out of range (it is refused for
+    that anyway, and a huge value would overflow the rounding)."""
+    if not (-90 <= data.latitude <= 90 and -180 <= data.longitude <= 180):
+        return " ", " ", 0, 0
+    return _dao_digits(data)
+
+
 def _dao_text(data: PositionedData, a: str, o: str) -> str:
     dao = data.dao
     if dao is None:
@@ -455,8 +463,9 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
     table = data.symbol.table
     if "0" <= table <= "9":
         table = chr(ord(table) - ord("0") + ord("a"))
-    y = _base91(_compressed_y(lat), 4)
-    x = _base91(_compressed_x(lon), 4)
+    in_range = -90 <= lat <= 90 and -180 <= lon <= 180
+    y = _base91(_compressed_y(lat), 4) if in_range else ""
+    x = _base91(_compressed_x(lon), 4) if in_range else ""
     ctype = data.compression
     altitude_text = ""
     cs: str | None = None
@@ -853,7 +862,7 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
         f.add(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
     if data.dao is not None and data.ambiguity:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a DAO cannot add precision to an ambiguous position")
-    a, o, lat_units, lon_units = _dao_digits(data)
+    a, o, lat_units, lon_units = _dao_digits_in_range(data)
     if data.compressed:
         position, altitude = _compressed(data, weather, f)
     else:
@@ -1001,7 +1010,7 @@ def _mic_e_destination(data: MicEReport, f: _Faults) -> str:
         f.add(RefusalCode.VALUE_OUT_OF_RANGE, "latitude or longitude out of range")
     if not 0 <= data.ambiguity <= 4:
         f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"ambiguity {data.ambiguity} is not 0-4")
-    _, _, lat_units, lon_units = _dao_digits(data)
+    _, _, lat_units, lon_units = _dao_digits_in_range(data)
     if lat_units > 90 * 6000:
         f.add(RefusalCode.VALUE_OUT_OF_RANGE, "latitude out of range")
     deg, rem = divmod(lat_units, 6000)
@@ -1072,7 +1081,7 @@ def _mic_e(data: MicEReport) -> bytes:
             legacy = bytes([0x1D, *data.legacy_telemetry])
     if data.weather is not None or data.area is not None or data.df_bearing or data.storm or data.signpost:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a Mic-E report cannot carry weather, area, DF, storm or signpost data")
-    a, o, _, lon_units = _dao_digits(data)
+    a, o, _, lon_units = _dao_digits_in_range(data)
     no_dao = data.dao is None or data.dao.precision is DaoPrecision.NONE
     if data.ambiguity and no_dao and 0 < data.ambiguity < len(_AMBIGUITY_BOX):
         # the longitude digits the latitude's ambiguity covers are ignored by a decoder, which
