@@ -1064,6 +1064,27 @@ def test_encode_error_without_a_code_is_the_fallback() -> None:
         (lambda: aprs.encode_info(aprs.Unrecognized(aprs.UnrecognizedReason.EMPTY)), "not-encodable"),
         (lambda: aprs.build_packet("bad call", _pos()), "invalid-address"),
         (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9), "ax25-cannot-carry"),
+        (lambda: aprs.encode_info(aprs.Message("BLN1", "hi")), "invalid-addressee"),
+        (lambda: aprs.encode_info(aprs.Message("N0CALL", "hi", reply_ack="1")), "missing-field"),
+        (lambda: aprs.encode_info(aprs.Capabilities((("bad token",),))), "malformed"),
+        (lambda: aprs.encode_info(aprs.TelemetryBits("N0CALL", "10101010", "x" * 24)), "too-long"),
+        (lambda: aprs.encode_info(aprs.TelemetryCoefficients("N0CALL", (float("nan"),))), "not-a-number"),
+        (
+            lambda: aprs.encode_info(
+                aprs.PositionReport(latitude=float("inf"), longitude=0, symbol=Symbol.HOUSE, comment="a\nb")
+            ),
+            "not-a-number",
+        ),
+        (
+            lambda: aprs.encode_info(aprs.PositionReport(latitude=1, longitude=1, symbol=Symbol("/", "_"))),
+            "symbol-mismatch",
+        ),
+        (
+            lambda: aprs.encode_info(
+                aprs.PositionReport(latitude=1, longitude=1, symbol=Symbol("/", "_"), comment="a\nb")
+            ),
+            "invalid-character",
+        ),
         (lambda: Station("N0CALL").telemetry(1000, [1, 2, 3, 4, 5], "00000000"), "value-out-of-range"),
         (
             lambda: Station("N0CALL").weather(temperature_f=1, temperature_c=1, symbol=Symbol.WEATHER_STATION),
