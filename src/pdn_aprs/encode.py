@@ -636,7 +636,7 @@ def _extension(data: PositionedData, f: _Faults) -> str:
             text += f"/{b.bearing_degrees:03d}/{b.number}{b.range}{b.quality}"
         if data.df_bearing is not None and data.storm is not None:
             f.add(RefusalCode.EXTENSION_CONFLICT, "a DF bearing and storm data both extend the course and speed")
-        if str(data.symbol) == "\\l" and data.area is None and (course is not None or speed is not None):
+        if str(data.symbol) == "\\l" and data.area is None and course is not None:
             f.add(RefusalCode.SYMBOL_MISMATCH, "course and speed on the area symbol \\l read back as an area")
         text += _storm_text(data, f)
         parts.append(text)
@@ -1153,6 +1153,9 @@ def _mic_e(data: MicEReport) -> bytes:
         mic = None if data.altitude_in_comment else _mic_e_altitude(data.altitude_feet)
         if mic is not None:
             altitude_first = mic
+            if not type_code and mic[0] in "`'>] " and abs(_nearest(data.altitude_feet)) > 999999:
+                # no /A= can hold it, and its first byte would read back as a type code
+                f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
         else:
             altitude_later = f.guard(_altitude, data.altitude_feet, default="")
     locator = ""
