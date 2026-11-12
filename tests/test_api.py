@@ -1125,5 +1125,5 @@ def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
 
 
 def test_mic_e_status_text_that_reads_back_changed_is_text_reads_as_field() -> None:
-    packet = aprs.decode_tnc2('LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}'.encode())
+    packet = aprs.decode_tnc2(b'LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}')
     assert _code(lambda: aprs.encode_info(packet.data)) == "text-reads-as-field"
