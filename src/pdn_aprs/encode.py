@@ -279,6 +279,23 @@ def _with_comment(
         # a weather symbol with no weather data reads back as a weather report
         raise _refuse(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
     free_text = bool(comment) or (weather is not None and bool(weather.software or weather.unit))
+    if isinstance(data, MicEReport):
+        # a Mic-E report's status text is whatever follows its position bytes: the altitude
+        # bytes, a locator and the rest all read back as text
+        free_text = free_text or any(
+            x is not None
+            for x in (
+                data.altitude_feet,
+                data.locator,
+                data.telemetry,
+                data.frequency,
+                data.phg,
+                data.range_miles,
+                data.dfs,
+                data.dao,
+                data.device_suffix,
+            )
+        )
     code = RefusalCode.TEXT_READS_AS_FIELD if free_text else RefusalCode.DOES_NOT_READ_BACK
     raise _refuse(code, f"the text {comment!r} would not read back as written")
 
