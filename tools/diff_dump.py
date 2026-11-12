@@ -20,7 +20,8 @@ destination it computed; ``api`` is what the library's public API says about the
 
 Encode (``--encode``) reads ``{"n", "data", "exact"}`` lines of neutral data (the vectors'
 ``tools/generate.py``), encodes each and writes ``{"n", "result", "info", "destination",
-"again"}``, or a ``reason`` when the result is ``refused`` or ``unsupported``.
+"again"}``, or a ``reason`` when the result is ``refused`` or ``unsupported`` (and, when refused, the
+``refusal`` code).
 
 Build (``--build``) reads builder recipes (``tools/generate.py --recipes``), calls the
 ``Station`` methods as a program would and writes ``{"n", "result", "tnc2", "again"}``, or a
@@ -53,6 +54,7 @@ from pdn_aprs import (
     Packet,
     ParseOptions,
     Phg,
+    RefusalCode,
     Station,
     Symbol,
     ThirdParty,
@@ -119,8 +121,8 @@ def reencode(packet: Packet | None) -> tuple[str, dict[str, str]]:
     try:
         info = encode_info(data)
         destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
-    except EncodeError:
-        return "refused", {}
+    except EncodeError as e:
+        return "refused", {"reencode_refusal": e.code.value}
     written = {"written": info.hex()}
     if isinstance(data, MicEReport):
         written["written_destination"] = destination
@@ -156,8 +158,9 @@ def api_view(packet: Packet) -> dict[str, Any]:
             view["q_construct"]["station"] = q.station
     try:
         view["ax25"] = packet.to_ax25().hex()
-    except EncodeError:
+    except EncodeError as e:
         view["ax25"] = "refused"
+        view["ax25_refusal"] = e.code.value
     device = packet.device
     view["device"] = None
     if device is not None:
@@ -207,13 +210,23 @@ def encode_line(n: int, text: str) -> str:
         try:
             data = from_neutral(item["data"])
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
+            if item["data"].get("type") in ("ack", "reject") and "message_id" in item["data"]:
+                # the data type has no ID of its own to hold: the encoder's rule, not a gap
+                return dumps(
+                    {
+                        "n": n,
+                        "result": "refused",
+                        "reason": f"an {item['data']['type']} carries no message ID of its own",
+                        "refusal": RefusalCode.FIELD_NOT_ALLOWED.value,
+                    }
+                )
             # this library's data cannot hold something in the neutral data
             return dumps({"n": n, "result": "unsupported", "reason": f"{type(e).__name__}: {e}"})
         try:
             info = encode_info(data)
             destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
         except EncodeError as e:
-            return dumps({"n": n, "result": "refused", "reason": str(e)})
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
         try:
             packet = decode_tnc2(f"N0CALL>{destination}".encode("ascii") + b":" + info, LENIENT)
             again: dict[str, Any] = {
@@ -475,7 +488,10 @@ def build_line(n: int, text: str) -> str:
             return dumps({"n": n, "result": "unsupported", "reason": str(e)})
         except (EncodeError, ValueError) as e:
             # the builder or the encoder declined
-            return dumps({"n": n, "result": "refused", "reason": str(e)})
+            record = {"n": n, "result": "refused", "reason": str(e)}
+            if isinstance(e, EncodeError):
+                record["refusal"] = e.code.value
+            return dumps(record)
         line = packet.to_tnc2()
         try:
             again = packet_to_neutral(decode_tnc2(line, LENIENT))

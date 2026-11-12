@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .diagnostics import Diagnostic, Severity
-from .errors import EncodeError
+from .errors import EncodeError, RefusalCode
 
 if TYPE_CHECKING:
     from .devices import Device
@@ -111,7 +111,7 @@ class Packet:
         """
         path = self.path
         if len(path) > 8:
-            raise EncodeError("an AX.25 frame has at most 8 digipeaters")
+            raise EncodeError("an AX.25 frame has at most 8 digipeaters", RefusalCode.AX25_CANNOT_CARRY)
         frame = bytearray(_ax25_address(self.destination, command=True))
         frame += _ax25_address(self.source, last=not path)
         for i, entry in enumerate(path):
@@ -134,14 +134,20 @@ def _ax25_address(name: str, *, last: bool = False, command: bool = False, repea
     call, dash, ssid_text = name.partition("-")
     if dash and not ssid_text:
         # a dash with no SSID would come back from the frame as no dash
-        raise EncodeError(f"{name!r} is not an AX.25 address as sent: a dash with no SSID")
+        raise EncodeError(
+            f"{name!r} is not an AX.25 address as sent: a dash with no SSID", RefusalCode.AX25_CANNOT_CARRY
+        )
     if not 1 <= len(call) <= 6 or not all("A" <= c <= "Z" or "0" <= c <= "9" for c in call):
-        raise EncodeError(f"{name!r} is not an AX.25 address: 1-6 upper-case letters and digits")
+        raise EncodeError(
+            f"{name!r} is not an AX.25 address: 1-6 upper-case letters and digits", RefusalCode.AX25_CANNOT_CARRY
+        )
     if ssid_text and not (ssid_text.isascii() and ssid_text.isdigit() and int(ssid_text) <= 15):
-        raise EncodeError(f"{name!r} is not an AX.25 address: the SSID is 0-15")
+        raise EncodeError(f"{name!r} is not an AX.25 address: the SSID is 0-15", RefusalCode.AX25_CANNOT_CARRY)
     if ssid_text and (ssid_text != str(int(ssid_text)) or ssid_text == "0"):
         # -00 or -0 would come back from the frame as no SSID, so AX.25 cannot carry it as sent
-        raise EncodeError(f"{name!r} is not an AX.25 address as sent: the SSID has a leading zero")
+        raise EncodeError(
+            f"{name!r} is not an AX.25 address as sent: the SSID has a leading zero", RefusalCode.AX25_CANNOT_CARRY
+        )
     ssid = int(ssid_text) if ssid_text else 0
     flag = 0x80 if (command or repeated) else 0
     return bytes(ord(c) << 1 for c in call.ljust(6)) + bytes([0x60 | flag | (ssid << 1) | (1 if last else 0)])

@@ -119,7 +119,7 @@ M0LTE-13>APZ001::M0LTE-13 :PARM.Battery,Temp
 
 ```
 
-The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Every keyword has the name of the data field it fills (`course_degrees`, `speed_knots`, `wind_gust_mph`...); a metric alternative changes only the unit (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`). Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (MHz, or a `VoiceFrequency` to give a tone or offset), `telemetry` and `dao` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. A request that cannot be sent (a telemetry sequence over 999, say) raises `EncodeError`; one that cannot mean anything (a quantity given in both units) raises `ValueError`. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
+The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Every keyword has the name of the data field it fills (`course_degrees`, `speed_knots`, `wind_gust_mph`...); a metric alternative changes only the unit (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`). Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (MHz, or a `VoiceFrequency` to give a tone or offset), `telemetry` and `dao` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. A request that cannot be sent (a telemetry sequence over 999, a quantity given in both units) raises `EncodeError`, which is a `ValueError` and carries a reason code; one that cannot mean anything (no symbol anywhere) raises a plain `ValueError`. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
 
 ## Encoding
 
@@ -140,6 +140,22 @@ Traceback (most recent call last):
 pdn_aprs.errors.EncodeError: message text is over 67 characters
 
 ```
+
+### Why it refused
+
+An `EncodeError` carries a `code`, a `RefusalCode` that says which rule the data broke, so a program can act on it without reading the message (which is for people and may change):
+
+```python
+>>> from pdn_aprs import RefusalCode
+>>> try:
+...     encode_info(aprs.Message("N0CALL", "x" * 68))
+... except aprs.EncodeError as e:
+...     print(e.code.value, e.code is RefusalCode.TOO_LONG)
+too-long True
+
+```
+
+The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all five implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
 
 `build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E report's destination.
 

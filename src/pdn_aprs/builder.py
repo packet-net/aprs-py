@@ -27,7 +27,7 @@ from typing import TypedDict
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
 from .encode import DEFAULT_DESTINATION, build_packet
-from .errors import EncodeError
+from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
     AprsData,
@@ -83,7 +83,7 @@ def _either(value: float | None, metric: float | None, per_unit: float, what: st
     if metric is None:
         return value
     if value is not None:
-        raise ValueError(f"give the {what} once, not in both units")
+        raise EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
     return metric / per_unit
 
 
@@ -275,7 +275,7 @@ class Station:
         """
         stamp = _timestamp(timestamp)
         if stamp is None:
-            raise ValueError("an object always has a timestamp")
+            raise EncodeError("an object always has a timestamp", RefusalCode.MISSING_FIELD)
         data = ObjectReport(
             name=name,
             killed=killed,
@@ -377,7 +377,7 @@ class Station:
             course_degrees = None
         if altitude_m is not None:
             if altitude_feet is not None:
-                raise ValueError("give the altitude once, not in both units")
+                raise EncodeError("give the altitude once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
             feet: float | None = round_half_away(altitude_m) * FEET_PER_METRE
         else:
             feet = altitude_feet
@@ -437,10 +437,10 @@ class Station:
         """
         if temperature_c is not None:
             if temperature_f is not None:
-                raise ValueError("give the temperature once, not in both units")
+                raise EncodeError("give the temperature once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
             temperature_f = temperature_c * 9 / 5 + 32
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
-            raise ValueError("a positionless weather report has no symbol")
+            raise EncodeError("a positionless weather report has no symbol", RefusalCode.SYMBOL_MISMATCH)
         weather = Weather(
             wind_direction_degrees=wind_direction_degrees,
             wind_speed_mph=wind_speed_mph,
@@ -458,7 +458,7 @@ class Station:
         )
         if latitude is None or longitude is None:
             if latitude is not None or longitude is not None:
-                raise ValueError("give both latitude and longitude, or neither")
+                raise EncodeError("give both latitude and longitude, or neither", RefusalCode.MISSING_FIELD)
             moment = timestamp if isinstance(timestamp, datetime) else datetime.now(timezone.utc)
             if moment.tzinfo is not None:
                 moment = moment.astimezone(timezone.utc)
@@ -497,7 +497,7 @@ class Station:
     def bulletin(self, id: str, text: str, *, group: str = "") -> Packet:
         """A bulletin (``id`` a digit), announcement (a letter) or group bulletin."""
         if len(id) != 1:
-            raise EncodeError(f"a bulletin id is exactly one character, not {id!r}")
+            raise EncodeError(f"a bulletin id is exactly one character, not {id!r}", RefusalCode.INVALID_ADDRESSEE)
         return self.send(Bulletin(f"BLN{id}{group}", text))
 
     def status(
@@ -531,7 +531,7 @@ class Station:
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
         if not 0 <= sequence <= 999:
-            raise EncodeError(f"telemetry sequence {sequence} is not 0-999")
+            raise EncodeError(f"telemetry sequence {sequence} is not 0-999", RefusalCode.VALUE_OUT_OF_RANGE)
         return self.send(TelemetryReport(f"{sequence:03d}", tuple(analog), bits, comment))
 
     def telemetry_names(self, names: Iterable[str], *, addressee: str | None = None) -> Packet:
