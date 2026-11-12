@@ -4,9 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-12
+
 ### Added
 
-- 1.0.1: refusals carry a reason code. `EncodeError.code` is a new `RefusalCode` (a `str` enum, exported from the package) naming the rule the data broke, one of the 26 shared ids in the vectors' `codes.json`. The message text and every existing signature are unchanged, and `EncodeError("message")` still works (it gives `does-not-read-back`).
+- Refusals carry a reason code. `EncodeError.code` is a new `RefusalCode` (a `str` enum, exported from the package) naming the rule the data broke, one of the 26 shared ids in the vectors' `codes.json`. The message text and every existing signature are unchanged, and `EncodeError("message")` still works (it gives `does-not-read-back`).
 - `Station` refusals that were a plain `ValueError` (a quantity in both units, an object with no timestamp, a positionless weather report with a symbol, a latitude without a longitude) now raise `EncodeError`, a subclass of `ValueError`, so existing handlers still catch them.
 - The dump tool writes `refusal` on refused encode and build records, `reencode_refusal` on decode records whose re-encode is refused, and `ax25_refusal` in the API view.
 
@@ -154,7 +156,9 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/packet-net/aprs-py/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/packet-net/aprs-py/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/packet-net/aprs-py/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/packet-net/aprs-py/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/packet-net/aprs-py/compare/v0.1.0...v0.1.1
