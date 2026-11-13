@@ -29,6 +29,7 @@ Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libra
 
 ### Fixed
 
+- `build_packet` and the `Station` builders check the header first and as APRS-IS has it: a source, destination or path entry that is not 1-9 letters, digits or `-` (`BAD!!`) is `invalid-address`, ahead of any fault in the data. It used to accept any printable text.
 - `Station` builders name a quantity given in both units (`value-given-twice`) in the Refusal reasons order, after any earlier code, instead of at once; a Mic-E report is refused for its out-of-range values (a speed of 999.5) before its destination at the poles is judged.
 - The vectors runner compares refusal codes (`refusal` and `reencode_refusal`), not only that a refusal happened.
 - The dump tool stands in an invalid symbol for one that is not two characters, so such data is refused as `invalid-symbol` instead of being reported unsupported, and names the refusal for an ack or reject given a message ID.

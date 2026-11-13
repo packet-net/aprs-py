@@ -205,6 +205,12 @@ def _check_address(call: str, what: str, code: RefusalCode = RefusalCode.INVALID
         raise _refuse(code, f"{what} {call!r} is not 1-9 printable characters without spaces or colons")
 
 
+def _check_header_address(call: str, what: str) -> None:
+    """A source, destination or path entry as APRS-IS carries it: 1-9 letters, digits or ``-``."""
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,9}", call):
+        raise _refuse(RefusalCode.INVALID_ADDRESS, f"{what} {call!r} is not 1-9 letters, digits or -")
+
+
 def _check_symbol(data: PositionedData) -> None:
     if not data.symbol.is_valid:
         raise _refuse(RefusalCode.INVALID_SYMBOL, f"symbol {str(data.symbol)!r} is not a valid table and code")
@@ -1757,14 +1763,14 @@ def build_packet(
     For a Mic-E report the destination is computed from the data (with its
     ``destination_ssid``), and ``destination`` is ignored.
     """
-    _check_address(source, "source", RefusalCode.INVALID_ADDRESS)
+    _check_header_address(source, "source")
     entries = tuple(p if isinstance(p, PathEntry) else PathEntry(p.rstrip("*"), p.endswith("*")) for p in path)
     for entry in entries:
-        _check_address(entry.address, "path entry", RefusalCode.INVALID_ADDRESS)
+        _check_header_address(entry.address, "path entry")
     if len(entries) > 8:
         raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
     if not isinstance(data, MicEReport):
-        _check_address(destination, "destination", RefusalCode.INVALID_ADDRESS)
+        _check_header_address(destination, "destination")
     # the information field first: it names the first code that applies across all the data
     info = encode_info(data)
     if isinstance(data, MicEReport):

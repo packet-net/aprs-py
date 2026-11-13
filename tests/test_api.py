@@ -1179,3 +1179,15 @@ def test_from_neutral_refuses_a_chain_ten_thousand_deep_without_recursion() -> N
     with pytest.raises(aprs.EncodeError) as err:
         from_neutral(data)
     assert err.value.code is aprs.RefusalCode.INVALID_THIRD_PARTY_HEADER
+
+
+def test_the_header_is_judged_first_and_an_invalid_source_is_refused() -> None:
+    st = aprs.Station("BAD!!", symbol=aprs.Symbol.CAR)
+    for build in (
+        lambda: st.position(10.0, 10.0),
+        lambda: st.position(10.0, 10.0, course_degrees=999),
+        lambda: st.mic_e(10.0, 10.0, course_degrees=999),
+    ):
+        with pytest.raises(aprs.EncodeError) as err:
+            build()
+        assert err.value.code is aprs.RefusalCode.INVALID_ADDRESS
