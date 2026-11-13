@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libraries as 1.1.0.
+
+### Changed
+
+- Third-party packets nest at most four deep: a fifth `}` is not read, and the packet whose information field it starts is `unrecognized` (`malformed`) with `error:invalid-third-party`. A line of thousands of `}` no longer recurses to the interpreter's limit.
+- An AX.25 address is upper-case letters and digits, then padding. A lower-case letter is still tolerated (`invalid-ax25-address-characters`); any other character, a space before the last character included, makes the header unusable (`invalid-address`), so no TNC2 line is written from it.
+- A `!DAO!` on an ambiguous position in a weather report is met before the weather comment, so a strict decoder rejects it as `dao-with-ambiguity`, not `weather-comment`.
+- Refusal order, where a record has several faults: more analog values than a telemetry report (5), base-91 telemetry (1-5) or `EQNS.` (15) holds is `too-long`, fewer is `malformed`; a message with an invalid reply-ack and no message ID is `invalid-message-id`; a general query with no type is `missing-field`; a directed query's addressee is judged before its type; a weather report's altitude has no place, so it is `field-not-allowed` whatever its value; a status locator with an unknown symbol table is `invalid-symbol`, and a lower-case locator (status, Mic-E or Maidenhead beacon) is `malformed` whatever else is missing; a course, speed or range in the place a weather report's wind or a GGA altitude holds keeps its own checks (`value-out-of-range`, `value-has-no-form`) ahead of `extension-conflict`; compressed wind with only a direction or only a speed still has the one given checked; undecoded inner data of a third-party packet is `not-encodable`, ahead of its header.
+- NMEA data is its sentence: a sentence given without the fields it holds is written, a field given that disagrees with it is `invalid-nmea`, and so is a comment given with a sentence that has no checksum (it was `field-not-allowed`).
+- A Mic-E report with no speed given is written (its read-back always has speed 0); a Mic-E or uncompressed position within a rounding step of 90 or 180 degrees, with ambiguity, is cut into the box below the edge as the ruling says.
+
+### Fixed
+
+- The vectors runner compares refusal codes (`refusal` and `reencode_refusal`), not only that a refusal happened.
+- The dump tool stands in an invalid symbol for one that is not two characters, so such data is refused as `invalid-symbol` instead of being reported unsupported, and names the refusal for an ack or reject given a message ID.
+
 ## [1.0.1] - 2026-11-12
 
 ### Added

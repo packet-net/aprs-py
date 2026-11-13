@@ -202,9 +202,24 @@ def dump_line(n: int, hex_line: str) -> str:
 # ---------------------------------------------------------------- encode
 
 
+def _stand_in_symbols(value: Any) -> None:
+    """A symbol that is not two characters cannot be held by ``Symbol``; one that is invalid the
+    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key == "symbol" and isinstance(inner, str) and len(inner) != 2:
+                value[key] = "x-"
+            else:
+                _stand_in_symbols(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            _stand_in_symbols(inner)
+
+
 def encode_line(n: int, text: str) -> str:
     item = json.loads(text)
     n = item.get("n", n)
+    _stand_in_symbols(item.get("data"))
     try:
         try:
             data = from_neutral(item["data"])

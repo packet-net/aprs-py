@@ -459,6 +459,17 @@ def _course_speed(course: float, knots: float, *, is_course: bool = True) -> str
     return chr(c + 33) + chr(s + 33)
 
 
+def _check_compressed_course_speed(course: float | None, knots: float | None, f: _Faults) -> None:
+    """A compressed course and speed's own checks, which hold whatever else wants the cs bytes."""
+    if course is not None:
+        if not 0 <= _nearest(course) <= 360:
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"course {course} is not 0-360")
+        elif _nearest(course) == 0:
+            f.add(RefusalCode.VALUE_HAS_NO_FORM, "a compressed course of 0 has no form; north is 360")
+    if knots is not None and (knots <= -1 or not 0 <= _nearest(math.log(knots + 1) / math.log(1.08)) <= 90):
+        f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"speed {knots} knots has no compressed step")
+
+
 def _altitude(feet: float) -> str:
     value = _nearest(feet)
     if value < 0:
@@ -510,6 +521,7 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
         if w.wind_direction_degrees is None or w.wind_speed_mph is None:
             f.add(RefusalCode.MISSING_FIELD, "compressed wind needs both a direction and a speed")
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
+            _check_compressed_course_speed(data.course_degrees, data.speed_knots, f)
             f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report's cs bytes carry the wind")
         if data.altitude_feet is not None:
             f.add(
@@ -521,6 +533,7 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
         cs = f.guard(lambda: _course_speed(w.wind_direction_degrees or 0, speed, is_course=False), default="  ")
     elif gga:
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
+            _check_compressed_course_speed(data.course_degrees, data.speed_knots, f)
             f.add(
                 RefusalCode.EXTENSION_CONFLICT, "a GGA compressed position carries altitude, not course, speed or range"
             )
@@ -543,26 +556,19 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                 altitude_text = f.guard(_altitude, data.altitude_feet, default="")
         course, knots = data.course_degrees, data.speed_knots
         if course is not None or knots is not None:
+            before = len(f.found)
+            _check_compressed_course_speed(course, knots, f)
             if weather:
                 f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report carries wind, not course and speed")
-            else:
-                before = len(f.found)
-                if course is not None:
-                    if not 0 <= _nearest(course) <= 360:
-                        f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"course {course} is not 0-360")
-                    elif _nearest(course) == 0:
-                        f.add(RefusalCode.VALUE_HAS_NO_FORM, "a compressed course of 0 has no form; north is 360")
-                if knots is not None and (knots <= -1 or not 0 <= _nearest(math.log(knots + 1) / math.log(1.08)) <= 90):
-                    f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"speed {knots} knots has no compressed step")
-                if data.range_miles is not None:
-                    f.add(
-                        RefusalCode.EXTENSION_CONFLICT,
-                        "a compressed position carries course and speed, or range, not both",
-                    )
-                elif course is None or knots is None:
-                    f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
-                elif len(f.found) == before:
-                    cs = _course_speed(course, knots)
+            elif data.range_miles is not None:
+                f.add(
+                    RefusalCode.EXTENSION_CONFLICT,
+                    "a compressed position carries course and speed, or range, not both",
+                )
+            elif course is None or knots is None:
+                f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
+            elif len(f.found) == before:
+                cs = _course_speed(course, knots)
         if range_cs is not None and course is None and knots is None:
             cs = range_cs
     if cs is None:
@@ -934,7 +940,8 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
                 data.storm,
             )
         ):
-            # the wind holds the data extension
+            # the wind holds the data extension; what was given there still gets its own checks
+            _extension(data, f)
             f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report carries wind, not another data extension")
         body = position + _weather_text(data.weather or Weather(), positionless=False, compressed=data.compressed, f=f)
         return lambda comment: body + dao
@@ -1189,7 +1196,7 @@ def _mic_e(data: MicEReport) -> bytes:
             altitude_later = f.guard(_altitude, data.altitude_feet, default="")
     locator = ""
     if data.locator is not None:
-        if not _util.is_locator(data.locator):
+        if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
             f.add(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
         else:
             locator = data.locator.upper() + "/G"
@@ -1247,6 +1254,10 @@ def _is_id(text: str) -> bool:
 def _message_id(msg_id: str | None, reply_ack: str | None) -> str:
     if msg_id is None:
         if reply_ack is not None:
+            if reply_ack and not _is_id(reply_ack):
+                raise _refuse(
+                    RefusalCode.INVALID_MESSAGE_ID, f"reply-ack {reply_ack!r} is not up to 5 letters and digits"
+                )
             raise _refuse(RefusalCode.MISSING_FIELD, "a reply-ack goes with a message ID")
         return ""
     if not _is_id(msg_id):
@@ -1521,7 +1532,7 @@ def _nmea_reads_back(data: NmeaSentence, raw: bytes) -> bool:
 
 def _maidenhead(data: MaidenheadBeacon) -> bytes:
     _check_text(data.comment, "comment")
-    if not _util.is_locator(data.locator):
+    if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
         raise _refuse(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
     return _checked(data, "[" + data.locator.upper() + "]" + data.comment)
 
@@ -1598,6 +1609,9 @@ def _third_party(data: ThirdParty) -> bytes:
 
     inner = data.packet
     bad = RefusalCode.INVALID_THIRD_PARTY_HEADER
+    if not (inner.info or inner.data == Unrecognized(UnrecognizedReason.EMPTY)) and type(inner.data) not in _ENCODERS:
+        # data with no form to write comes first in the order, ahead of the header
+        raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(inner.data).__name__} cannot be encoded")
     # the inner header comes before the inner data, so its faults are named first
     if any(d.code in _INNER_HEADER_DEFECTS for d in inner.diagnostics):
         # the defect is part of the data, and no clean header reproduces it
