@@ -242,7 +242,11 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
     decoded = decode_info(info, destination, ctx)
     if any(d.severity is not Severity.INFO for d in ctx.diags):
         return False
-    return not _shape_differences(to_neutral(data), to_neutral(decoded), numbers=numbers)
+    given = to_neutral(data)
+    if isinstance(data, MicEReport):
+        # a Mic-E report always has a speed: one not given is 0
+        given.setdefault("speed_knots", 0)
+    return not _shape_differences(given, to_neutral(decoded), numbers=numbers)
 
 
 def _with_comment(
@@ -512,9 +516,9 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                 RefusalCode.EXTENSION_CONFLICT if gga else RefusalCode.FIELD_NOT_ALLOWED,
                 "a weather report's cs bytes carry the wind, not an altitude",
             )
-        if w.wind_direction_degrees is not None and w.wind_speed_mph is not None:
-            speed = w.wind_speed_mph / _util.KNOTS_TO_MPH
-            cs = f.guard(lambda: _course_speed(w.wind_direction_degrees or 0, speed, is_course=False), default="  ")
+        # what is given is judged even when the other half is missing
+        speed = (w.wind_speed_mph or 0) / _util.KNOTS_TO_MPH
+        cs = f.guard(lambda: _course_speed(w.wind_direction_degrees or 0, speed, is_course=False), default="  ")
     elif gga:
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
             f.add(
@@ -735,7 +739,9 @@ def _frequency_text(fq: VoiceFrequency, f: _Faults) -> str:
 def _telemetry_text(t: CommentTelemetry | None, f: _Faults) -> str:
     if t is None:
         return ""
-    if not 1 <= len(t.analog) <= 5:
+    if len(t.analog) > 5:
+        f.add(RefusalCode.TOO_LONG, "comment telemetry has 1-5 analog values")
+    elif not t.analog:
         f.add(RefusalCode.MALFORMED, "comment telemetry has 1-5 analog values")
     values = [t.sequence, *t.analog]
     if t.digital is not None:
@@ -892,7 +898,13 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
         if data.compression is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a compression type needs a compressed position")
         position = f.guard(_uncompressed, data, lat_units, lon_units, default="")
-        altitude = "" if data.altitude_feet is None else f.guard(_altitude, data.altitude_feet, default="")
+        altitude = ""
+        if data.altitude_feet is not None:
+            if weather:
+                # no comment to hold an /A=, so no place for it: its range is not judged
+                f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment for an /A= altitude")
+            else:
+                altitude = f.guard(_altitude, data.altitude_feet, default="")
     dao = f.guard(_dao_text, data, a, o, default="")
     telemetry = _telemetry_text(data.telemetry, f)
     if weather:
@@ -1319,7 +1331,9 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
     elif isinstance(data, TelemetryCoefficients):
         if not all(math.isfinite(v) for v in data.coefficients):
             raise _refuse(RefusalCode.NOT_A_NUMBER, "a coefficient is a finite number")
-        if not 1 <= len(data.coefficients) <= 15:
+        if len(data.coefficients) > 15:
+            raise _refuse(RefusalCode.TOO_LONG, "EQNS. carries 1-15 coefficients")
+        if not data.coefficients:
             raise _refuse(RefusalCode.MALFORMED, "EQNS. carries 1-15 coefficients")
         texts = data.coefficients_text
         if len(texts) != len(data.coefficients) or any(
@@ -1346,6 +1360,7 @@ _DEFINED_QUERIES = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST
 
 def _directed_query(data: DirectedQuery) -> bytes:
     _check_message_addressee(data.addressee, "a directed query")
+    head = _addressee(data.addressee)
     qtype = data.query_type
     target = data.target or ""
     if target and (len(target) > 9 or not all(c.isascii() and (c.isalnum() or c == "-") for c in target)):
@@ -1358,7 +1373,7 @@ def _directed_query(data: DirectedQuery) -> bytes:
         target = target.ljust(9)
     elif target and qtype not in _DEFINED_QUERIES:
         target = " " + target
-    return _checked(data, _addressee(data.addressee) + "?" + qtype + target)
+    return _checked(data, head + "?" + qtype + target)
 
 
 # ---------------------------------------------------------------- the rest
@@ -1373,10 +1388,12 @@ def _status(data: StatusReport) -> bytes:
     if data.locator is not None:
         if data.timestamp is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report with a grid locator has no timestamp")
-        if not _util.is_locator(data.locator):
+        if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
             f.add(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
-        if data.symbol is None or not data.symbol.is_valid:
+        if data.symbol is None:
             f.add(RefusalCode.MISSING_FIELD, "a grid locator status report needs a symbol")
+        elif not data.symbol.is_valid:
+            f.add(RefusalCode.INVALID_SYMBOL, f"symbol {str(data.symbol)!r} is not a valid table and code")
     elif data.symbol is not None:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report's symbol goes with a grid locator")
     if data.beam is not None:
@@ -1403,7 +1420,9 @@ def _telemetry(data: TelemetryReport) -> bytes:
     seq = data.sequence
     if not seq or not (seq.isascii() and seq.isalnum()):
         f.add(RefusalCode.MALFORMED, "a telemetry sequence is letters and digits")
-    if len(data.analog) != 5:
+    if len(data.analog) > 5:
+        f.add(RefusalCode.TOO_LONG, "a telemetry report has five analog values")
+    elif len(data.analog) < 5:
         f.add(RefusalCode.MALFORMED, "a telemetry report has five analog values")
     if data.bits is None:
         f.add(RefusalCode.MISSING_FIELD, "a telemetry report has eight 0/1 bits")
@@ -1475,11 +1494,29 @@ def _nmea(data: NmeaSentence) -> bytes:
         if got != int(s[star + 1 :], 16):
             raise _refuse(RefusalCode.INVALID_NMEA, "the NMEA checksum does not match the sentence")
     if data.comment and not data.has_checksum:
-        raise _refuse(RefusalCode.FIELD_NOT_ALLOWED, "a comment goes after the sentence's checksum")
+        # only a checksum ends a sentence: written, the comment would read back as part of it
+        raise _refuse(RefusalCode.INVALID_NMEA, "a comment goes after the sentence's checksum")
     raw = ("$" + s).encode("ascii") + data.comment.encode("utf-8")
-    if not _reads_back(data, raw, DEFAULT_DESTINATION, numbers=True):
+    if not _nmea_reads_back(data, raw):
         raise _refuse(RefusalCode.INVALID_NMEA, "the sentence does not read back as the same NMEA data")
     return raw
+
+
+def _nmea_reads_back(data: NmeaSentence, raw: bytes) -> bool:
+    """Whether ``raw`` reads back with the sentence and comment as given and every field given
+    agreeing with the sentence: a field left out is the sentence's own (vectors interpretations.md,
+    NMEA data is its sentence)."""
+    from ._decode import Ctx, decode_info
+    from ._neutral import to_neutral
+
+    ctx = Ctx(_LENIENT)
+    decoded = decode_info(raw, DEFAULT_DESTINATION, ctx)
+    if any(d.severity is not Severity.INFO for d in ctx.diags):
+        return False
+    given, found = to_neutral(data), to_neutral(decoded)
+    if found.get("type") != "nmea":
+        return False
+    return not any(_shape_differences(v, found.get(k), numbers=True) for k, v in given.items())
 
 
 def _maidenhead(data: MaidenheadBeacon) -> bytes:
@@ -1499,7 +1536,9 @@ def _query(data: Query) -> bytes:
             raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "footprint radius is 0-9999 miles")
         if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
             raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "footprint latitude or longitude out of range")
-    if not data.query_type or not all("A" <= c <= "Z" for c in data.query_type):
+    if not data.query_type:
+        raise _refuse(RefusalCode.MISSING_FIELD, "a query has a type")
+    if not all("A" <= c <= "Z" for c in data.query_type):
         raise _refuse(RefusalCode.INVALID_CODE, "a query type is upper-case letters")
     if data.footprint is not None:
         f = data.footprint

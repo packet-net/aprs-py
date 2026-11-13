@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any
 
 from .diagnostics import Diagnostic
-from .errors import AprsError
+from .errors import AprsError, EncodeError, RefusalCode
 from .model import (
     Ack,
     AgreloDf,
@@ -78,7 +78,14 @@ from .model import (
 from .packet import Packet, PathEntry
 from .symbols import Symbol
 
-__all__ = ["NeutralFormError", "from_neutral", "header_to_neutral", "packet_to_neutral", "to_neutral"]
+__all__ = [
+    "NeutralFormError",
+    "from_neutral",
+    "header_to_neutral",
+    "packet_to_neutral",
+    "refusal_for_unrepresentable",
+    "to_neutral",
+]
 
 
 class NeutralFormError(AprsError):
@@ -291,6 +298,9 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             kwargs[key] = _CONVERT[key](value)
         else:
             kwargs[key] = value
+    if cls is Query and "query_type" not in kwargs:
+        # a query with no type is the encoder's to refuse (missing-field)
+        kwargs["query_type"] = ""
     if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
         # empty text is left out of the neutral form
         kwargs["text"] = ""
@@ -298,3 +308,52 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
         return cls(**kwargs)
     except TypeError as e:
         raise NeutralFormError(f"{kind}: {e}") from None
+
+
+def refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
+    """The refusal an encoder gives data this library's data model cannot hold, or None.
+
+    An ack or a reject has no message ID of its own, so one given is a field the report has no
+    place for (``field-not-allowed``); the data's other faults are judged without it, and a code
+    that comes before ``field-not-allowed`` in the vectors' order wins.
+    """
+    from .encode import encode_info
+
+    kind = data.get("type")
+    if kind not in ("ack", "reject") or "message_id" not in data:
+        return None
+    rest = {k: v for k, v in data.items() if k != "message_id"}
+    try:
+        encode_info(from_neutral(rest))
+    except EncodeError as e:
+        if e.code in _BEFORE_FIELD_NOT_ALLOWED:
+            return e.code
+    except (NeutralFormError, ValueError, KeyError, TypeError):
+        return None
+    return RefusalCode.FIELD_NOT_ALLOWED
+
+
+_BEFORE_FIELD_NOT_ALLOWED = frozenset(
+    {
+        RefusalCode.NOT_ENCODABLE,
+        RefusalCode.INVALID_ADDRESS,
+        RefusalCode.AX25_CANNOT_CARRY,
+        RefusalCode.TNC2_CANNOT_CARRY,
+        RefusalCode.INVALID_THIRD_PARTY_HEADER,
+        RefusalCode.INVALID_ADDRESSEE,
+        RefusalCode.INVALID_NAME,
+        RefusalCode.INVALID_TIMESTAMP,
+        RefusalCode.NOT_A_NUMBER,
+        RefusalCode.VALUE_OUT_OF_RANGE,
+        RefusalCode.VALUE_HAS_NO_FORM,
+        RefusalCode.INVALID_CODE,
+        RefusalCode.INVALID_SYMBOL,
+        RefusalCode.INVALID_CHARACTER,
+        RefusalCode.TOO_LONG,
+        RefusalCode.PADDING_SPACE,
+        RefusalCode.MALFORMED,
+        RefusalCode.INVALID_MESSAGE_ID,
+        RefusalCode.INVALID_NMEA,
+        RefusalCode.EXTENSION_CONFLICT,
+    }
+)
