@@ -298,9 +298,16 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             kwargs[key] = _CONVERT[key](value)
         else:
             kwargs[key] = value
-    if cls is Query and "query_type" not in kwargs:
-        # a query with no type is the encoder's to refuse (missing-field)
+    # text the neutral form leaves out is empty text, which the encoder refuses as such
+    # (vectors interpretations.md, "Absent text is empty text")
+    if cls in (Query, DirectedQuery) and "query_type" not in kwargs:
         kwargs["query_type"] = ""
+    if cls in (ObjectReport, ItemReport) and "name" not in kwargs:
+        kwargs["name"] = ""
+    if cls in (PositionReport, MicEReport, ObjectReport, ItemReport) and "symbol" not in kwargs:
+        kwargs["symbol"] = Symbol.parse("x-")  # an unknown table: invalid-symbol
+    if "addressee" in cls.__dataclass_fields__ and "addressee" not in kwargs:
+        kwargs["addressee"] = ""
     if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
         # empty text is left out of the neutral form
         kwargs["text"] = ""

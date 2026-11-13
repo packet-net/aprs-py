@@ -15,8 +15,13 @@ Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libra
 - NMEA data is its sentence: a sentence given without the fields it holds is written, a field given that disagrees with it is `invalid-nmea`, and so is a comment given with a sentence that has no checksum (it was `field-not-allowed`).
 - A Mic-E report with no speed given is written (its read-back always has speed 0), so a Mic-E position within a rounding step of 90 or 180 degrees, with ambiguity, is written in the box below the edge as the ruling says.
 
+- Text the neutral form leaves out is empty text: no positioned symbol is `invalid-symbol`, no name `invalid-name`, no addressee `invalid-addressee`, and a general or directed query with no type is `invalid-code` (a query with no type was `missing-field`).
+- Base-91 telemetry on a weather report has no place: `field-not-allowed`, and its own checks do not run.
+- Undecoded data at any depth of third-party nesting is `not-encodable`, ahead of the outer header.
+
 ### Fixed
 
+- `Station` builders name a quantity given in both units (`value-given-twice`) in the Refusal reasons order, after any earlier code, instead of at once; a Mic-E report is refused for its out-of-range values (a speed of 999.5) before its destination at the poles is judged.
 - The vectors runner compares refusal codes (`refusal` and `reencode_refusal`), not only that a refusal happened.
 - The dump tool stands in an invalid symbol for one that is not two characters, so such data is refused as `invalid-symbol` instead of being reported unsupported, and names the refusal for an ack or reject given a message ID.
 

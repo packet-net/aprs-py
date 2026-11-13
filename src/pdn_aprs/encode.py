@@ -912,7 +912,12 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
             else:
                 altitude = f.guard(_altitude, data.altitude_feet, default="")
     dao = f.guard(_dao_text, data, a, o, default="")
-    telemetry = _telemetry_text(data.telemetry, f)
+    if weather and data.telemetry is not None:
+        # no comment to carry it: no place, so its own checks do not run
+        f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment to carry telemetry")
+        telemetry = ""
+    else:
+        telemetry = _telemetry_text(data.telemetry, f)
     if weather:
         if data.comment:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment")
@@ -923,8 +928,6 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
                 RefusalCode.FIELD_NOT_ALLOWED,
                 "a weather report has no comment for an /A= altitude the cs bytes cannot hold",
             )
-        if telemetry:
-            f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment to carry telemetry")
         if data.frequency is not None or data.signpost is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report carries weather, not other data")
         if not data.compressed and any(
@@ -1547,9 +1550,7 @@ def _query(data: Query) -> bytes:
             raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "footprint radius is 0-9999 miles")
         if not (-90 <= f.latitude <= 90 and -180 <= f.longitude <= 180):
             raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "footprint latitude or longitude out of range")
-    if not data.query_type:
-        raise _refuse(RefusalCode.MISSING_FIELD, "a query has a type")
-    if not all("A" <= c <= "Z" for c in data.query_type):
+    if not data.query_type or not all("A" <= c <= "Z" for c in data.query_type):
         raise _refuse(RefusalCode.INVALID_CODE, "a query type is upper-case letters")
     if data.footprint is not None:
         f = data.footprint
@@ -1604,14 +1605,25 @@ _INNER_HEADER_DEFECTS = frozenset(
 )
 
 
+def _undecoded(packet: Packet) -> str | None:
+    """The type name of data inside a packet (at any depth of third-party nesting) that has no
+    form to write, or None."""
+    if packet.info or packet.data == Unrecognized(UnrecognizedReason.EMPTY):
+        return None
+    if isinstance(packet.data, ThirdParty):
+        return _undecoded(packet.data.packet)
+    return None if type(packet.data) in _ENCODERS else type(packet.data).__name__
+
+
 def _third_party(data: ThirdParty) -> bytes:
     from ._decode import _ADDRESS, _THIRD_PARTY_SOURCE
 
     inner = data.packet
     bad = RefusalCode.INVALID_THIRD_PARTY_HEADER
-    if not (inner.info or inner.data == Unrecognized(UnrecognizedReason.EMPTY)) and type(inner.data) not in _ENCODERS:
+    undecoded = _undecoded(inner)
+    if undecoded is not None:
         # data with no form to write comes first in the order, ahead of the header
-        raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(inner.data).__name__} cannot be encoded")
+        raise _refuse(RefusalCode.NOT_ENCODABLE, f"{undecoded} cannot be encoded")
     # the inner header comes before the inner data, so its faults are named first
     if any(d.code in _INNER_HEADER_DEFECTS for d in inner.diagnostics):
         # the defect is part of the data, and no clean header reproduces it
@@ -1731,9 +1743,10 @@ def build_packet(
         _check_address(entry.address, "path entry", RefusalCode.INVALID_ADDRESS)
     if len(entries) > 8:
         raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
+    if not isinstance(data, MicEReport):
+        _check_address(destination, "destination", RefusalCode.INVALID_ADDRESS)
+    # the information field first: it names the first code that applies across all the data
+    info = encode_info(data)
     if isinstance(data, MicEReport):
         destination = mic_e_destination(data)
-    else:
-        _check_address(destination, "destination", RefusalCode.INVALID_ADDRESS)
-    info = encode_info(data)
     return Packet(source, destination, entries, info, data)

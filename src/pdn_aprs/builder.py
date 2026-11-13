@@ -20,6 +20,7 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -78,12 +79,30 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
 
 
+_LOCAL = threading.local()
+
+
+def _pending() -> list[EncodeError]:
+    """Value-given-twice faults found while a builder method gathers its arguments: the data is
+    built with the value in APRS's unit and the fault named with the encoder's, in the Refusal
+    reasons order (it comes late in it, so an earlier code wins)."""
+    if not hasattr(_LOCAL, "faults"):
+        _LOCAL.faults = []
+    faults: list[EncodeError] = _LOCAL.faults
+    return faults
+
+
+def _twice(what: str) -> None:
+    _pending().append(EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE))
+
+
 def _either(value: float | None, metric: float | None, per_unit: float, what: str) -> float | None:
     """A quantity given in APRS's unit or in a metric one, which is divided by ``per_unit``."""
     if metric is None:
         return value
     if value is not None:
-        raise EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
+        _twice(what)
+        return value
     return metric / per_unit
 
 
@@ -124,6 +143,7 @@ def _extras(
     dao: bool,
 ) -> _Extras:
     """The fields a position, object or item report share, from the builder's arguments."""
+    _pending().clear()
     speed = _either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
     return {
         "course_degrees": course_degrees,
@@ -183,7 +203,19 @@ class Station:
 
     def send(self, data: AprsData) -> Packet:
         """Any data as a packet from this station."""
-        return build_packet(self.callsign, data, destination=self.destination, path=self.path)
+        faults = list(_pending())
+        _pending().clear()
+        try:
+            packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
+        except EncodeError as e:
+            if faults:
+                from .encode import _PRIORITY
+
+                raise min([e, *faults], key=lambda x: _PRIORITY[x.code]) from None
+            raise
+        if faults:
+            raise faults[0]
+        return packet
 
     def _symbol(self, symbol: Symbol | None) -> Symbol:
         chosen = symbol or self.symbol
@@ -373,12 +405,15 @@ class Station:
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
         to the metre; one in feet goes in a ``/A=``."""
+        _pending().clear()
         if course_degrees is not None and round_half_away(course_degrees) == 0:
             course_degrees = None
         if altitude_m is not None:
             if altitude_feet is not None:
-                raise EncodeError("give the altitude once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
-            feet: float | None = round_half_away(altitude_m) * FEET_PER_METRE
+                _twice("altitude")
+                feet: float | None = altitude_feet
+            else:
+                feet = round_half_away(altitude_m) * FEET_PER_METRE
         else:
             feet = altitude_feet
         data = MicEReport(
@@ -435,10 +470,12 @@ class Station:
         luminosity in W/m2, snow in inches. Each keyword is the name of the field it fills in
         :class:`~pdn_aprs.Weather`.
         """
+        _pending().clear()
         if temperature_c is not None:
             if temperature_f is not None:
-                raise EncodeError("give the temperature once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
-            temperature_f = temperature_c * 9 / 5 + 32
+                _twice("temperature")
+            else:
+                temperature_f = temperature_c * 9 / 5 + 32
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
             raise EncodeError("a positionless weather report has no symbol", RefusalCode.SYMBOL_MISMATCH)
         weather = Weather(
