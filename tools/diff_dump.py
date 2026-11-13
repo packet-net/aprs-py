@@ -230,6 +230,8 @@ def encode_line(n: int, text: str) -> str:
     try:
         try:
             data = from_neutral(item["data"])
+        except EncodeError as e:
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
             refusal = _refusal_for_unrepresentable(item["data"])
             if refusal is not None:

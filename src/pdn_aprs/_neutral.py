@@ -271,7 +271,7 @@ def _packet(d: dict[str, Any]) -> Packet:
     diagnostics = tuple(Diagnostic.parse(x) for x in d.get("diagnostics", ()))
     # a header's source and destination are always written, even when empty; one left out is empty
     source, destination = d.get("source", ""), d.get("destination", "")
-    return Packet(source, destination, path, b"", from_neutral(d["data"]), diagnostics, third_party=True)
+    return Packet(source, destination, path, b"", _from_neutral(d["data"]), diagnostics, third_party=True)
 
 
 _CONVERT: dict[str, Any] = {
@@ -302,7 +302,23 @@ _CONVERT: dict[str, Any] = {
 
 
 def from_neutral(data: dict[str, Any]) -> AprsData:
-    """Data from the neutral form (the inverse of :func:`to_neutral`)."""
+    """Data from the neutral form (the inverse of :func:`to_neutral`).
+
+    Third-party packets nest at most four deep: the input's depth is counted in a loop before
+    anything recurses, and a deeper chain raises :class:`EncodeError`
+    (``invalid-third-party-header``), as the encoder refuses it."""
+    depth = 0
+    node: Any = data
+    while isinstance(node, dict) and node.get("type") == "third-party":
+        depth += 1
+        if depth > 4:
+            raise EncodeError("third-party packets nest at most 4 deep", RefusalCode.INVALID_THIRD_PARTY_HEADER)
+        packet = node.get("packet")
+        node = packet.get("data") if isinstance(packet, dict) else None
+    return _from_neutral(data)
+
+
+def _from_neutral(data: dict[str, Any]) -> AprsData:
     kind = data["type"]
     try:
         cls = TYPES[kind]

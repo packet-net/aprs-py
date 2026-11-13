@@ -287,6 +287,11 @@ def check_encode(case: dict[str, Any]) -> list[str]:
     expect = case["expect"]
     try:
         data = from_neutral(case["input"]["encode"])
+    except EncodeError as e:
+        # refused before it is built (third-party data nested too deep)
+        if expect.get("refused"):
+            return _refusal_differences(expect.get("refusal"), e)
+        return [f"refused: {e}"]
     except NeutralFormError as e:
         # the data model cannot even hold this (an ack with its own message ID, say)
         if not expect.get("refused"):

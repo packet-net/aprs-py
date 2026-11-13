@@ -1168,3 +1168,14 @@ def test_a_caller_built_third_party_chain_ten_thousand_deep_is_refused_without_r
     neutral = to_neutral(data)
     assert neutral["type"] == "third-party"
     assert neutral["packet"]["data"]["type"] == "third-party"
+
+
+def test_from_neutral_refuses_a_chain_ten_thousand_deep_without_recursion() -> None:
+    from pdn_aprs._neutral import from_neutral
+
+    data: dict[str, object] = {"type": "status", "text": "hi"}
+    for _ in range(10_000):
+        data = {"type": "third-party", "packet": {"source": "A", "destination": "B", "data": data}}
+    with pytest.raises(aprs.EncodeError) as err:
+        from_neutral(data)
+    assert err.value.code is aprs.RefusalCode.INVALID_THIRD_PARTY_HEADER
