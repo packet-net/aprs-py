@@ -83,7 +83,6 @@ __all__ = [
     "from_neutral",
     "header_to_neutral",
     "packet_to_neutral",
-    "refusal_for_unrepresentable",
     "to_neutral",
 ]
 
@@ -164,10 +163,33 @@ def _object(obj: Any) -> dict[str, Any]:
 
 
 def to_neutral(data: AprsData) -> dict[str, Any]:
-    """Decoded data in the neutral form, with its ``type``."""
-    out: dict[str, Any] = {"type": data.kind}
-    out.update(_object(data))
-    return out
+    """Decoded data in the neutral form, with its ``type``.
+
+    A chain of third-party packets is walked in a loop, so one built by a caller thousands deep
+    does not exhaust the stack."""
+    if not isinstance(data, ThirdParty):
+        out: dict[str, Any] = {"type": data.kind}
+        out.update(_object(data))
+        return out
+    top: dict[str, Any] = {"type": data.kind}
+    target = top
+    current: AprsData = data
+    while isinstance(current, ThirdParty):
+        packet = current.packet
+        inner: dict[str, Any] = {"source": packet.source, "destination": packet.destination}
+        if packet.path:
+            inner["path"] = [str(p) for p in packet.path]
+        target["packet"] = inner
+        if isinstance(packet.data, ThirdParty):
+            nested: dict[str, Any] = {"type": packet.data.kind}
+            inner["data"] = nested
+            target = nested
+        else:
+            inner["data"] = to_neutral(packet.data)
+        if packet.diagnostics:
+            inner["diagnostics"] = [str(d) for d in packet.diagnostics]
+        current = packet.data
+    return top
 
 
 def header_to_neutral(packet: Packet) -> dict[str, Any]:
@@ -317,14 +339,14 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
         raise NeutralFormError(f"{kind}: {e}") from None
 
 
-def refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
+def _refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
     """The refusal an encoder gives data this library's data model cannot hold, or None.
 
     An ack or a reject has no message ID of its own, so one given is a field the report has no
     place for (``field-not-allowed``); the data's other faults are judged without it, and a code
     that comes before ``field-not-allowed`` in the vectors' order wins.
     """
-    from .encode import encode_info
+    from .encode import _PRIORITY, encode_info
 
     kind = data.get("type")
     if kind not in ("ack", "reject") or "message_id" not in data:
@@ -333,34 +355,8 @@ def refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
     try:
         encode_info(from_neutral(rest))
     except EncodeError as e:
-        if e.code in _BEFORE_FIELD_NOT_ALLOWED:
+        if _PRIORITY[e.code] < _PRIORITY[RefusalCode.FIELD_NOT_ALLOWED]:
             return e.code
     except (NeutralFormError, ValueError, KeyError, TypeError):
         return None
     return RefusalCode.FIELD_NOT_ALLOWED
-
-
-_BEFORE_FIELD_NOT_ALLOWED = frozenset(
-    {
-        RefusalCode.NOT_ENCODABLE,
-        RefusalCode.INVALID_ADDRESS,
-        RefusalCode.AX25_CANNOT_CARRY,
-        RefusalCode.TNC2_CANNOT_CARRY,
-        RefusalCode.INVALID_THIRD_PARTY_HEADER,
-        RefusalCode.INVALID_ADDRESSEE,
-        RefusalCode.INVALID_NAME,
-        RefusalCode.INVALID_TIMESTAMP,
-        RefusalCode.NOT_A_NUMBER,
-        RefusalCode.VALUE_OUT_OF_RANGE,
-        RefusalCode.VALUE_HAS_NO_FORM,
-        RefusalCode.INVALID_CODE,
-        RefusalCode.INVALID_SYMBOL,
-        RefusalCode.INVALID_CHARACTER,
-        RefusalCode.TOO_LONG,
-        RefusalCode.PADDING_SPACE,
-        RefusalCode.MALFORMED,
-        RefusalCode.INVALID_MESSAGE_ID,
-        RefusalCode.INVALID_NMEA,
-        RefusalCode.EXTENSION_CONFLICT,
-    }
-)

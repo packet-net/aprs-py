@@ -54,6 +54,7 @@ from pdn_aprs import (
     Packet,
     ParseOptions,
     Phg,
+    RefusalCode,
     Station,
     Symbol,
     ThirdParty,
@@ -65,7 +66,13 @@ from pdn_aprs import (
     encode_info,
     mic_e_destination,
 )
-from pdn_aprs._neutral import NeutralFormError, from_neutral, packet_to_neutral, refusal_for_unrepresentable, to_neutral
+from pdn_aprs._neutral import (
+    NeutralFormError,
+    _refusal_for_unrepresentable,
+    from_neutral,
+    packet_to_neutral,
+    to_neutral,
+)
 
 LENIENT = ParseOptions.lenient()
 STRICT = ParseOptions.strict()
@@ -224,14 +231,16 @@ def encode_line(n: int, text: str) -> str:
         try:
             data = from_neutral(item["data"])
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
-            refusal = refusal_for_unrepresentable(item["data"])
+            refusal = _refusal_for_unrepresentable(item["data"])
             if refusal is not None:
                 # the data type has no ID of its own to hold: the encoder's rule, not a gap
                 return dumps(
                     {
                         "n": n,
                         "result": "refused",
-                        "reason": f"an {item['data']['type']} carries no message ID of its own",
+                        "reason": f"an {item['data']['type']} carries no message ID of its own"
+                        if refusal is RefusalCode.FIELD_NOT_ALLOWED
+                        else f"refused as {refusal.value} (and an {item['data']['type']} carries no message ID)",
                         "refusal": refusal.value,
                     }
                 )

@@ -20,7 +20,6 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -79,29 +78,21 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
 
 
-_LOCAL = threading.local()
+def _twice(faults: list[EncodeError], what: str) -> None:
+    """Note a quantity given in both units: the data is built with the value in APRS's unit and
+    the fault named with the encoder's, in the Refusal reasons order (``value-given-twice`` comes
+    late in it, so an earlier code wins)."""
+    faults.append(EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE))
 
 
-def _pending() -> list[EncodeError]:
-    """Value-given-twice faults found while a builder method gathers its arguments: the data is
-    built with the value in APRS's unit and the fault named with the encoder's, in the Refusal
-    reasons order (it comes late in it, so an earlier code wins)."""
-    if not hasattr(_LOCAL, "faults"):
-        _LOCAL.faults = []
-    faults: list[EncodeError] = _LOCAL.faults
-    return faults
-
-
-def _twice(what: str) -> None:
-    _pending().append(EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE))
-
-
-def _either(value: float | None, metric: float | None, per_unit: float, what: str) -> float | None:
+def _either(
+    faults: list[EncodeError], value: float | None, metric: float | None, per_unit: float, what: str
+) -> float | None:
     """A quantity given in APRS's unit or in a metric one, which is divided by ``per_unit``."""
     if metric is None:
         return value
     if value is not None:
-        _twice(what)
+        _twice(faults, what)
         return value
     return metric / per_unit
 
@@ -128,6 +119,7 @@ class _Extras(TypedDict):
 
 
 def _extras(
+    faults: list[EncodeError],
     *,
     course_degrees: float | None,
     speed_knots: float | None,
@@ -143,12 +135,11 @@ def _extras(
     dao: bool,
 ) -> _Extras:
     """The fields a position, object or item report share, from the builder's arguments."""
-    _pending().clear()
-    speed = _either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
+    speed = _either(faults, speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
     return {
         "course_degrees": course_degrees,
         "speed_knots": speed,
-        "altitude_feet": _either(altitude_feet, altitude_m, 1 / FEET_PER_METRE, "altitude"),
+        "altitude_feet": _either(faults, altitude_feet, altitude_m, 1 / FEET_PER_METRE, "altitude"),
         "compressed": compressed,
         "compression": CompressionType() if compressed and (course_degrees is not None or speed is not None) else None,
         "ambiguity": ambiguity,
@@ -203,8 +194,11 @@ class Station:
 
     def send(self, data: AprsData) -> Packet:
         """Any data as a packet from this station."""
-        faults = list(_pending())
-        _pending().clear()
+        return self._send(data, [])
+
+    def _send(self, data: AprsData, faults: list[EncodeError]) -> Packet:
+        """Build the packet; ``faults`` are ones the caller noted while gathering its arguments,
+        named in the Refusal reasons order along with whatever the encoder refuses."""
         try:
             packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
         except EncodeError as e:
@@ -253,6 +247,7 @@ class Station:
         a foot of precision. ``frequency`` is the voice frequency the station listens on: MHz,
         or a :class:`~pdn_aprs.VoiceFrequency` to give a tone or an offset as well.
         """
+        faults: list[EncodeError] = []
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -261,6 +256,7 @@ class Station:
             messaging=self.messaging,
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -275,7 +271,7 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     def object(
         self,
@@ -308,6 +304,7 @@ class Station:
         stamp = _timestamp(timestamp)
         if stamp is None:
             raise EncodeError("an object always has a timestamp", RefusalCode.MISSING_FIELD)
+        faults: list[EncodeError] = []
         data = ObjectReport(
             name=name,
             killed=killed,
@@ -317,6 +314,7 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -331,7 +329,7 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     def item(
         self,
@@ -356,6 +354,7 @@ class Station:
         dao: bool = False,
     ) -> Packet:
         """An item report: a named thing's position (3-9 characters), without a timestamp."""
+        faults: list[EncodeError] = []
         data = ItemReport(
             name=name,
             killed=killed,
@@ -364,6 +363,7 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -378,7 +378,7 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     def mic_e(
         self,
@@ -405,12 +405,12 @@ class Station:
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
         to the metre; one in feet goes in a ``/A=``."""
-        _pending().clear()
+        faults: list[EncodeError] = []
         if course_degrees is not None and round_half_away(course_degrees) == 0:
             course_degrees = None
         if altitude_m is not None:
             if altitude_feet is not None:
-                _twice("altitude")
+                _twice(faults, "altitude")
                 feet: float | None = altitude_feet
             else:
                 feet = round_half_away(altitude_m) * FEET_PER_METRE
@@ -422,7 +422,7 @@ class Station:
             symbol=self._symbol(symbol),
             mic_e_message=mic_e_message,
             course_degrees=course_degrees,
-            speed_knots=_either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
+            speed_knots=_either(faults, speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
             altitude_feet=feet,
             altitude_in_comment=altitude_feet is not None,
             comment=comment,
@@ -432,7 +432,7 @@ class Station:
             dao=Dao("W", DaoPrecision.BASE91) if dao else None,
             type_code="`" if self.messaging else "'",
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     # ------------------------------------------------------------ weather
 
@@ -470,10 +470,10 @@ class Station:
         luminosity in W/m2, snow in inches. Each keyword is the name of the field it fills in
         :class:`~pdn_aprs.Weather`.
         """
-        _pending().clear()
+        faults: list[EncodeError] = []
         if temperature_c is not None:
             if temperature_f is not None:
-                _twice("temperature")
+                _twice(faults, "temperature")
             else:
                 temperature_f = temperature_c * 9 / 5 + 32
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
@@ -483,9 +483,9 @@ class Station:
             wind_speed_mph=wind_speed_mph,
             wind_gust_mph=wind_gust_mph,
             temperature_f=temperature_f,
-            rain_1h_in=_either(rain_1h_in, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
-            rain_24h_in=_either(rain_24h_in, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
-            rain_midnight_in=_either(rain_midnight_in, rain_midnight_mm, MM_PER_INCH, "rain since midnight"),
+            rain_1h_in=_either(faults, rain_1h_in, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
+            rain_24h_in=_either(faults, rain_24h_in, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
+            rain_midnight_in=_either(faults, rain_midnight_in, rain_midnight_mm, MM_PER_INCH, "rain since midnight"),
             humidity_percent=humidity_percent,
             pressure_mbar=pressure_mbar,
             luminosity_w_m2=luminosity_w_m2,
@@ -504,7 +504,7 @@ class Station:
                 if isinstance(timestamp, Timestamp)
                 else Timestamp.mdhm(moment.month, moment.day, moment.hour, moment.minute)
             )
-            return self.send(PositionlessWeather(stamp, weather))
+            return self._send(PositionlessWeather(stamp, weather), faults)
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -513,7 +513,7 @@ class Station:
             messaging=self.messaging,
             weather=weather,
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     # ------------------------------------------------------------ messages
 

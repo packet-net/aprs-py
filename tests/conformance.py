@@ -24,7 +24,13 @@ from pdn_aprs import (
     decode_ax25,
     decode_tnc2,
 )
-from pdn_aprs._neutral import NeutralFormError, from_neutral, header_to_neutral, refusal_for_unrepresentable, to_neutral
+from pdn_aprs._neutral import (
+    NeutralFormError,
+    _refusal_for_unrepresentable,
+    from_neutral,
+    header_to_neutral,
+    to_neutral,
+)
 from pdn_aprs.encode import encode_info, mic_e_destination
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -285,7 +291,7 @@ def check_encode(case: dict[str, Any]) -> list[str]:
         # the data model cannot even hold this (an ack with its own message ID, say)
         if not expect.get("refused"):
             return [f"cannot represent: {e}"]
-        code = refusal_for_unrepresentable(case["input"]["encode"])
+        code = _refusal_for_unrepresentable(case["input"]["encode"])
         want = expect.get("refusal")
         if want is None or (code is not None and code.value == want):
             return []

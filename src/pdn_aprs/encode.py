@@ -1605,14 +1605,23 @@ _INNER_HEADER_DEFECTS = frozenset(
 )
 
 
-def _undecoded(packet: Packet) -> str | None:
-    """The type name of data inside a packet (at any depth of third-party nesting) that has no
-    form to write, or None."""
-    if packet.info or packet.data == Unrecognized(UnrecognizedReason.EMPTY):
-        return None
-    if isinstance(packet.data, ThirdParty):
-        return _undecoded(packet.data.packet)
-    return None if type(packet.data) in _ENCODERS else type(packet.data).__name__
+MAX_THIRD_PARTY_DEPTH = 4
+"""Third-party packets nest at most four deep (vectors interpretations.md)."""
+
+
+def _third_party_walk(data: ThirdParty) -> tuple[int, str | None]:
+    """How many third-party levels ``data`` holds, and the type name of undecoded data at the end
+    of the chain (None when it ends in something that can be written). A loop, not a recursion,
+    so a chain built thousands deep is judged without exhausting the stack."""
+    depth = 0
+    current: AprsData = data
+    while isinstance(current, ThirdParty):
+        depth += 1
+        packet = current.packet
+        if packet.info or packet.data == Unrecognized(UnrecognizedReason.EMPTY):
+            return depth, None
+        current = packet.data
+    return depth, None if type(current) in _ENCODERS else type(current).__name__
 
 
 def _third_party(data: ThirdParty) -> bytes:
@@ -1620,10 +1629,12 @@ def _third_party(data: ThirdParty) -> bytes:
 
     inner = data.packet
     bad = RefusalCode.INVALID_THIRD_PARTY_HEADER
-    undecoded = _undecoded(inner)
+    depth, undecoded = _third_party_walk(data)
     if undecoded is not None:
         # data with no form to write comes first in the order, ahead of the header
         raise _refuse(RefusalCode.NOT_ENCODABLE, f"{undecoded} cannot be encoded")
+    if depth > MAX_THIRD_PARTY_DEPTH:
+        raise _refuse(bad, f"third-party packets nest at most {MAX_THIRD_PARTY_DEPTH} deep")
     # the inner header comes before the inner data, so its faults are named first
     if any(d.code in _INNER_HEADER_DEFECTS for d in inner.diagnostics):
         # the defect is part of the data, and no clean header reproduces it
@@ -1716,6 +1727,15 @@ def encode_info(data: AprsData) -> bytes:
     encoder = _ENCODERS.get(type(data))
     if encoder is None:
         raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(data).__name__} cannot be encoded")
+    if isinstance(data, ThirdParty):
+        # judged in a loop before anything recurses (the NaN rule below walks the data)
+        depth, undecoded = _third_party_walk(data)
+        if undecoded is not None:
+            raise _refuse(RefusalCode.NOT_ENCODABLE, f"{undecoded} cannot be encoded")
+        if depth > MAX_THIRD_PARTY_DEPTH:
+            raise _refuse(
+                RefusalCode.INVALID_THIRD_PARTY_HEADER, f"third-party packets nest at most {MAX_THIRD_PARTY_DEPTH} deep"
+            )
     try:
         return encoder(data)
     except EncodeError as e:

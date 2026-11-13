@@ -1143,3 +1143,28 @@ def test_station_reuse_keeps_no_quantity_between_calls() -> None:
         st.position(10.0, 20.0, speed_knots=10, speed_kmh=20)
     assert err.value.code is aprs.RefusalCode.VALUE_GIVEN_TWICE
     assert "090/005" in str(st.position(10.0, 20.0, speed_knots=5, course_degrees=90))
+
+
+def test_a_refused_builder_call_leaks_nothing_into_the_next() -> None:
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    with pytest.raises(aprs.EncodeError) as err:
+        st.weather(temperature_c=10, temperature_f=50, symbol=aprs.Symbol.CAR)
+    assert err.value.code is aprs.RefusalCode.SYMBOL_MISMATCH
+    assert str(st.message("N0CALL-1", "hi")).endswith(":N0CALL-1 :hi")
+
+
+def test_a_caller_built_third_party_chain_ten_thousand_deep_is_refused_without_recursion() -> None:
+    from pdn_aprs import Packet, StatusReport, ThirdParty
+    from pdn_aprs._neutral import to_neutral
+
+    data: aprs.AprsData = StatusReport("hi")
+    for _ in range(10_000):
+        data = ThirdParty(Packet("A", "B", (), b"", data))
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(data)
+    assert err.value.code is aprs.RefusalCode.INVALID_THIRD_PARTY_HEADER
+    with pytest.raises(aprs.EncodeError):
+        aprs.build_packet("N0CALL", data)
+    neutral = to_neutral(data)
+    assert neutral["type"] == "third-party"
+    assert neutral["packet"]["data"]["type"] == "third-party"
