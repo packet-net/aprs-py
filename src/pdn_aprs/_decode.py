@@ -74,12 +74,13 @@ class RejectedError(Exception):
 class Ctx:
     """Decoding state: the options, the diagnostics so far, and whether text was not UTF-8."""
 
-    __slots__ = ("diags", "non_utf8", "options")
+    __slots__ = ("depth", "diags", "non_utf8", "options")
 
     def __init__(self, options: ParseOptions) -> None:
         self.options = options
         self.diags: list[Diagnostic] = []
         self.non_utf8 = False
+        self.depth = 0  # third-party headers read so far on the way here
 
     def info(self, code: DiagnosticCode) -> None:
         self.diags.append(_DIAG[(Severity.INFO, code)])
@@ -214,15 +215,22 @@ def decode_tnc2(line: bytes | str, options: ParseOptions = _LENIENT) -> Packet:
 
 def _ax25_address(ctx: Ctx, raw: bytes) -> tuple[str, bool]:
     """One 7-byte AX.25 address: the name (with ``-SSID``) and its H bit."""
-    chars = [b >> 1 for b in raw[:6]]
-    if 0 in chars:
-        stripped = bytes(chars).rstrip(b"\x00 ")
-        if 0 in stripped:
-            _header_defect(ctx, C.INVALID_AX25_ADDRESS_CHARACTERS)
-        else:
-            _header_defect(ctx, C.NUL_PADDED_ADDRESS)
-    call = bytes(chars).replace(b"\x00", b" ").rstrip(b" ").decode("latin-1")
-    if any(not ("A" <= c <= "Z" or "0" <= c <= "9") for c in call):
+    chars = bytes(b >> 1 for b in raw[:6])
+    stripped = chars.rstrip(b"\x00 ")
+    if len(stripped) < len(chars) and b"\x00" in chars[len(stripped) :]:
+        _header_defect(ctx, C.NUL_PADDED_ADDRESS)
+    # upper-case letters and digits, then padding (AX.25 2.2 section 3.12); a lower-case letter is
+    # tolerated, anything else makes the header unusable (vectors interpretations.md)
+    call = stripped.decode("latin-1")
+    lower = False
+    for c in call:
+        if "A" <= c <= "Z" or "0" <= c <= "9":
+            continue
+        if "a" <= c <= "z":
+            lower = True
+            continue
+        _header_error(ctx, C.INVALID_ADDRESS)
+    if lower:
         _header_defect(ctx, C.INVALID_AX25_ADDRESS_CHARACTERS)
     ssid = (raw[6] >> 1) & 0x0F
     name = f"{call}-{ssid}" if ssid else call
@@ -555,14 +563,15 @@ def positioned_rest(s: str, pos: int, p: Pos, ctx: Ctx) -> dict[str, Any]:
     return fields
 
 
-def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any]) -> None:
+def _apply_parts(parts: CommentParts, p: Pos, ctx: Ctx, fields: dict[str, Any], *, dao_judged: bool = False) -> None:
     """Put the elements lifted out of a comment into the fields, applying a DAO's precision."""
     for key, value in parts.fields.items():
         fields[key] = value
     if parts.dao is not None:
         fields["dao"] = parts.dao
         if p.ambiguity:
-            ctx.defect(C.DAO_WITH_AMBIGUITY)
+            if not dao_judged:
+                ctx.defect(C.DAO_WITH_AMBIGUITY)
         elif not p.compressed and (parts.dao_lat or parts.dao_lon):
             lat = float(fields["latitude"])
             lon = float(fields["longitude"])
@@ -631,12 +640,15 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
         fields["compression"] = CompressionType()
     parts = CommentParts()
     text = lift_telemetry_dao(result.text, parts)
+    if parts.dao is not None and p.ambiguity:
+        # elements lifted out of the comment are met before the text left over is judged
+        ctx.defect(C.DAO_WITH_AMBIGUITY)
     text = weather_tail(text, ctx, weather)
     if text[:1] in (" ", "/"):
         text = text[1:]
     parts.comment = text
     fields["weather"] = Weather(**weather)
-    _apply_parts(parts, p, ctx, fields)
+    _apply_parts(parts, p, ctx, fields, dao_judged=True)
 
 
 def _is_wind_ext(text: str) -> bool:
@@ -1499,7 +1511,12 @@ def _reserved(s: str, destination: str, ctx: Ctx) -> AprsData:
     return Unrecognized(UnrecognizedReason.RESERVED_DATA_TYPE)
 
 
+MAX_THIRD_PARTY_DEPTH = 4  # vectors interpretations.md: third-party packets nest at most four deep
+
+
 def _third_party(s: str, destination: str, ctx: Ctx) -> AprsData:
+    if ctx.depth >= MAX_THIRD_PARTY_DEPTH:
+        ctx.fail(C.INVALID_THIRD_PARTY)
     body = s[1:]
     colon = body.find(":")
     if colon < 0:
@@ -1509,6 +1526,7 @@ def _third_party(s: str, destination: str, ctx: Ctx) -> AprsData:
         ctx.fail(C.INVALID_THIRD_PARTY)
     # a defect the inner header may tolerate is the inner packet's warning (vectors README)
     inner = Ctx(ctx.options)
+    inner.depth = ctx.depth + 1
     try:
         source, dest, path = parse_tnc2_header(header, inner, third_party=True)
     except RejectedError:

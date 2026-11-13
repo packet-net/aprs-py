@@ -229,6 +229,13 @@ def check_tolerance(case: dict[str, Any]) -> list[str]:
     return check_strict_expectation(decode_case(case, options), case)
 
 
+def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:
+    """A refusal must carry the reason code a case names (when it names one)."""
+    if want is None or error.code.value == want:
+        return []
+    return [f"refused as {error.code.value}, expected {want}: {error}"]
+
+
 def check_reencode(case: dict[str, Any]) -> list[str]:
     outcome = decode_case(case, ParseOptions.lenient())
     assert outcome.packet is not None
@@ -239,7 +246,7 @@ def check_reencode(case: dict[str, Any]) -> list[str]:
         new_destination = mic_e_destination(data) if isinstance(data, MicEReport) else destination
     except EncodeError as e:
         if case["reencode"] == "refused":
-            return []
+            return _refusal_differences(case.get("reencode_refusal"), e)
         return [f"refused: {e}"]
     if case["reencode"] == "refused":
         return [f"expected the encoder to refuse, it wrote {written!r}"]
@@ -282,7 +289,7 @@ def check_encode(case: dict[str, Any]) -> list[str]:
         destination = mic_e_destination(data) if isinstance(data, MicEReport) else None
     except EncodeError as e:
         if expect.get("refused"):
-            return []
+            return _refusal_differences(expect.get("refusal"), e)
         return [f"refused: {e}"]
     if expect.get("refused"):
         return [f"expected the encoder to refuse, it wrote {written!r}"]
