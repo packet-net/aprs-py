@@ -1127,3 +1127,19 @@ def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
 def test_mic_e_status_text_that_reads_back_changed_is_text_reads_as_field() -> None:
     packet = aprs.decode_tnc2(b'LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}')
     assert _code(lambda: aprs.encode_info(packet.data)) == "text-reads-as-field"
+
+
+def test_station_reuse_keeps_no_quantity_between_calls() -> None:
+    """Each call stands alone: a quantity in the other unit on an earlier call never counts,
+    and value-given-twice is only for one call with both units."""
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    first = str(st.position(10.0, 20.0, speed_knots=10, course_degrees=90))
+    kmh = str(st.position(10.0, 20.0, speed_kmh=20, course_degrees=90))
+    last = str(st.position(10.0, 20.0, speed_knots=5, course_degrees=90))
+    assert "090/010" in first
+    assert "090/011" in kmh
+    assert "090/005" in last
+    with pytest.raises(aprs.EncodeError) as err:
+        st.position(10.0, 20.0, speed_knots=10, speed_kmh=20)
+    assert err.value.code is aprs.RefusalCode.VALUE_GIVEN_TWICE
+    assert "090/005" in str(st.position(10.0, 20.0, speed_knots=5, course_degrees=90))
