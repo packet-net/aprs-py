@@ -16,7 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `identify_tocall` and `identify_mic_e` are exported from the package top level.
 
-Round 4 rulings of the vectors (aprs-vectors `round-4`, commit fb1a6f8), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
+Round 4 rulings of the vectors (aprs-vectors `round-4`, commit 11e59df), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
 
 - The licence is now MIT from this release; versions up to 1.1.0 were published under AGPL-3.0-or-later and keep it. The conformance vectors are CC0.
 
