@@ -14,7 +14,7 @@ Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.1: ever
 - Every symbol by name, and device identification from the [aprs-deviceid](https://github.com/aprsorg/aprs-deviceid) database.
 - Pure Python 3.10+, no dependencies, fully typed.
 
-It is one of several independent implementations that cross-check each other: Packet.Aprs (C#, in [packet-net/packet.net](https://github.com/packet-net/packet.net)) and pdn-aprs for Rust ([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)) pass the same vectors and agree with this one on every packet of a 6.9-million-packet APRS-IS capture.
+It is one of six independent implementations that cross-check each other: C# ([packet-net/aprs-cs](https://github.com/packet-net/aprs-cs)), Rust ([packet-net/aprs-rs](https://github.com/packet-net/aprs-rs)), Go ([packet-net/aprs-go](https://github.com/packet-net/aprs-go)), TypeScript ([packet-net/aprs-ts](https://github.com/packet-net/aprs-ts)) and C ([packet-net/aprs-c](https://github.com/packet-net/aprs-c)) pass the same vectors. The C# and Rust ones also agree with this one on every packet of a 6.9-million-packet APRS-IS capture.
 
 ## Install
 
@@ -155,7 +155,7 @@ too-long True
 
 ```
 
-The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all five implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
+The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all six implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
 
 `build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E report's destination.
 
@@ -196,7 +196,7 @@ python3 vectors/tools/compare.py py.jsonl.gz ts.jsonl.gz --names py ts --input l
 
 The work is spread over processes: `--jobs N` (all cores by default) and `--chunk N` lines at a time (5,000); `--limit N` stops after N lines. A 6.9-million-line capture takes about two minutes to decode.
 
-On the 6,879,893-packet APRS-IS capture the other implementations were compared on, this one agrees with both on every packet: lenient and strict decoding and re-encoding.
+On the 6,879,893-packet APRS-IS capture the C# and Rust implementations were compared on, this one agrees with both on every packet: lenient and strict decoding and re-encoding.
 
 ## Development
 

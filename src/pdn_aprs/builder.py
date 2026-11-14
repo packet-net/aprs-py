@@ -22,13 +22,16 @@ from __future__ import annotations
 
 import functools
 import math
+import types
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, _real, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -142,6 +145,36 @@ def _frequency(value: float | VoiceFrequency | None) -> VoiceFrequency | None:
     if value is None or isinstance(value, VoiceFrequency):
         return value
     return VoiceFrequency(float(value))
+
+
+def _plain(value: Any) -> Any:
+    """A ``Decimal`` or ``Fraction`` as the number it reads as, also inside a list or tuple (which
+    becomes a plain list or tuple, so a namedtuple passes)."""
+    if isinstance(value, (Decimal, Fraction)):
+        return _real(value)
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_plain(v) for v in value)
+    return value
+
+
+def _only_refusals(fn: _F) -> _F:
+    """A builder that takes a ``Decimal`` like any other real number and refuses, with an
+    :class:`EncodeError`, a number too large to use."""
+
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            # a telemetry sequence is judged as given, so a Decimal is refused by its own type
+            keep = 1 if fn.__name__ == "telemetry" else 0
+            args = args[:keep] + tuple(_plain(a) for a in args[keep:])
+            kwargs = {k: _plain(v) for k, v in kwargs.items()}
+            return fn(self, *args, **kwargs)
+        except OverflowError as e:
+            raise EncodeError(f"a number is too large to use: {e}", RefusalCode.VALUE_OUT_OF_RANGE) from None
+
+    return wrapper  # type: ignore[return-value]
 
 
 class _Extras(TypedDict):
@@ -633,3 +666,8 @@ class Station:
     def telemetry_bits(self, bits: str, project: str = "", *, addressee: str | None = None) -> Packet:
         """The bits' sense and the project title (``BITS.``)."""
         return self.send(TelemetryBits(addressee or self.callsign, bits, project))
+
+
+for _name, _fn in list(vars(Station).items()):
+    if isinstance(_fn, types.FunctionType) and not _name.startswith("_") and _name != "send":
+        setattr(Station, _name, _only_refusals(_fn))

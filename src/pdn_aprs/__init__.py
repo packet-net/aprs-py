@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ._decode import decode_ax25, decode_kiss, decode_tnc2
 from .builder import Station
-from .devices import DATABASE_VERSION, Device
+from .devices import DATABASE_VERSION, Device, identify_mic_e, identify_tocall
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .encode import DEFAULT_DESTINATION, MESSAGE_TEXT_LIMIT, build_packet, encode_info, mic_e_destination
 from .errors import AprsError, EncodeError, HeaderError, RefusalCode
@@ -158,5 +158,7 @@ __all__ = [
     "decode_kiss",
     "decode_tnc2",
     "encode_info",
+    "identify_mic_e",
+    "identify_tocall",
     "mic_e_destination",
 ]

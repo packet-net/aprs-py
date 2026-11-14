@@ -18,8 +18,9 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable, Iterable
+from decimal import Decimal
 from fractions import Fraction
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from . import _util
 from ._comment import MICROWAVE_BASE
@@ -98,9 +99,9 @@ _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
 
 
-_TELEMETRY_VALUE = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
-_COEFFICIENT = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\Z")
-_FOOTPRINT_VALUE = re.compile(r"(?: ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))\Z")
+_TELEMETRY_VALUE = re.compile(r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
+_COEFFICIENT = re.compile(r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\Z")
+_FOOTPRINT_VALUE = re.compile(r"(?: ?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)|-(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\Z")
 """A footprint latitude or longitude as sent: a leading space only before a positive value."""
 
 
@@ -1508,7 +1509,8 @@ def _telemetry(data: TelemetryReport) -> bytes:
             values.append(t)
         elif isinstance(v, int) or float(v).is_integer():
             iv = int(v)
-            values.append(f"{iv:03d}" if 0 <= iv <= 999 else str(iv))
+            # a whole value outside 0-999 is written as its shortest decimal, as 1e23 is 1 and 23 zeros
+            values.append(f"{iv:03d}" if 0 <= iv <= 999 else _util.number_text(v))
         else:
             values.append(_util.number_text(v))
     head = "T#" + seq + ("" if seq == "MIC" else ",")
@@ -1790,13 +1792,99 @@ def encode_info(data: AprsData) -> bytes:
     if isinstance(amb, float) and not math.isfinite(amb):
         # an ambiguity of NaN is no level to cut a position to: judged as any NaN is
         raise _nan_or_earlier(data, encoder, "ambiguity is a number")
+    data = _normalise(data, _real)
+    amb = getattr(data, "ambiguity", 0)
+    if isinstance(amb, float):
+        # a whole number given as a float is that level; anything else is no level at all
+        if amb.is_integer():
+            data = dataclasses.replace(cast("Any", data), ambiguity=int(amb))
+        else:
+            raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, f"ambiguity {amb} is not 0-4")
+    try:
+        return _encode_with_nan_rule(data, encoder)
+    except UnicodeEncodeError as e:
+        # text holding a lone surrogate cannot be written as UTF-8: free text that would not read
+        # back as given, unless an earlier code applies to the rest of the data
+        try:
+            _encode_with_nan_rule(_normalise(data, _text_without_surrogates), encoder)
+        except EncodeError as e2:
+            if _PRIORITY[e2.code] < _PRIORITY[RefusalCode.TEXT_READS_AS_FIELD]:
+                raise e2 from None
+        except (ValueError, OverflowError):
+            pass
+        raise _refuse(
+            RefusalCode.TEXT_READS_AS_FIELD, f"text holds a lone surrogate, which is not UTF-8: {e.reason}"
+        ) from None
+
+
+def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
     try:
         return encoder(data)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
-    except (ValueError, OverflowError) as e:
+    except UnicodeEncodeError:
+        raise
+    except OverflowError as e:
+        # a number too large for the form it must be turned into (an infinity is judged as any NaN is)
+        if _has_nonfinite(data, _no_place(data)):
+            raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, f"cannot encode {type(data).__name__}: {e}") from e
+    except (ValueError, ArithmeticError) as e:
         # a value no packet can hold, such as a NaN latitude
         raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
+
+
+def _real(value: Any) -> Any:
+    """A ``Decimal`` or ``Fraction`` as the number it reads as; everything else as it is.
+
+    A whole value too big for a float exactly is kept as an ``int``, so its digits survive. A NaN
+    (quiet or signalling) is refused as not-a-number, and a finite value too big for a float as out of
+    range (only a real infinity becomes an infinite float, judged as any infinity is).
+    """
+    if not isinstance(value, (Decimal, Fraction)):
+        return value
+    if isinstance(value, Decimal):
+        if value.is_nan():
+            raise _refuse(RefusalCode.NOT_A_NUMBER, "a value is NaN")
+        if value.is_infinite():
+            return float(value)
+        whole = bool(value == value.to_integral_value()) and value.adjusted() < 400
+    else:
+        whole = value.denominator == 1
+    if whole and abs(cast("Any", value)) > 2**53:
+        return int(value)
+    try:
+        result = float(value)
+    except OverflowError:
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a number is too large to use") from None
+    if math.isinf(result):
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a number is too large to use")
+    return result
+
+
+_LONE_SURROGATES = re.compile("[\ud800-\udfff]")
+
+
+def _text_without_surrogates(value: Any) -> Any:
+    return _LONE_SURROGATES.sub("\ufffd", value) if isinstance(value, str) else value
+
+
+def _normalise(value: Any, leaf: Callable[[Any], Any]) -> Any:
+    """``value`` with ``leaf`` applied to every ``str``, ``Decimal`` and ``Fraction`` inside it."""
+    if isinstance(value, (str, Decimal, Fraction)):
+        return leaf(value)
+    if isinstance(value, tuple):
+        new = tuple(_normalise(v, leaf) for v in value)
+        return new if any(n is not o for n, o in zip(new, value, strict=True)) else value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        changes = {}
+        for fld in dataclasses.fields(value):
+            old = getattr(value, fld.name)
+            new = _normalise(old, leaf)
+            if new is not old:
+                changes[fld.name] = new
+        return dataclasses.replace(value, **changes) if changes else value
+    return value
 
 
 def build_packet(
