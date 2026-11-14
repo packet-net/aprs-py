@@ -16,6 +16,28 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `identify_tocall` and `identify_mic_e` are exported from the package top level.
 
+Round 4 rulings of the vectors (aprs-vectors `round-4`, commit 9f3e07d), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
+
+- The licence is now MIT (it was AGPL-3.0-or-later); versions already published keep the licence they were published under. The conformance vectors are CC0.
+
+- An encoder or builder refuses an information field over 256 bytes (`too-long`), counted in UTF-8 with number text included, and for a third-party packet the outermost field. `too-long` keeps its place in the refusal order, and the size is measured on the fields as given (a field with no place in the report, or left out, makes no bytes). Decoding has no limit: a decoded packet over 256 bytes re-encodes `refused`, `too-long`. `INFORMATION_FIELD_LIMIT` is exported from `pdn_aprs.encode`.
+- Text with a control character (a byte below 0x20 or 0x7F, a TAB, or a CR or LF inside the text) in a comment, status text, message, bulletin or NWS bulletin text, telemetry name, unit or project title, capability value, or the free text a report leaves: a decoder gives one `warning:control-character-in-text` per packet's text and keeps the text as sent; a strict decoder rejects it. User-defined, raw weather and test data, Mic-E fixed bytes and Rev 0 telemetry are not judged; object and item names keep their own rules. Encoders and builders refuse such text as `invalid-character` (not only CR and LF), and a Mic-E status text starting with 0x1D is refused, not written after a `/`.
+- A fixed-width weather field whose digits run on by two or more, followed by the end of the information field or by a defined field the run goes on to read, is `warning:out-of-range-value`, the value dropped, and the fields carry on after the run (`t2147483647r000` has a rain of 0 and no temperature). The dropped value counts as present for `incomplete-weather`.
+- A Mic-E altitude goes in the Mic-E altitude bytes. A builder rounds it once to the nearest metre from the value given (1000 ft is 305 m) and refuses one outside -10,000 to 743,570 m (`value-out-of-range`); it never writes a `/A=`. An encoder writes neutral data in a `/A=` only when only a `/A=` holds it exactly (whole feet within six digits that are not whole metres, or are outside the bytes' range: -50000 ft is `/A=-50000`); otherwise in the Mic-E bytes, rounded to the metre (100.5 ft is 31 m). An altitude read from a `/A=` is written back as one.
+- Builder defaults are written down and never read the clock: no timestamp on an object or positionless weather report is `missing-field`; a Mic-E report with no message is off duty; no symbol on a position, object, item or Mic-E report is `invalid-symbol`; a telemetry report with no sequence is `missing-field`, with no bits writes `00000000`, with no analog values five empty channels. `Station.telemetry` takes `sequence`, `analog` and `bits` as optional arguments for this.
+- `DiagnosticCode.CONTROL_CHARACTER_IN_TEXT` (tolerable) and `DiagnosticCode.IMPLEMENTATION_LIMIT` are new. This library has no fixed capacity, so it never gives the second.
+- The dump tool's build mode passes only the keys a recipe gives, never filling in an absent one, and reports a missing key as `unsupported` rather than crashing.
+
+### Breaking changes for callers
+
+- An encoder or builder refuses an information field over 256 bytes (`too-long`); text with a control character is refused (`invalid-character`); a decoder gives `warning:control-character-in-text`, so a strict decoder now rejects such packets; a run-on weather value before a defined field is dropped with `out-of-range-value`.
+- An object or positionless weather report built with no timestamp is refused (`missing-field`) instead of being stamped from the clock.
+- `timestamp=True` (the time now) is gone, and raises `TypeError`: pass `datetime.now(timezone.utc)` as `timestamp`. `Station.object` no longer has the time now as its default timestamp.
+- A Mic-E report built with no `mic_e_message` is off duty, not in service.
+- A position, object, item or Mic-E report built with no symbol (and none on the `Station`) raises `EncodeError` (`invalid-symbol`) instead of `ValueError`.
+- A Mic-E altitude given in feet to `Station.mic_e` goes in the Mic-E altitude bytes, rounded to the metre, instead of a `/A=` in the status text; `MicEReport(altitude_feet=...)` given to an encoder goes there too unless only a `/A=` holds it exactly.
+- Neutral Mic-E altitudes that are neither whole feet nor whole metres go in the Mic-E bytes, rounded to the metre (they were a rounded `/A=`).
+
 ## [1.1.0] - 2026-11-14
 
 Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libraries as 1.1.0.
