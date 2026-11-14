@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-14
+
 ### Fixed
 
 - A telemetry value that is a whole number outside 0-999 is written as the shortest decimal that reads back as it, with no exponent, as the shared Encoding rule says: `1e23` is `1` and 23 zeros, not `99999999999999991611392`.
@@ -18,7 +20,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `identify_tocall` and `identify_mic_e` are exported from the package top level.
 
-Round 4 rulings of the vectors (aprs-vectors `round-4`, commit a405bac), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
+Round 4 rulings of the vectors (aprs-vectors `round-4`, commit 656d583), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
 
 - The licence is now MIT from this release; versions up to 1.1.0 were published under AGPL-3.0-or-later and keep it. The conformance vectors are CC0.
 
@@ -242,7 +244,8 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/packet-net/aprs-py/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/packet-net/aprs-py/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/packet-net/aprs-py/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/packet-net/aprs-py/compare/v0.3.0...v1.0.0
