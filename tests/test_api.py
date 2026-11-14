@@ -1210,3 +1210,37 @@ def test_a_quantity_in_two_units_is_ranked_with_each_value_checked() -> None:
         aprs.RefusalCode.VALUE_HAS_NO_FORM
     )
     assert code(lambda: st.weather(10.0, 10.0, rain_1h_in=1, rain_1h_mm=1000, pressure_mbar=99999)) is out
+
+
+def test_a_name_or_timestamp_fault_comes_before_not_a_number() -> None:
+    nan = float("nan")
+    weather = aprs.Weather(wind_direction_degrees=nan, wind_speed_mph=1, wind_gust_mph=2, temperature_f=3)
+    stamp = aprs.Timestamp("092460z")
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(aprs.PositionlessWeather(stamp, weather))
+    assert err.value.code is aprs.RefusalCode.INVALID_TIMESTAMP
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(aprs.ObjectReport(name="TOOLONGNAME1", latitude=1, longitude=nan, symbol=aprs.Symbol.CAR))
+    assert err.value.code is aprs.RefusalCode.INVALID_NAME
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(
+            aprs.ObjectReport(
+                name="OK", timestamp=aprs.Timestamp("111111z"), latitude=1, longitude=nan, symbol=aprs.Symbol.CAR
+            )
+        )
+    assert err.value.code is aprs.RefusalCode.NOT_A_NUMBER
+
+
+def test_non_finite_builder_input_is_refused_never_raised() -> None:
+    inf = float("inf")
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    nan_code = aprs.RefusalCode.NOT_A_NUMBER
+    for build in (
+        lambda: st.mic_e(10.0, 10.0, course_degrees=-inf),
+        lambda: st.mic_e(10.0, 10.0, altitude_m=inf),
+        lambda: st.mic_e(10.0, 10.0, ambiguity=inf),  # type: ignore[arg-type]
+        lambda: st.telemetry(float("nan"), [1, 2, 3, 4, 5]),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(aprs.EncodeError) as err:
+            build()
+        assert err.value.code is nan_code

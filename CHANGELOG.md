@@ -29,6 +29,8 @@ Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libra
 
 ### Fixed
 
+- A NaN or infinity no longer hides an earlier code: a name, timestamp, addressee or header fault is named ahead of `not-a-number`, as the order has it, and a NaN in a field a weather report has no place for (an altitude without GGA bytes, telemetry, a frequency) is not judged.
+- `Station` builders refuse non-finite Mic-E course, altitude, ambiguity and telemetry sequence with `not-a-number` instead of raising `OverflowError` or `TypeError`.
 - A `Station` method given one quantity in both units (speed, altitude, temperature, rain) is built once with each unit and refuses with the first code in the Refusal reasons order among each result and `value-given-twice` (which sits after `missing-field`), so a value out of range in either unit, or any earlier fault, wins; it is never built from one unit.
 - `build_packet` and the `Station` builders check the header first and as APRS-IS has it: a source, destination or path entry that is not 1-9 letters, digits or `-` (`BAD!!`) is `invalid-address`, ahead of any fault in the data. It used to accept any printable text.
 - `Station` builders name a quantity given in both units (`value-given-twice`) in the Refusal reasons order, after any earlier code, instead of at once; a Mic-E report is refused for its out-of-range values (a speed of 999.5) before its destination at the poles is judged.

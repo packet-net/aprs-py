@@ -21,6 +21,7 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 from __future__ import annotations
 
 import functools
+import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -449,14 +450,14 @@ class Station:
         An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
         to the metre; one in feet goes in a ``/A=``."""
         faults: list[EncodeError] = []
-        if course_degrees is not None and round_half_away(course_degrees) == 0:
+        if course_degrees is not None and math.isfinite(course_degrees) and round_half_away(course_degrees) == 0:
             course_degrees = None
         if altitude_m is not None:
             if altitude_feet is not None:
                 _twice(faults, "altitude")
                 feet: float | None = altitude_feet
             else:
-                feet = round_half_away(altitude_m) * FEET_PER_METRE
+                feet = (round_half_away(altitude_m) if math.isfinite(altitude_m) else altitude_m) * FEET_PER_METRE
         else:
             feet = altitude_feet
         data = MicEReport(
@@ -609,6 +610,8 @@ class Station:
     ) -> Packet:
         """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
         refused, not wrapped), five analog values and eight bits."""
+        if isinstance(sequence, float) and not math.isfinite(sequence):
+            raise EncodeError("a telemetry sequence is a number", RefusalCode.NOT_A_NUMBER)
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
         if not 0 <= sequence <= 999:

@@ -174,20 +174,64 @@ class _Faults:
             raise min(self.found, key=lambda e: _PRIORITY[e.code])
 
 
-def _has_nonfinite(value: Any) -> bool:
+def _has_nonfinite(value: Any, ignore: frozenset[str] = frozenset()) -> bool:
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
         return any(_has_nonfinite(v) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value))
+        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value) if f.name not in ignore)
     return False
+
+
+def _no_place(data: Any) -> frozenset[str]:
+    """The fields of ``data`` that have no place in it, whose own checks (a NaN among them) do
+    not run: a weather report has no comment to carry an altitude, telemetry or a frequency."""
+    if isinstance(data, PositionedData) and data.weather is not None:
+        gga = data.compressed and data.compression is not None and data.compression.source is CompressionSource.GGA
+        names = {"telemetry", "frequency"}
+        if not gga:
+            names.add("altitude_feet")
+        return frozenset(names)
+    return frozenset()
+
+
+def _finite(value: Any) -> Any:
+    """``value`` with every NaN or infinity in it replaced by 0.0."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0.0
+    if isinstance(value, tuple):
+        return tuple(_finite(v) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        changes = {}
+        for fld in dataclasses.fields(value):
+            old = getattr(value, fld.name)
+            new = _finite(old)
+            if new is not old and new != old:
+                changes[fld.name] = new
+        return dataclasses.replace(value, **changes) if changes else value
+    return value
+
+
+def _nan_or_earlier(data: Any, encoder: Callable[[Any], bytes], why: str) -> EncodeError:
+    """The refusal for data a NaN or infinity made the encoder fail on: ``not-a-number``, unless
+    a code that comes before it in the order (a name, a timestamp, an addressee...) applies, which
+    is found by encoding the data again with the non-finite values made finite."""
+    nan = _refuse(RefusalCode.NOT_A_NUMBER, why)
+    try:
+        encoder(_finite(data))
+    except EncodeError as e:
+        if _PRIORITY[e.code] < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
+            return e
+    except (ValueError, OverflowError):
+        pass
+    return nan
 
 
 def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
-    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
+    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data, _no_place(data)):
         return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
     return e
 
@@ -1742,13 +1786,17 @@ def encode_info(data: AprsData) -> bytes:
             raise _refuse(
                 RefusalCode.INVALID_THIRD_PARTY_HEADER, f"third-party packets nest at most {MAX_THIRD_PARTY_DEPTH} deep"
             )
+    amb = getattr(data, "ambiguity", 0)
+    if isinstance(amb, float) and not math.isfinite(amb):
+        # an ambiguity of NaN is no level to cut a position to: judged as any NaN is
+        raise _nan_or_earlier(data, encoder, "ambiguity is a number")
     try:
         return encoder(data)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
     except (ValueError, OverflowError) as e:
         # a value no packet can hold, such as a NaN latitude
-        raise _refuse(RefusalCode.NOT_A_NUMBER, f"cannot encode {type(data).__name__}: {e}") from e
+        raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
 
 
 def build_packet(
