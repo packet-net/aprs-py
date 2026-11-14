@@ -52,6 +52,8 @@ class DiagnosticCode(str, Enum):
     """The information field ends with CR or LF (APRS12c ch. 5, UAP 5.13)."""
     NON_UTF8_TEXT = "non-utf8-text"
     """Text that is not valid UTF-8 (UAP 5.16)."""
+    CONTROL_CHARACTER_IN_TEXT = "control-character-in-text"
+    """Text holds a byte below 0x20 or the byte 0x7F, a TAB or a CR or LF inside the text included (APRS12c gives text as printable characters)."""
     TRUNCATED = "truncated"
     """The information field is shorter than its format requires."""
     NOT_APRS = "not-aprs"
@@ -159,6 +161,9 @@ class DiagnosticCode(str, Enum):
     FREE_TEXT_CAPABILITIES = "free-text-capabilities"
     """A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15)."""
 
+    IMPLEMENTATION_LIMIT = "implementation-limit"
+    """The packet needs more than a fixed capacity holds. This library has none, so it never gives it."""
+
     def __str__(self) -> str:
         return self.value
 
@@ -182,6 +187,7 @@ _TOLERABLE: frozenset[DiagnosticCode] = frozenset(
         DiagnosticCode.INVALID_AX25_ADDRESS_CHARACTERS,
         DiagnosticCode.TRAILING_LINE_BREAK,
         DiagnosticCode.NON_UTF8_TEXT,
+        DiagnosticCode.CONTROL_CHARACTER_IN_TEXT,
         DiagnosticCode.OUT_OF_RANGE_VALUE,
         DiagnosticCode.INVALID_TIMESTAMP,
         DiagnosticCode.LOWERCASE_HEMISPHERE,
@@ -222,6 +228,7 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.TOO_MANY_DIGIPEATERS: "The AX.25 frame has more than 8 digipeater addresses.",
     DiagnosticCode.TRAILING_LINE_BREAK: "The information field ends with CR or LF (APRS12c ch. 5, UAP 5.13).",
     DiagnosticCode.NON_UTF8_TEXT: "Text that is not valid UTF-8 (UAP 5.16).",
+    DiagnosticCode.CONTROL_CHARACTER_IN_TEXT: "Text holds a byte below 0x20 or the byte 0x7F (a TAB, or a CR or LF inside the text, included); one per text, which is kept as sent (APRS12c gives text as printable characters).",
     DiagnosticCode.TRUNCATED: "The information field is shorter than its format requires.",
     DiagnosticCode.NOT_APRS: "The first byte is not a data type identifier (APRS12c ch. 20).",
     DiagnosticCode.RESERVED_DATA_TYPE: "A reserved data type identifier with no defined format (APRS12c ch. 5).",
@@ -274,6 +281,7 @@ _MEANINGS: dict[DiagnosticCode, str] = {
     DiagnosticCode.BRACE_IN_MESSAGE_TEXT: "Message, bulletin or telemetry metadata text contains a { that does not start a valid message ID, including the reply-ack form on a bulletin or metadata (APRS12c ch. 14).",
     DiagnosticCode.INVALID_ADDRESSEE_CHARACTERS: "A message addressee contains a space or : (APRS12c ch. 14).",
     DiagnosticCode.LETTER_GROUP_BULLETIN: "A bulletin addressee has a group name after a letter, e.g. BLNCNET; group bulletins use a digit (APRS12c ch. 14).",
+    DiagnosticCode.IMPLEMENTATION_LIMIT: "The packet needs more than the implementation's fixed capacity holds (an information field, path entries, capabilities, extra weather fields); only an implementation with such a capacity gives it, as a header error or with the data unrecognized, and never reads the packet differently instead.",
     DiagnosticCode.FREE_TEXT_CAPABILITIES: "A < station capabilities packet holds free text rather than TOKEN / TOKEN=VALUE items: a token that is empty or holds a space or a control character, or a value that holds a control character (APRS12c ch. 15).",
 }
 

@@ -67,6 +67,11 @@ _DIAG: dict[tuple[Severity, DiagnosticCode], Diagnostic] = {
 }
 
 
+def _has_control(text: str) -> bool:
+    """Whether ``text`` holds a control character: below U+0020, or U+007F."""
+    return any(c < " " or c == "\x7f" for c in text)
+
+
 class RejectedError(Exception):
     """Raised inside the decoder when a packet (or header) cannot be decoded."""
 
@@ -74,12 +79,13 @@ class RejectedError(Exception):
 class Ctx:
     """Decoding state: the options, the diagnostics so far, and whether text was not UTF-8."""
 
-    __slots__ = ("depth", "diags", "non_utf8", "options")
+    __slots__ = ("control", "depth", "diags", "non_utf8", "options")
 
     def __init__(self, options: ParseOptions) -> None:
         self.options = options
         self.diags: list[Diagnostic] = []
         self.non_utf8 = False
+        self.control = False  # text held a control character
         self.depth = 0  # third-party headers read so far on the way here
 
     def info(self, code: DiagnosticCode) -> None:
@@ -102,8 +108,11 @@ class Ctx:
     def tolerates(self, code: DiagnosticCode) -> bool:
         return self.options.tolerates(code)
 
-    def text(self, raw: str) -> str:
-        """A text field read as UTF-8, or kept as Latin-1 (and noted) when it is not."""
+    def text(self, raw: str, *, judged: bool = True) -> str:
+        """A text field read as UTF-8, or kept as Latin-1 (and noted) when it is not. Unless
+        ``judged`` is false (test data), a control character in it is noted too."""
+        if judged and not self.control and _has_control(raw):
+            self.control = True
         if raw.isascii():
             return raw
         text, ok = _util.utf8_or_latin1(raw)
@@ -320,6 +329,8 @@ def decode_info(info: bytes, destination: str, ctx: Ctx) -> AprsData:
             data = handler(s, destination, ctx)
         if ctx.non_utf8:
             ctx.defect(C.NON_UTF8_TEXT)
+        if ctx.control:
+            ctx.defect(C.CONTROL_CHARACTER_IN_TEXT)
         return data
     except RejectedError:
         return Unrecognized(UnrecognizedReason.MALFORMED)
@@ -340,6 +351,7 @@ def _other(s: str, destination: str, ctx: Ctx) -> AprsData:
                 ctx.warn(C.POSITION_NOT_AT_START)
                 ctx.diags.extend(trial.diags)
                 ctx.non_utf8 = trial.non_utf8
+                ctx.control = trial.control
                 return data
     ctx.info(C.NOT_APRS)
     return Unrecognized(UnrecognizedReason.NOT_APRS)
@@ -1435,14 +1447,9 @@ def _nmea_position(lat: str, ns: str, lon: str, ew: str, values: dict[str, Any])
 # ------------------------------------------------------------------ the rest
 
 
-def _has_control(text: str) -> bool:
-    """Whether ``text`` holds a control character: below U+0020, or U+007F."""
-    return any(c < " " or c == "\x7f" for c in text)
-
-
 def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     # the whole text is UTF-8 or Latin-1, not each item on its own (vectors README)
-    body = ctx.text(s[1:])
+    body = ctx.text(s[1:], judged=False)
     # only U+0020 is padding: a CR at the edge of an item stays in it
     items = [item.strip(" ") for item in body.split(",")]
     items = [item for item in items if item]
@@ -1456,6 +1463,8 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
         value = value.strip(" ")
         if not token or " " in token or _has_control(token) or _has_control(value):
             free = True
+        if _has_control(value):
+            ctx.control = True
         caps.append((token, value) if eq else (token,))
     ctx.flush_text()
     if free:
@@ -1510,7 +1519,7 @@ def _user_defined(s: str, destination: str, ctx: Ctx) -> AprsData:
 
 
 def _test(s: str, destination: str, ctx: Ctx) -> AprsData:
-    return TestData(ctx.text(s[1:]))
+    return TestData(ctx.text(s[1:], judged=False))
 
 
 def _agrelo(s: str, destination: str, ctx: Ctx) -> AprsData:
