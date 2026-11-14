@@ -1191,3 +1191,22 @@ def test_the_header_is_judged_first_and_an_invalid_source_is_refused() -> None:
         with pytest.raises(aprs.EncodeError) as err:
             build()
         assert err.value.code is aprs.RefusalCode.INVALID_ADDRESS
+
+
+def test_a_quantity_in_two_units_is_ranked_with_each_value_checked() -> None:
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+
+    def code(build: object) -> aprs.RefusalCode:
+        with pytest.raises(aprs.EncodeError) as err:
+            build()  # type: ignore[operator]
+        return err.value.code
+
+    twice = aprs.RefusalCode.VALUE_GIVEN_TWICE
+    out = aprs.RefusalCode.VALUE_OUT_OF_RANGE
+    assert code(lambda: st.position(10.0, 10.0, speed_knots=5, speed_kmh=9)) is twice
+    assert code(lambda: st.position(10.0, 10.0, speed_knots=799.5, speed_kmh=-1)) is out
+    assert code(lambda: st.position(10.0, 10.0, altitude_feet=5, altitude_m=304800)) is out
+    assert code(lambda: st.weather(10.0, 10.0, temperature_f=50, temperature_c=10, humidity_percent=0)) is (
+        aprs.RefusalCode.VALUE_HAS_NO_FORM
+    )
+    assert code(lambda: st.weather(10.0, 10.0, rain_1h_in=1, rain_1h_mm=1000, pressure_mbar=99999)) is out

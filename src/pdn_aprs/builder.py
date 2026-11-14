@@ -20,13 +20,14 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import functools
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TypedDict
+from typing import Any, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import DEFAULT_DESTINATION, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -76,6 +77,44 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     if hms:
         return Timestamp.hms(moment.hour, moment.minute, moment.second)
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+_SPEED_AND_ALTITUDE = (("speed_knots", "speed_kmh"), ("altitude_feet", "altitude_m"))
+_WEATHER_UNITS = (
+    ("temperature_f", "temperature_c"),
+    ("rain_1h_in", "rain_1h_mm"),
+    ("rain_24h_in", "rain_24h_mm"),
+    ("rain_midnight_in", "rain_midnight_mm"),
+)
+
+
+def _one_unit_each(*pairs: tuple[str, str]) -> Callable[[_F], _F]:
+    """A builder method given one quantity in both units at once refuses with the first code in
+    the Refusal reasons order among each unit's own result and ``value-given-twice``: it is built
+    once with each unit, and never from one of them (vectors README, Builder rules)."""
+
+    def decorate(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            both = [(a, b) for a, b in pairs if kwargs.get(a) is not None and kwargs.get(b) is not None]
+            if not both:
+                return fn(self, *args, **kwargs)
+            found = [EncodeError("give each quantity once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)]
+            for keep in (0, 1):
+                variant = dict(kwargs)
+                for pair in both:
+                    variant[pair[1 - keep]] = None
+                try:
+                    fn(self, *args, **variant)
+                except EncodeError as e:
+                    found.append(e)
+            raise min(found, key=lambda e: _PRIORITY[e.code])
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorate
 
 
 def _twice(faults: list[EncodeError], what: str) -> None:
@@ -219,6 +258,7 @@ class Station:
 
     # ------------------------------------------------------------ positions
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def position(
         self,
         latitude: float,
@@ -273,6 +313,7 @@ class Station:
         )
         return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def object(
         self,
         name: str,
@@ -331,6 +372,7 @@ class Station:
         )
         return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def item(
         self,
         name: str,
@@ -380,6 +422,7 @@ class Station:
         )
         return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def mic_e(
         self,
         latitude: float,
@@ -436,6 +479,7 @@ class Station:
 
     # ------------------------------------------------------------ weather
 
+    @_one_unit_each(*_WEATHER_UNITS)
     def weather(
         self,
         latitude: float | None = None,
