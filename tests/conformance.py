@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from recipe import UnsupportedError, build  # tools/recipe.py: the dump tool's build mode, shared
+
 from pdn_aprs import (
     DiagnosticCode,
     EncodeError,
@@ -318,18 +320,39 @@ def check_encode(case: dict[str, Any]) -> list[str]:
     return out
 
 
+def check_build(case: dict[str, Any]) -> list[str]:
+    """Build cases: a recipe through the real builder (as the dump tool's build mode calls it)."""
+    expect = case["expect"]
+    try:
+        line = build(case["input"]["build"]).to_tnc2()
+    except UnsupportedError as e:
+        return [f"the builder cannot say what the recipe asks: {e}"]
+    except EncodeError as e:
+        if expect.get("refused"):
+            return _refusal_differences(expect.get("refusal"), e)
+        return [f"refused: {e}"]
+    if expect.get("refused"):
+        return [f"expected the builder to refuse, it wrote {line!r}"]
+    if line != expect["tnc2"].encode("utf-8"):
+        return [f"wrote {line!r}, expected {expect['tnc2'].encode('utf-8')!r}"]
+    return []
+
+
 CHECKS = {
     "lenient": check_lenient,
     "strict": check_strict,
     "tolerance": check_tolerance,
     "reencode": check_reencode,
     "encode": check_encode,
+    "build": check_build,
 }
 
 
 def checks_for(case: dict[str, Any]) -> list[str]:
     if "encode" in case["input"]:
         return ["encode"]
+    if "build" in case["input"]:
+        return ["build"]
     names = ["lenient", "strict"]
     if single_tolerance(case) is not None:
         names.append("tolerance")

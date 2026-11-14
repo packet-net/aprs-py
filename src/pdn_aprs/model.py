@@ -839,6 +839,14 @@ class StatusReport(AprsData):
     beam: Beam | None = None
 
 
+class NoSequence(str):
+    """The sequence of telemetry data that was given none (neutral data with no ``sequence``): an
+    empty string the encoder refuses as ``missing-field``, where an empty sequence given is
+    ``malformed``."""
+
+    __slots__ = ()
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class TelemetryReport(AprsData):
     """A telemetry report (``T#``). ``analog`` values are ``None`` for an empty channel.

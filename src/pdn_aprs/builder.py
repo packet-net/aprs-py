@@ -283,9 +283,12 @@ class Station:
             packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
         except EncodeError as e:
             if faults:
-                from .encode import _PRIORITY
+                from .encode import _PRIORITY, SizeError
 
-                raise min([e, *faults], key=lambda x: _PRIORITY[x.code]) from None
+                # the size is the last check, on bytes actually written: a fault the builder noted
+                # means the bytes are not the ones the program asked for, so it is not measured
+                found = faults if isinstance(e, SizeError) else [e, *faults]
+                raise min(found, key=lambda x: _PRIORITY[x.code]) from None
             raise
         if faults:
             raise faults[0]

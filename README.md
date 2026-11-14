@@ -186,7 +186,7 @@ Symbol('/f')
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), and the encode cases. Every case passes. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), the encode cases, and the build cases (a builder recipe through the real `Station` methods, by `tools/recipe.py`, the code the dump tool's build mode uses). Every case passes. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
 ### The dump tool
 

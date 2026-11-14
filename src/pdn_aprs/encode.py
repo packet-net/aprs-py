@@ -46,6 +46,7 @@ from .model import (
     MicEMessage,
     MicEReport,
     NmeaSentence,
+    NoSequence,
     NwsBulletin,
     ObjectReport,
     PositionedData,
@@ -126,6 +127,11 @@ def _refuse(code: RefusalCode, why: str) -> EncodeError:
     return EncodeError(why, code)
 
 
+class SizeError(EncodeError):
+    """The information field of otherwise sound data is over 256 bytes: the last check there is,
+    so a builder that noted a fault of its own (a left-out field) names that fault instead."""
+
+
 _ORDER = (
     RefusalCode.NOT_ENCODABLE,
     RefusalCode.INVALID_ADDRESS,
@@ -168,12 +174,6 @@ class _Faults:
 
     def add(self, code: RefusalCode, why: str) -> None:
         self.found.append(EncodeError(why, code))
-
-    def size(self, length: int) -> None:
-        """Note ``too-long`` when the information field, as far as the data makes it, is over 256
-        bytes. A field the data has no place for, or leaves out, makes no bytes."""
-        if length > INFORMATION_FIELD_LIMIT:
-            self.add(RefusalCode.TOO_LONG, f"the information field is over {INFORMATION_FIELD_LIMIT} bytes")
 
     def guard(self, fn: Callable[..., _T], *args: Any, default: _T) -> _T:
         try:
@@ -267,15 +267,11 @@ def _written_comment(data: PositionedData) -> str:
     return " " + data.comment if data.comment and data.frequency is not None else data.comment
 
 
-def _utf8_size(text: str) -> int:
-    return len(text.encode("utf-8", "replace"))
-
-
 def _sized(info: bytes) -> bytes:
     """``info``, or ``too-long`` when it is over 256 bytes."""
     if len(info) > INFORMATION_FIELD_LIMIT:
-        raise _refuse(
-            RefusalCode.TOO_LONG, f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}"
+        raise SizeError(
+            f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}", RefusalCode.TOO_LONG
         )
     return info
 
@@ -392,7 +388,6 @@ def _with_comment(
 
 def _checked(data: AprsData, info: str) -> bytes:
     raw = info.encode("utf-8")
-    _sized(raw)
     if not _reads_back(data, raw, DEFAULT_DESTINATION):
         raise _refuse(RefusalCode.TEXT_READS_AS_FIELD, "the text would not read back as written")
     return raw
@@ -1061,12 +1056,9 @@ def _position(data: PositionReport) -> bytes:
     else:
         head = "=" if data.messaging else "!"
     rest = _position_body(data, f)
-    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _sized(
-        _with_comment(
-            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
-        )
+    return _with_comment(
+        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
     )
 
 
@@ -1086,12 +1078,9 @@ def _object(data: ObjectReport) -> bytes:
         stamp = data.timestamp.text
     head = ";" + name.ljust(9) + ("_" if data.killed else "*") + stamp
     rest = _position_body(data, f)
-    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _sized(
-        _with_comment(
-            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
-        )
+    return _with_comment(
+        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
     )
 
 
@@ -1103,12 +1092,9 @@ def _item(data: ItemReport) -> bytes:
         f.add(RefusalCode.INVALID_NAME, f"item name {name!r} is not 3-9 printable characters without ! or _")
     head = ")" + name + ("_" if data.killed else "!")
     rest = _position_body(data, f)
-    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _sized(
-        _with_comment(
-            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
-        )
+    return _with_comment(
+        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
     )
 
 
@@ -1313,12 +1299,12 @@ def _mic_e(data: MicEReport) -> bytes:
             altitude_first = mic
             if mic and not type_code and mic[0] in "`'>] ":
                 # the bytes have no clean form here (the first would read back as a type code):
-                # a /A= holds the value exactly when it is whole feet; one too big for any /A= has
-                # no form; any other does not read back
+                # a /A= holds the value exactly when it is whole feet within its six digits; any
+                # other value (not whole feet, or beyond them) has no form
                 if _near_whole(feet) and -99999 <= round(feet) <= 999999:
                     altitude_first = ""
                     altitude_later = f.guard(_altitude, feet, default="")
-                elif abs(_nearest(feet)) > 999999:
+                else:
                     f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
     locator = ""
     if data.locator is not None:
@@ -1350,16 +1336,12 @@ def _mic_e(data: MicEReport) -> bytes:
             text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
-    # a head the faults kept from being written is still its 9 fixed bytes
-    f.size(len(build(" " + data.comment if data.comment and freq else data.comment)) + (0 if head else 9))
     f.finish()
 
     if build(data.comment).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
         raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
-    return _sized(
-        _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
-    )
+    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
 
 
 # ---------------------------------------------------------------- messages
@@ -1414,7 +1396,6 @@ def _message(data: Message) -> bytes:
     _check_message_addressee(data.addressee, "a message")
     head = _addressee(data.addressee)
     _message_text(data.text)
-    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, data.reply_ack))
 
 
@@ -1444,7 +1425,6 @@ def _bulletin(data: Bulletin) -> bytes:
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "a group bulletin's identifier is a digit")
     head = _addressee(a)
     _message_text(data.text)
-    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, None))
 
 
@@ -1453,7 +1433,6 @@ def _nws(data: NwsBulletin) -> bytes:
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "an NWS bulletin's addressee starts NWS-")
     head = _addressee(data.addressee)
     _message_text(data.text, limit=False)
-    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, None))
 
 
@@ -1541,7 +1520,7 @@ def _status(data: StatusReport) -> bytes:
         elif not data.symbol.is_valid:
             f.add(RefusalCode.INVALID_SYMBOL, f"symbol {str(data.symbol)!r} is not a valid table and code")
     elif data.symbol is not None:
-        f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report's symbol goes with a grid locator")
+        f.add(RefusalCode.MISSING_FIELD, "a status report's symbol goes with a grid locator")
     if data.beam is not None:
         b = data.beam
         if not ("0" <= b.heading_code <= "9" or "A" <= b.heading_code <= "Z") or not (
@@ -1557,7 +1536,6 @@ def _status(data: StatusReport) -> bytes:
     text += data.text
     if data.beam is not None:
         text += "^" + data.beam.heading_code + data.beam.power_code
-    f.size(_utf8_size(text))
     f.finish()
     return _checked(data, text)
 
@@ -1565,7 +1543,9 @@ def _status(data: StatusReport) -> bytes:
 def _telemetry(data: TelemetryReport) -> bytes:
     f = _Faults()
     seq = data.sequence
-    if not seq or not (seq.isascii() and seq.isalnum()):
+    if isinstance(seq, NoSequence):
+        f.add(RefusalCode.MISSING_FIELD, "a telemetry report has a sequence")
+    elif not seq or not (seq.isascii() and seq.isalnum()):
         f.add(RefusalCode.MALFORMED, "a telemetry sequence is letters and digits")
     if len(data.analog) > 5:
         f.add(RefusalCode.TOO_LONG, "a telemetry report has five analog values")
@@ -1598,7 +1578,6 @@ def _telemetry(data: TelemetryReport) -> bytes:
             values.append(_util.number_text(v))
     head = "T#" + seq + ("" if seq == "MIC" else ",")
     text = head + ",".join(values) + ("" if data.bits is None else "," + data.bits) + data.comment
-    f.size(_utf8_size(text))
     f.finish()
     return _checked(data, text)
 
@@ -1609,7 +1588,6 @@ def _positionless_weather(data: PositionlessWeather) -> bytes:
     if data.comment:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment")
     text = _weather_text(data.weather, positionless=True, compressed=False, f=f)
-    f.size(1 + len(data.timestamp.text) + _utf8_size(text))
     f.finish()
     return _checked(data, "_" + data.timestamp.text + text)
 
@@ -1633,7 +1611,6 @@ def _nmea(data: NmeaSentence) -> bytes:
     if not s or not _util.is_printable_ascii(s):
         raise _refuse(RefusalCode.INVALID_CHARACTER, "an NMEA sentence is printable ASCII")
     _check_text(data.comment, "comment")
-    _sized(("$" + s).encode("ascii") + data.comment.encode("utf-8", "replace"))
     star = s.find("*")
     if star >= 0 and (star != len(s) - 3 or not all(c in "0123456789ABCDEFabcdef" for c in s[star + 1 :])):
         raise _refuse(RefusalCode.INVALID_NMEA, "a * in an NMEA sentence starts its checksum, *hh at the end")
@@ -1736,7 +1713,6 @@ def _capabilities(data: Capabilities) -> bytes:
             items.append(f"{token}={value}")
         else:
             items.append(token)
-    f.size(1 + _utf8_size(",".join(items)))
     f.finish()
     return _checked(data, "<" + ",".join(items))
 
@@ -1801,7 +1777,7 @@ def _third_party(data: ThirdParty) -> bytes:
         destination = inner.destination
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
-    return _sized(b"}" + header.encode("ascii") + b":" + info)
+    return b"}" + header.encode("ascii") + b":" + info
 
 
 def _user_defined(data: UserDefined) -> bytes:
@@ -1818,7 +1794,7 @@ def _user_defined(data: UserDefined) -> bytes:
         ) from None
     if len(data.user_id) != 1 or len(data.packet_type) != 1:
         raise _refuse(RefusalCode.TOO_LONG, "user ID and packet type are one character each")
-    return _sized(encoded)
+    return encoded
 
 
 def _test(data: TestData) -> bytes:
@@ -1910,7 +1886,7 @@ def encode_info(data: AprsData) -> bytes:
 
 def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
     try:
-        return encoder(data)
+        return _sized(encoder(data))
     except EncodeError as e:
         raise _nan_rule(data, e) from None
     except UnicodeEncodeError:

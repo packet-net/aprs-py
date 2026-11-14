@@ -1152,9 +1152,10 @@ def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
     assert _code(lambda: aprs.encode_info(report)) == "invalid-character"
 
 
-def test_mic_e_status_text_that_reads_back_changed_is_text_reads_as_field() -> None:
+def test_mic_e_altitude_no_slash_a_holds_and_the_bytes_cannot_carry_first_has_no_form() -> None:
+    # 230,261 m is not a whole number of feet, and the Mic-E bytes first would read as a type code
     packet = aprs.decode_tnc2(b'LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}')
-    assert _code(lambda: aprs.encode_info(packet.data)) == "text-reads-as-field"
+    assert _code(lambda: aprs.encode_info(packet.data)) == "value-has-no-form"
 
 
 def test_station_reuse_keeps_no_quantity_between_calls() -> None:

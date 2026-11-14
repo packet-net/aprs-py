@@ -47,6 +47,7 @@ from .model import (
     MicEReport,
     NmeaFix,
     NmeaSentence,
+    NoSequence,
     NwsBulletin,
     ObjectReport,
     Phg,
@@ -344,6 +345,8 @@ def _from_neutral(data: dict[str, Any]) -> AprsData:
         kwargs["name"] = ""
     if cls in (PositionReport, MicEReport, ObjectReport, ItemReport) and "symbol" not in kwargs:
         kwargs["symbol"] = Symbol.parse("x-")  # an unknown table: invalid-symbol
+    if cls is TelemetryReport and "sequence" not in kwargs:
+        kwargs["sequence"] = NoSequence()  # missing-field, not an empty sequence
     if "addressee" in cls.__dataclass_fields__ and "addressee" not in kwargs:
         kwargs["addressee"] = ""
     if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
