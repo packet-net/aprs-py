@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- A telemetry value that is a whole number outside 0-999 is written as the shortest decimal that reads back as it, with no exponent, as the shared Encoding rule says: `1e23` is `1` and 23 zeros, not `99999999999999991611392`.
+- `decode_tnc2` given a `str` holding the lone surrogates `bytes.decode("utf-8", "surrogateescape")` makes no longer raises `UnicodeEncodeError`: the original bytes are restored. Any other lone surrogate is read as U+FFFD, or makes the header unusable if it is in the header.
+- Builders and `encode_info` raise only `EncodeError` for bad numbers and text: `ambiguity=1.0`, a `Decimal` NaN and an integer too large for a float no longer leak `TypeError`, `InvalidOperation` or `OverflowError`; a number too large to use is `value-out-of-range`; a lone surrogate in text is `text-reads-as-field`, not `not-a-number`.
+- `Decimal` is accepted wherever another real number is (a `Decimal('51.45')` latitude was refused).
+- Decoding no longer takes quadratic time on a very long run of digits in `EQNS.` coefficients, telemetry values and query footprints; accepted text is unchanged.
+
+### Changed
+
+- `identify_tocall` and `identify_mic_e` are exported from the package top level.
+
 ## [1.1.0] - 2026-11-14
 
 Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libraries as 1.1.0.

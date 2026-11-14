@@ -195,9 +195,24 @@ def parse_tnc2_header(header: str, ctx: Ctx, *, third_party: bool = False) -> tu
     return source, destination, path
 
 
+_UNESCAPABLE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
+
+
+def _line_bytes(line: str) -> bytes:
+    try:
+        return line.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return _UNESCAPABLE.sub("\ufffd", line).encode("utf-8", "surrogateescape")
+
+
 def decode_tnc2(line: bytes | str, options: ParseOptions = _LENIENT) -> Packet:
-    """Decode a TNC2 / APRS-IS line. A ``str`` is encoded as UTF-8 first."""
-    raw = line.encode("utf-8") if isinstance(line, str) else bytes(line)
+    """Decode a TNC2 / APRS-IS line. A ``str`` is encoded as UTF-8 first, with the lone surrogates
+    ``bytes.decode("utf-8", "surrogateescape")`` makes for bytes that are not UTF-8 turned back
+    into those bytes, so such a line decodes as the bytes it came from (with the usual
+    ``non-utf8-text`` handling). Any other lone surrogate stands for no byte; it is read as
+    U+FFFD, and in the header, which holds only ASCII, it makes the header unusable as any
+    other non-ASCII character does. Only an unusable header raises."""
+    raw = _line_bytes(line) if isinstance(line, str) else bytes(line)
     ctx = Ctx(options)
     colon = raw.find(b":")
     if colon < 0:
@@ -1101,7 +1116,7 @@ def _directed_query(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
     return DirectedQuery(addressee, qtype, target)
 
 
-_COEFF = re.compile(r" *(-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?) *\Z")
+_COEFF = re.compile(r" *(-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?) *\Z")
 
 
 def _telemetry_metadata(addressee: str, body: str, ctx: Ctx) -> AprsData | None:
@@ -1213,7 +1228,7 @@ def _status_locator(body: str) -> tuple[str, Symbol, int] | None:
 
 # ------------------------------------------------------------------ telemetry
 
-_TELEMETRY_NUMBER = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+_TELEMETRY_NUMBER = re.compile(r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
 """A telemetry value: an optional ``-``, then digits with an optional decimal point. No ``+``, and
 no spaces (vectors interpretations.md, "Numbers in telemetry")."""
 
@@ -1366,7 +1381,7 @@ def _dollar(s: str, destination: str, ctx: Ctx) -> AprsData:
     return NmeaSentence(sentence, has_checksum, comment=ctx.text(comment), **values)
 
 
-_DECIMAL = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z")
+_DECIMAL = re.compile(r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
 _NMEA_TIME = re.compile(r"([0-9]{2})([0-9]{2})([0-9]{2})(\.[0-9]*)?\Z")
 _NMEA_COORDINATE = re.compile(r"([0-9]+)([0-9]{2}(?:\.[0-9]*)?)\Z")
 
@@ -1448,7 +1463,7 @@ def _capabilities(s: str, destination: str, ctx: Ctx) -> AprsData:
     return Capabilities(tuple(caps))
 
 
-_FOOTPRINT_DEGREES = r"( ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))"
+_FOOTPRINT_DEGREES = r"( ?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)|-(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))"
 _FOOTPRINT = re.compile(_FOOTPRINT_DEGREES + "," + _FOOTPRINT_DEGREES + r",([0-9]{4})\Z")
 """A general query footprint: latitude and longitude in decimal degrees, each a number as a
 telemetry value is (an optional ``-``, then digits with an optional decimal point, at least one
