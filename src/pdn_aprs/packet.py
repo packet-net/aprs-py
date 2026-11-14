@@ -100,14 +100,19 @@ class Packet:
         return f"{self.source}>{self.destination}" + ("," + path if path else "")
 
     def to_tnc2(self) -> bytes:
-        """The packet as a TNC2 / APRS-IS line (without a line terminator)."""
+        """The packet as a TNC2 / APRS-IS line (without a line terminator).
+
+        This writes out a packet the program already holds, so it is not an encoder: the information
+        field goes through as it stands, with no size check.
+        """
         return self.header.encode("ascii") + b":" + self.info
 
     def to_ax25(self) -> bytes:
         """The packet as an AX.25 UI frame without flags or FCS (a KISS payload).
 
         Every address must be a valid AX.25 address (1-6 upper-case letters and digits, SSID
-        0-15), so an APRS-IS path with a q-construct cannot be written.
+        0-15), so an APRS-IS path with a q-construct cannot be written. The information field goes
+        through as it stands: this is not an encoder, and does not check its size.
         """
         path = self.path
         if len(path) > 8:
@@ -120,7 +125,10 @@ class Packet:
         return bytes(frame)
 
     def to_kiss(self, port: int = 0) -> bytes:
-        """The packet as a KISS data frame, with ``FEND`` delimiters, for a KISS TNC."""
+        """The packet as a KISS data frame, with ``FEND`` delimiters, for a KISS TNC.
+
+        Like :meth:`to_ax25` it writes the information field as it stands, with no size check.
+        """
         if not 0 <= port <= 15:
             raise ValueError("a KISS port is 0-15")
         body = self.to_ax25().replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc")

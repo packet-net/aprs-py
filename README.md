@@ -132,7 +132,7 @@ What a builder writes for an input you leave out depends only on what you give i
 
 ## Encoding
 
-Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused. An information field is at most 256 bytes (UTF-8, number text included; for a third-party packet the outermost field), and a longer one is refused as `too-long`. Text with a control character (a byte below 0x20 or 0x7F, a TAB or a line break included) is refused as `invalid-character`. Decoding has no size limit, and warns of a control character in text (`control-character-in-text`), so a strict decoder rejects it.
+Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused. An information field is at most 256 bytes (UTF-8, number text included; for a third-party packet the outermost field), and a longer one is refused as `information-field-too-long` (`too-long` is a field over its own limit, such as message text over 67 characters). A packet the program already holds is not re-encoded: `to_tnc2`, `to_ax25` and `to_kiss` write its information field as it stands, with no size check. Text with a control character (a byte below 0x20 or 0x7F, a TAB or a line break included) is refused as `invalid-character`. Decoding has no size limit, and warns of a control character in text (`control-character-in-text`), so a strict decoder rejects it.
 
 ```python
 >>> from pdn_aprs import PositionReport, encode_info
@@ -164,7 +164,7 @@ too-long True
 
 ```
 
-The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all six implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
+The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all six implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `information-field-too-long` is the whole field over 256 bytes. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
 
 `build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E report's destination.
 

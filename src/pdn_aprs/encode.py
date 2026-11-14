@@ -159,6 +159,7 @@ _ORDER = (
     RefusalCode.VALUE_GIVEN_TWICE,
     RefusalCode.TEXT_READS_AS_FIELD,
     RefusalCode.DOES_NOT_READ_BACK,
+    RefusalCode.INFORMATION_FIELD_TOO_LONG,
 )
 _PRIORITY = {code: rank for rank, code in enumerate(_ORDER)}
 """The order in which a refusal names its code when the data breaks several rules (the vectors'
@@ -271,10 +272,11 @@ def _written_comment(data: PositionedData) -> str:
 
 
 def _sized(info: bytes) -> bytes:
-    """``info``, or ``too-long`` when it is over 256 bytes."""
+    """``info``, or ``information-field-too-long`` when it is over 256 bytes."""
     if len(info) > INFORMATION_FIELD_LIMIT:
         raise SizeError(
-            f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}", RefusalCode.TOO_LONG
+            f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}",
+            RefusalCode.INFORMATION_FIELD_TOO_LONG,
         )
     return info
 
@@ -713,7 +715,9 @@ def _storm_text(data: PositionedData, f: _Faults) -> str:
 
     def n(v: int | None, width: int) -> str:
         if v is None:
-            return "." * width
+            # storm fields are digits: there is no unknown to write
+            f.add(RefusalCode.MISSING_FIELD, "storm data needs every field but the whole gale radius")
+            return "0" * width
         if not 0 <= v < 10**width:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "storm value does not fit its field")
             return "0" * width
@@ -1553,6 +1557,9 @@ def _telemetry(data: TelemetryReport) -> bytes:
         f.add(RefusalCode.MISSING_FIELD, "a telemetry report has a sequence")
     elif not seq or not (seq.isascii() and seq.isalnum()):
         f.add(RefusalCode.MALFORMED, "a telemetry sequence is letters and digits")
+    elif seq.startswith("MIC") and seq != "MIC":
+        # a sequence starting MIC is MIC itself (T#MIC has no comma): more characters cannot be written
+        f.add(RefusalCode.MALFORMED, "a telemetry sequence starting MIC is MIC itself")
     if len(data.analog) > 5:
         f.add(RefusalCode.TOO_LONG, "a telemetry report has five analog values")
     elif len(data.analog) < 5:

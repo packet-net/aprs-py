@@ -15,8 +15,9 @@ class RefusalCode(str, Enum):
 
     The value is the shared kebab-case id the conformance vectors list under ``refusals``. New
     codes may be added in later 1.x releases, so allow for one you do not know.
-    ``DOES_NOT_READ_BACK`` is the fallback: the library's own read-back check failed and no rule
-    names why.
+    ``INFORMATION_FIELD_TOO_LONG`` is the whole information field over 256 bytes (``TOO_LONG`` is a
+    field over its own limit). ``DOES_NOT_READ_BACK`` is the fallback: the library's own read-back
+    check failed and no rule names why.
     """
 
     INVALID_ADDRESS = "invalid-address"
@@ -45,6 +46,7 @@ class RefusalCode(str, Enum):
     INVALID_NMEA = "invalid-nmea"
     NOT_ENCODABLE = "not-encodable"
     DOES_NOT_READ_BACK = "does-not-read-back"
+    INFORMATION_FIELD_TOO_LONG = "information-field-too-long"
 
 
 class AprsError(ValueError):

@@ -188,7 +188,8 @@ _WEATHER = {
 
 def build(recipe: dict[str, Any]) -> Packet:
     """The packet a recipe describes, from the Station methods, as a program would build it."""
-    header = recipe["station"]
+    # a recipe with no station is from N0CALL, with the builder's default destination and no path
+    header = recipe.get("station", {"source": "N0CALL"})
     report = recipe["report"]
     args = dict(recipe.get("args", {}))
     for key in header:
@@ -226,37 +227,37 @@ def build(recipe: dict[str, Any]) -> Packet:
     if report == "weather":
         weather = {key: value for key, value in args.items() if key in _WEATHER}
         if "symbol" in args:
-            if "latitude" not in args:
-                raise UnsupportedError("weather: a positionless report has no symbol")
             weather["symbol"] = Symbol.parse(args["symbol"])
         if "timestamp" in args:
             weather["timestamp"] = _timestamp(args["timestamp"], positionless="latitude" not in args)
         return station.weather(**weather)
     if report == "message":
         return station.message(
-            args["addressee"], args.get("text", ""), message_id=args.get("message_id"), reply_ack=args.get("reply_ack")
+            args["addressee"], **{k: args[k] for k in ("text", "message_id", "reply_ack") if k in args}
         )
     if report == "ack":
         return station.ack(args["addressee"], args["message_id"])
     if report == "reject":
         return station.reject(args["addressee"], args["message_id"])
     if report == "bulletin":
-        return station.bulletin(args["id"], args.get("text", ""), group=args.get("group", ""))
+        return station.bulletin(args["id"], **{k: args[k] for k in ("text", "group") if k in args})
     if report == "status":
-        return station.status(
-            args.get("text", ""),
-            timestamp=_timestamp(args["timestamp"]) if "timestamp" in args else None,
-            locator=args.get("locator"),
-            symbol=Symbol.parse(args["symbol"]) if "symbol" in args else None,
-            beam=Beam(**args["beam"]) if "beam" in args else None,
-        )
+        given: dict[str, Any] = {key: args[key] for key in ("text", "locator") if key in args}
+        if "timestamp" in args:
+            given["timestamp"] = _timestamp(args["timestamp"])
+        if "symbol" in args:
+            given["symbol"] = Symbol.parse(args["symbol"])
+        if "beam" in args:
+            given["beam"] = Beam(**args["beam"])
+        return station.status(**given)
     if report == "telemetry":
         given = {key: args[key] for key in ("sequence", "analog", "bits", "comment") if key in args}
         return station.telemetry(**given)
+    addressee = {key: args[key] for key in ("addressee",) if key in args}
     if report == "telemetry-names":
-        return station.telemetry_names(args["names"], addressee=args.get("addressee"))
+        return station.telemetry_names(args["names"], **addressee)
     if report == "telemetry-units":
-        return station.telemetry_units(args["units"], addressee=args.get("addressee"))
+        return station.telemetry_units(args["units"], **addressee)
     if report == "telemetry-coefficients":
-        return station.telemetry_coefficients(args["coefficients"], addressee=args.get("addressee"))
-    return station.telemetry_bits(args["bits"], args.get("project", ""), addressee=args.get("addressee"))
+        return station.telemetry_coefficients(args["coefficients"], **addressee)
+    return station.telemetry_bits(args["bits"], **{k: args[k] for k in ("project", "addressee") if k in args})

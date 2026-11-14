@@ -627,6 +627,9 @@ def test_compressed_speed_byte_of_90_is_written() -> None:
         # no / before text that reads back as itself without one (ruling E7)
         "!/5L!!<*e7> sT.../...g...",
         "=4903.50N/07201.75W-444.900MHz 173",
+        # a first character that starts a !DAO! or base-91 telemetry elsewhere, but is plain text here
+        "=4903.50N/07201.75W-444.900MHz !173",
+        "=4903.50N/07201.75W-444.900MHz |173",
     ],
 )
 def test_delimiter_only_where_needed(info: str) -> None:
@@ -651,8 +654,8 @@ def test_late_altitude_and_phg_in_mic_e_are_written_not_refused() -> None:
 def test_information_field_is_at_most_256_bytes() -> None:
     # 255 two-byte characters and the identifier are 256 bytes; one more character is 258
     assert len(aprs.encode_info(aprs.StatusReport("\u00e9" * 127 + "x"))) == 256
-    assert _code(lambda: aprs.encode_info(aprs.StatusReport("\u00e9" * 128))) == "too-long"
-    assert _code(lambda: aprs.encode_info(aprs.StatusReport("x" * 256))) == "too-long"
+    assert _code(lambda: aprs.encode_info(aprs.StatusReport("\u00e9" * 128))) == "information-field-too-long"
+    assert _code(lambda: aprs.encode_info(aprs.StatusReport("x" * 256))) == "information-field-too-long"
 
 
 def test_compressed_weather_altitude_off_the_cs_steps_is_rounded() -> None:

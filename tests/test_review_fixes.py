@@ -28,7 +28,7 @@ def test_telemetry_whole_numbers_are_shortest_decimal() -> None:
     assert _telemetry(1e200) == "T#001,1" + "0" * 200 + ",000,000,000,000,00000000"
     with pytest.raises(EncodeError) as too_long:
         _telemetry(1e308)  # 309 digits: the information field would be over 256 bytes
-    assert too_long.value.code is RefusalCode.TOO_LONG
+    assert too_long.value.code is RefusalCode.INFORMATION_FIELD_TOO_LONG
     assert _telemetry(1000.0) == "T#001,1000,000,000,000,000,00000000"
     assert _telemetry(-1e23).startswith("T#001,-1" + "0" * 23 + ",")
     assert _telemetry(5.0) == "T#001,005,000,000,000,000,00000000"
@@ -244,3 +244,67 @@ def test_run_2_two_units_beat_the_size() -> None:
     with pytest.raises(EncodeError) as e:
         _ST.position(49.0, -72.0, symbol=Symbol.CAR, altitude_feet=100, altitude_m=30.48, comment="x" * 236)
     assert e.value.code is RefusalCode.VALUE_GIVEN_TWICE
+
+
+def _refusal(call: object) -> str:
+    with pytest.raises(EncodeError) as e:
+        call()  # type: ignore[operator]
+    return e.value.code.value
+
+
+def test_run_4_a_held_packet_is_written_as_it_stands() -> None:
+    # a decoded packet's TNC2, AX.25 and KISS forms are not an encoder: no size check
+    packet = aprs.decode_tnc2(b"N0CALL>APZ001:>" + b"x" * 300)
+    assert len(packet.info) == 301
+    assert packet.to_tnc2().endswith(b"x" * 300)
+    assert packet.to_ax25().endswith(b"x" * 300)
+    assert packet.to_kiss().endswith(b"x" * 300 + b"\xc0")
+    assert _refusal(lambda: encode_info(packet.data)) == "information-field-too-long"
+
+
+def test_run_4_storm_fields_are_digits() -> None:
+    head = ";BRENDA   *100045z4905.50N/07201.75W@101/047"
+    full = head + "/HC/104^123/0980>065&020%040"
+    assert aprs.decode_tnc2("N0CALL>APZ001:" + full).data.storm.whole_gale_radius_nm == 40  # type: ignore[attr-defined]
+    dotted = aprs.decode_tnc2("N0CALL>APZ001:" + head + "/HC/...^123/0980>065&020%040").data
+    assert dotted.storm is None  # type: ignore[attr-defined]
+    assert dotted.comment == "HC/...^123/0980>065&020%040"  # type: ignore[attr-defined]
+    ends = aprs.decode_tnc2("N0CALL>APZ001:" + head + "/HC/104^123/0980>065&020%4.410").data
+    assert ends.storm.whole_gale_radius_nm is None  # type: ignore[attr-defined]
+    assert ends.comment == "%4.410"  # type: ignore[attr-defined]
+    missing = aprs.ObjectReport(
+        name="BRENDA",
+        timestamp=aprs.Timestamp("100045z"),
+        latitude=49.0,
+        longitude=-72.0,
+        symbol=aprs.Symbol("/", "@"),
+        storm=aprs.Storm(aprs.StormType.HURRICANE, sustained_wind_knots=104),
+    )
+    assert _refusal(lambda: encode_info(missing)) == "missing-field"
+
+
+def test_run_4_a_telemetry_sequence_of_mic_and_more_is_malformed() -> None:
+    mic1 = aprs.TelemetryReport("MIC1", (1, 2, 3, 4, 5), "00000000")
+    assert _refusal(lambda: encode_info(mic1)) == "malformed"
+    assert _refusal(lambda: encode_info(dataclasses.replace(mic1, comment="x" * 240))) == "malformed"
+
+
+def test_run_4_a_run_on_value_ends_at_a_trailing_dao_or_telemetry() -> None:
+    dao = aprs.decode_tnc2("N0CALL>APZ001:!4903.50N/07201.75W_220/004g005t2147483647!W12!").data
+    assert dao.weather.temperature_f is None  # type: ignore[attr-defined]
+    assert dao.dao is not None  # type: ignore[attr-defined]
+
+
+def test_run_4_review_timestamp_false_is_no_timestamp() -> None:
+    assert ST.position(51.0, -1.0, timestamp=False).info == ST.position(51.0, -1.0).info
+    with pytest.raises(TypeError):
+        ST.position(51.0, -1.0, timestamp=True)  # type: ignore[arg-type]
+
+
+def test_run_4_review_a_finite_value_too_big_for_its_unit_is_out_of_range() -> None:
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_m=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_feet=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, speed_kmh=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.position(51.0, -1.0, altitude_m=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.weather(51.0, -1.0, temperature_c=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_m=float("inf"))) == "not-a-number"

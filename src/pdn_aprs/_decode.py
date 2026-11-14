@@ -12,7 +12,14 @@ import re
 from typing import Any, NoReturn
 
 from . import _util
-from ._comment import CommentParts, lift_comment, lift_telemetry_dao, lifted_places, parse_extension
+from ._comment import (
+    CommentParts,
+    lift_comment,
+    lift_telemetry_dao,
+    lifted_places,
+    parse_extension,
+    trailing_lifted_start,
+)
 from ._weather import parse_weather_fields, raise_field_defects, weather_tail
 from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .errors import HeaderError
@@ -646,7 +653,10 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
             wind["wind_speed_mph"] = speed
         wind_sent = True
         rest = rest[7:]
-    result = parse_weather_fields(rest, positionless=False, wind_known=wind_sent)
+    # the weather text ends where a trailing base-91 telemetry or !DAO! starts (it is lifted first)
+    end = trailing_lifted_start(rest)
+    result = parse_weather_fields(rest[:end], positionless=False, wind_known=wind_sent)
+    result.text += rest[end:]
     if not wind_sent:
         # the wind is judged where its extension belongs, before any field: sent as c and s
         # fields instead, or missing or incomplete (not after a compressed position, whose cs

@@ -43,7 +43,7 @@ _DFS = re.compile(r"DFS([0-9])([0-~])([0-9])([0-9])")
 _CSE_SPD = re.compile(r"([0-9]{3}|\.\.\.|   )/([0-9]{3}|\.\.\.|   )")
 _AREA = re.compile(r"([0-9])([0-9]{2})(/[0-9]|1[0-5])([0-9]{2})")
 _DF = re.compile(r"/([0-9]{3})/([0-9])([0-9])([0-9])")
-_STORM = re.compile(r"/(TS|HC|TD)/([0-9.]{3})\^([0-9.]{3})/([0-9.]{4})>([0-9.]{3})&([0-9.]{3})(?:%([0-9.]{3}))?")
+_STORM = re.compile(r"/(TS|HC|TD)/([0-9]{3})\^([0-9]{3})/([0-9]{4})>([0-9]{3})&([0-9]{3})(?:%([0-9]{3}))?")
 _ALTITUDE = re.compile(r"/A=(-[0-9]{5}|[0-9]{6})")
 _SIGNPOST = re.compile(r"\{([ -z|~]{1,3})\}")
 """Signpost braces: the first ``{``, 1-3 printable ASCII characters that are not braces, and ``}``,
@@ -150,12 +150,12 @@ def parse_extension(
                         {"TS": StormType.TROPICAL_STORM, "HC": StormType.HURRICANE}.get(
                             st.group(1), StormType.TROPICAL_DEPRESSION
                         ),
-                        _opt_int(st.group(2)),
-                        _opt_int(st.group(3)),
-                        _opt_int(st.group(4)),
-                        _opt_int(st.group(5)),
-                        _opt_int(st.group(6)),
-                        _opt_int(st.group(7)),
+                        int(st.group(2)),
+                        int(st.group(3)),
+                        int(st.group(4)),
+                        int(st.group(5)),
+                        int(st.group(6)),
+                        int(st.group(7)) if st.group(7) is not None else None,
                     )
                     consumed = st.end()
             return "course", consumed, values
@@ -332,6 +332,20 @@ def lifted_places(text: str, cuts: tuple[int, ...] = ()) -> tuple[str, tuple[int
     for start, end in reversed(spans):
         text = text[:start] + text[end:]
     return text, tuple(places)
+
+
+def trailing_lifted_start(text: str) -> int:
+    """Where the base-91 telemetry and ``!DAO!`` that end ``text`` start (``len(text)`` when none
+    does): the end of a positioned weather report's weather text."""
+    tel = _telemetry(text) if "|" in text else None
+    dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), ()) if "!" in text else None
+    spans = ([(tel[1], tel[2])] if tel is not None else []) + ([(dao[3], dao[3] + 5)] if dao is not None else [])
+    end = len(text)
+    for start, stop in sorted(spans, reverse=True):
+        if stop != end:
+            break
+        end = start
+    return end
 
 
 def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:

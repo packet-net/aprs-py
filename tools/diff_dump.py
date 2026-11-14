@@ -203,29 +203,34 @@ def dump_line(n: int, hex_line: str) -> str:
 # ---------------------------------------------------------------- encode
 
 
-def _stand_in_symbols(value: Any) -> None:
+def _stand_in_symbols(value: Any) -> bool:
     """A symbol that is not two characters cannot be held by ``Symbol``; one that is invalid the
-    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol."""
+    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol.
+    True when one was put in."""
+    put_in = False
     if isinstance(value, dict):
         for key, inner in value.items():
             if key == "symbol" and isinstance(inner, str) and len(inner) != 2:
                 value[key] = "x-"
+                put_in = True
             else:
-                _stand_in_symbols(inner)
+                put_in = _stand_in_symbols(inner) or put_in
     elif isinstance(value, list):
         for inner in value:
-            _stand_in_symbols(inner)
+            put_in = _stand_in_symbols(inner) or put_in
+    return put_in
 
 
 def encode_line(n: int, text: str) -> str:
     item = json.loads(text)
     n = item.get("n", n)
-    _stand_in_symbols(item.get("data"))
+    stood_in = _stand_in_symbols(item.get("data"))
     try:
         try:
             data = from_neutral(item["data"])
         except EncodeError as e:
-            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
+            # the neutral reader's own limit (third-party data nested too deep), not the encoder's
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value, "via": "tool"})
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
             refusal = _refusal_for_unrepresentable(item["data"])
             if refusal is not None:
@@ -248,7 +253,11 @@ def encode_line(n: int, text: str) -> str:
             info = encode_info(data)
             destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
         except EncodeError as e:
-            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
+            record = {"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value}
+            if stood_in and e.code is RefusalCode.INVALID_SYMBOL:
+                # the library refused the stand-in, which the tool put where the symbol it cannot hold was
+                record["via"] = "tool"
+            return dumps(record)
         try:
             packet = decode_tnc2(f"N0CALL>{destination}".encode("ascii") + b":" + info, LENIENT)
             again: dict[str, Any] = {
@@ -282,6 +291,8 @@ def build_line(n: int, text: str) -> str:
             record = {"n": n, "result": "refused", "reason": str(e)}
             if isinstance(e, EncodeError):
                 record["refusal"] = e.code.value
+            else:
+                record["via"] = "tool"  # the recipe's reader, not the builder, declined
             return dumps(record)
         line = packet.to_tnc2()
         try:

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, TypedDict, TypeVar
+from typing import Any, Literal, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
 from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _real, build_packet
@@ -66,13 +66,13 @@ from .symbols import Symbol
 
 __all__ = ["Station"]
 
-TimestampLike = Timestamp | datetime | None
+TimestampLike = Timestamp | datetime | Literal[False] | None
 
 
 def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     """A datetime is taken as UTC when naive. A builder never reads the clock: for the time now,
     pass ``datetime.now(timezone.utc)``."""
-    if value is None:
+    if value is None or value is False:
         return None
     if isinstance(value, bool):
         raise TypeError("timestamp=True is gone: a builder never reads the clock; pass datetime.now(timezone.utc)")
@@ -141,7 +141,12 @@ def _either(
     if value is not None:
         _twice(faults, what)
         return value
-    return metric / per_unit
+    converted = metric / per_unit
+    if math.isfinite(metric) and not math.isfinite(converted):
+        # a finite value too big for the unit it is converted to is out of range, not a non-number
+        faults.append(EncodeError(f"the {what} is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
+        return None
+    return converted
 
 
 def _frequency(value: float | VoiceFrequency | None) -> VoiceFrequency | None:
@@ -501,8 +506,10 @@ class Station:
         if altitude_m is not None:
             if altitude_feet is not None:
                 _twice(faults, "altitude")
+            elif not math.isfinite(altitude_m):
+                feet = altitude_m * FEET_PER_METRE  # judged as any non-finite value is
             else:
-                feet = altitude_m * FEET_PER_METRE
+                feet = None  # set below, once it is known to be in range (the product could overflow)
         given = altitude_feet if altitude_feet is not None else altitude_m
         if given is not None and math.isfinite(given):
             # rounded once, from the value as given, to whole metres
@@ -573,6 +580,9 @@ class Station:
                 _twice(faults, "temperature")
             else:
                 temperature_f = temperature_c * 9 / 5 + 32
+                if math.isfinite(temperature_c) and not math.isfinite(temperature_f):
+                    faults.append(EncodeError("the temperature is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
+                    temperature_f = None
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
             raise EncodeError("a positionless weather report has no symbol", RefusalCode.SYMBOL_MISMATCH)
         weather = Weather(
@@ -594,7 +604,8 @@ class Station:
             if latitude is not None or longitude is not None:
                 raise EncodeError("give both latitude and longitude, or neither", RefusalCode.MISSING_FIELD)
             if isinstance(timestamp, bool):
-                _timestamp(timestamp)
+                _timestamp(timestamp)  # True raises; False is no timestamp, as None is
+                timestamp = None
             if timestamp is None:
                 # never the clock: refused as missing-field after any code that comes before it
                 faults.append(
@@ -622,9 +633,10 @@ class Station:
     # ------------------------------------------------------------ messages
 
     def message(
-        self, addressee: str, text: str, *, message_id: str | None = None, reply_ack: str | None = None
+        self, addressee: str, text: str = "", *, message_id: str | None = None, reply_ack: str | None = None
     ) -> Packet:
-        """A message to one station. Give a ``message_id`` to ask for an acknowledgement."""
+        """A message to one station. Give a ``message_id`` to ask for an acknowledgement. With no
+        ``text`` the message is empty text, which is refused (``malformed``)."""
         return self.send(Message(addressee, text, message_id, reply_ack))
 
     def ack(self, addressee: str, message_id: str) -> Packet:
@@ -635,7 +647,7 @@ class Station:
         """Reject message ``message_id`` from ``addressee``."""
         return self.send(Reject(addressee, message_id))
 
-    def bulletin(self, id: str, text: str, *, group: str = "") -> Packet:
+    def bulletin(self, id: str, text: str = "", *, group: str = "") -> Packet:
         """A bulletin (``id`` a digit), announcement (a letter) or group bulletin."""
         if len(id) != 1:
             raise EncodeError(f"a bulletin id is exactly one character, not {id!r}", RefusalCode.INVALID_ADDRESSEE)
