@@ -31,7 +31,7 @@ from fractions import Fraction
 from typing import Any, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, _real, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -148,11 +148,14 @@ def _frequency(value: float | VoiceFrequency | None) -> VoiceFrequency | None:
 
 
 def _plain(value: Any) -> Any:
-    """A ``Decimal`` or ``Fraction`` as the float it reads as, also inside a list or tuple."""
+    """A ``Decimal`` or ``Fraction`` as the number it reads as, also inside a list or tuple (which
+    becomes a plain list or tuple, so a namedtuple passes)."""
     if isinstance(value, (Decimal, Fraction)):
-        return float(value)
-    if isinstance(value, (list, tuple)):
-        return type(value)(_plain(v) for v in value)
+        return _real(value)
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_plain(v) for v in value)
     return value
 
 
@@ -162,9 +165,11 @@ def _only_refusals(fn: _F) -> _F:
 
     @functools.wraps(fn)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        args = tuple(_plain(a) for a in args)
-        kwargs = {k: _plain(v) for k, v in kwargs.items()}
         try:
+            # a telemetry sequence is judged as given, so a Decimal is refused by its own type
+            keep = 1 if fn.__name__ == "telemetry" else 0
+            args = args[:keep] + tuple(_plain(a) for a in args[keep:])
+            kwargs = {k: _plain(v) for k, v in kwargs.items()}
             return fn(self, *args, **kwargs)
         except OverflowError as e:
             raise EncodeError(f"a number is too large to use: {e}", RefusalCode.VALUE_OUT_OF_RANGE) from None

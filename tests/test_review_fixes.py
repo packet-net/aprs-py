@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import collections
+import dataclasses
 import decimal
 import fractions
 import re
@@ -10,7 +12,7 @@ import time
 import pytest
 
 import pdn_aprs as aprs
-from pdn_aprs import EncodeError, HeaderError, RefusalCode, Station
+from pdn_aprs import EncodeError, HeaderError, RefusalCode, Station, Symbol, encode_info
 from pdn_aprs import _decode as dec
 from pdn_aprs import encode as enc
 
@@ -146,3 +148,48 @@ def test_accepted_language_is_unchanged(text: str) -> None:
     assert bool(dec._COEFF.match(text)) == bool(old_coeff.match(text))
     old_fp = re.compile(r"(?: ?(?:[0-9]+\.?[0-9]*|\.[0-9]+)|-(?:[0-9]+\.?[0-9]*|\.[0-9]+))\Z")
     assert bool(enc._FOOTPRINT_VALUE.match(text)) == bool(old_fp.match(text))
+
+
+_NT = collections.namedtuple("_NT", "a b c d e")
+Decimal = decimal.Decimal
+Fraction = fractions.Fraction
+_POS = aprs.decode_tnc2("M0LTE>APRS:!5127.00N/00058.80W>088/036/A=001234hello").data
+_ST = Station("M0LTE-9", symbol=Symbol.CAR)
+
+
+def test_namedtuples_pass_to_the_builders() -> None:
+    assert _ST.telemetry(1, _NT(1, 2, 3, 4, 5), "00000000").info.startswith(b"T#001,001,002,003,004,005,")
+    assert _ST.telemetry_names(_NT("a", "b", "c", "d", "e")).info.startswith(b":")
+    assert _ST.telemetry_coefficients(_NT(0, 1, 0, 0, 1)).info.startswith(b":")
+
+
+def test_huge_fraction_and_signalling_nan_are_refused_not_leaked() -> None:
+    with pytest.raises(EncodeError) as e:
+        _ST.position(Fraction(10**400, 3), -0.98)
+    assert e.value.code is RefusalCode.VALUE_OUT_OF_RANGE
+    with pytest.raises(EncodeError) as e:
+        encode_info(dataclasses.replace(_POS, latitude=Fraction(10**400, 3)))
+    assert e.value.code is RefusalCode.VALUE_OUT_OF_RANGE
+    with pytest.raises(EncodeError) as e:
+        _ST.position(Decimal("sNaN"), -0.98)
+    assert e.value.code is RefusalCode.NOT_A_NUMBER
+
+
+def test_huge_finite_decimal_is_out_of_range_but_nan_is_not_a_number() -> None:
+    with pytest.raises(EncodeError) as e:
+        _ST.position(Decimal("1e1000"), -0.98)
+    assert e.value.code is RefusalCode.VALUE_OUT_OF_RANGE
+    with pytest.raises(EncodeError) as e:
+        _ST.position(Decimal("NaN"), -0.98)
+    assert e.value.code is RefusalCode.NOT_A_NUMBER
+
+
+def test_whole_exact_telemetry_values_keep_their_digits() -> None:
+    big = 10**25 + 1
+    info = _ST.telemetry(1, (Fraction(big), Decimal(big), 2, 3, 4), "00000000").info
+    assert info.startswith(f"T#001,{big},{big},002,003,004,".encode())
+
+
+def test_telemetry_sequence_type_error_names_the_type() -> None:
+    with pytest.raises(TypeError, match="not Decimal"):
+        _ST.telemetry(Decimal(1), (1, 2, 3, 4, 5))  # type: ignore[arg-type]

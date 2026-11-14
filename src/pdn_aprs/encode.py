@@ -1835,8 +1835,31 @@ def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
 
 
 def _real(value: Any) -> Any:
-    """A ``Decimal`` or ``Fraction`` as the float it reads as; everything else as it is."""
-    return float(value) if isinstance(value, (Decimal, Fraction)) else value
+    """A ``Decimal`` or ``Fraction`` as the number it reads as; everything else as it is.
+
+    A whole value too big for a float exactly is kept as an ``int``, so its digits survive. A NaN
+    (quiet or signalling) is refused as not-a-number, and a finite value too big for a float as out of
+    range (only a real infinity becomes an infinite float, judged as any infinity is).
+    """
+    if not isinstance(value, (Decimal, Fraction)):
+        return value
+    if isinstance(value, Decimal):
+        if value.is_nan():
+            raise _refuse(RefusalCode.NOT_A_NUMBER, "a value is NaN")
+        if value.is_infinite():
+            return float(value)
+        whole = bool(value == value.to_integral_value()) and value.adjusted() < 400
+    else:
+        whole = value.denominator == 1
+    if whole and abs(cast("Any", value)) > 2**53:
+        return int(value)
+    try:
+        result = float(value)
+    except OverflowError:
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a number is too large to use") from None
+    if math.isinf(result):
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a number is too large to use")
+    return result
 
 
 _LONE_SURROGATES = re.compile("[\ud800-\udfff]")
