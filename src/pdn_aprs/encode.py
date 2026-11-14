@@ -3,7 +3,9 @@
 The encoder writes only what the specification allows and raises :class:`EncodeError`
 otherwise. Free text is checked by decoding what was written: a comment that would read back
 as something else (an altitude, a data extension, a leading delimiter...) gets a ``/`` delimiter
-in front, and is refused if even that does not read back.
+in front, and is refused if even that does not read back. An information field is at most 256
+bytes (:data:`INFORMATION_FIELD_LIMIT`), and text with a control character is refused as
+``invalid-character``.
 
 >>> from pdn_aprs import PositionReport, Symbol
 >>> from pdn_aprs.encode import encode_info
@@ -76,6 +78,7 @@ from .packet import Packet, PathEntry, _tnc2_path
 
 __all__ = [
     "DEFAULT_DESTINATION",
+    "INFORMATION_FIELD_LIMIT",
     "MESSAGE_TEXT_LIMIT",
     "build_packet",
     "encode_info",
@@ -94,6 +97,9 @@ _T = TypeVar("_T")
 
 _nearest = _util.round_half_away
 """Every value the encoder rounds goes to the nearest step, halves away from zero."""
+
+INFORMATION_FIELD_LIMIT = 256
+"""The longest information field an encoder writes, in bytes (the vectors README, Encoding)."""
 
 _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
@@ -162,6 +168,12 @@ class _Faults:
 
     def add(self, code: RefusalCode, why: str) -> None:
         self.found.append(EncodeError(why, code))
+
+    def size(self, length: int) -> None:
+        """Note ``too-long`` when the information field, as far as the data makes it, is over 256
+        bytes. A field the data has no place for, or leaves out, makes no bytes."""
+        if length > INFORMATION_FIELD_LIMIT:
+            self.add(RefusalCode.TOO_LONG, f"the information field is over {INFORMATION_FIELD_LIMIT} bytes")
 
     def guard(self, fn: Callable[..., _T], *args: Any, default: _T) -> _T:
         try:
@@ -240,9 +252,32 @@ def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
 # ---------------------------------------------------------------- checks
 
 
+def _has_control(text: str) -> bool:
+    return any(c < " " or c == "\x7f" for c in text)
+
+
 def _check_text(text: str, what: str) -> None:
-    if "\r" in text or "\n" in text:
-        raise _refuse(RefusalCode.INVALID_CHARACTER, f"{what} contains a line break")
+    """Text is printable: a byte below 0x20 or 0x7F (a TAB, CR or LF included) is refused."""
+    if _has_control(text):
+        raise _refuse(RefusalCode.INVALID_CHARACTER, f"{what} contains a control character")
+
+
+def _written_comment(data: PositionedData) -> str:
+    """The comment as it is written first: after a voice frequency it follows a space."""
+    return " " + data.comment if data.comment and data.frequency is not None else data.comment
+
+
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8", "replace"))
+
+
+def _sized(info: bytes) -> bytes:
+    """``info``, or ``too-long`` when it is over 256 bytes."""
+    if len(info) > INFORMATION_FIELD_LIMIT:
+        raise _refuse(
+            RefusalCode.TOO_LONG, f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}"
+        )
+    return info
 
 
 def _check_address(call: str, what: str, code: RefusalCode = RefusalCode.INVALID_ADDRESSEE) -> None:
@@ -357,6 +392,7 @@ def _with_comment(
 
 def _checked(data: AprsData, info: str) -> bytes:
     raw = info.encode("utf-8")
+    _sized(raw)
     if not _reads_back(data, raw, DEFAULT_DESTINATION):
         raise _refuse(RefusalCode.TEXT_READS_AS_FIELD, "the text would not read back as written")
     return raw
@@ -1025,9 +1061,12 @@ def _position(data: PositionReport) -> bytes:
     else:
         head = "=" if data.messaging else "!"
     rest = _position_body(data, f)
+    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _sized(
+        _with_comment(
+            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        )
     )
 
 
@@ -1047,9 +1086,12 @@ def _object(data: ObjectReport) -> bytes:
         stamp = data.timestamp.text
     head = ";" + name.ljust(9) + ("_" if data.killed else "*") + stamp
     rest = _position_body(data, f)
+    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _sized(
+        _with_comment(
+            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        )
     )
 
 
@@ -1061,9 +1103,12 @@ def _item(data: ItemReport) -> bytes:
         f.add(RefusalCode.INVALID_NAME, f"item name {name!r} is not 3-9 printable characters without ! or _")
     head = ")" + name + ("_" if data.killed else "!")
     rest = _position_body(data, f)
+    f.size(_utf8_size(head + rest(_written_comment(data))))
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _sized(
+        _with_comment(
+            data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        )
     )
 
 
@@ -1142,19 +1187,38 @@ def _mic_e_destination(data: MicEReport, f: _Faults) -> str:
     return f"{call}-{ssid}" if ssid else call
 
 
-def _mic_e_altitude(feet: float) -> str | None:
-    """The Mic-E ``xxx}`` altitude, or None when it would not read back exactly."""
+_MIC_E_ALTITUDE_METRES = (-10000, 743570)
+"""The metres the Mic-E altitude bytes hold: three base-91 characters, 10,000 m below sea level."""
+
+
+def _near_whole(value: float) -> bool:
+    return abs(value - round(value)) <= 1e-6
+
+
+def _altitude_in_text(feet: float) -> bool:
+    """Whether neutral data's altitude goes in a ``/A=`` rather than the Mic-E altitude bytes:
+    only when only a ``/A=`` holds it exactly, a whole number of feet within its six digits that
+    the bytes do not hold exactly (not a whole number of metres, or outside their range)."""
+    if not _near_whole(feet) or not -99999 <= round(feet) <= 999999:
+        return False
+    metres = feet / _util.FEET_PER_METRE
+    low, high = _MIC_E_ALTITUDE_METRES
+    return not (_near_whole(metres) and low <= round(metres) <= high)
+
+
+def _mic_e_altitude(feet: float) -> str:
+    """The Mic-E ``xxx}`` altitude, rounded once to the nearest metre from the value given.
+    Raises ``value-out-of-range`` outside what the bytes hold."""
     metres = _nearest(feet / _util.FEET_PER_METRE)
-    value = metres + 10000
-    if not 0 <= value < 91**3:
-        return None
-    if not _util.number_equal(metres * _util.FEET_PER_METRE, feet):
-        return None
-    return _util.base91_text(value, 3) + "}"
+    low, high = _MIC_E_ALTITUDE_METRES
+    if not low <= metres <= high:
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a Mic-E altitude is -10000 to 743570 metres")
+    return _util.base91_text(metres + 10000, 3) + "}"
 
 
-_MIC_E_STATUS_START = "`'>] \x1d"
-"""What Mic-E status text cannot start with: a device type code, or 0x1D (obsolete telemetry)."""
+_MIC_E_STATUS_START = "`'>] "
+"""What Mic-E status text cannot start with: a device type code. (It cannot start with 0x1D, the
+obsolete telemetry marker, either: that is a control character, so such text is refused.)"""
 
 
 def _mic_e(data: MicEReport) -> bytes:
@@ -1240,14 +1304,22 @@ def _mic_e(data: MicEReport) -> bytes:
     altitude_first = ""
     altitude_later = ""
     if data.altitude_feet is not None:
-        mic = None if data.altitude_in_comment else _mic_e_altitude(data.altitude_feet)
-        if mic is not None:
-            altitude_first = mic
-            if not type_code and mic[0] in "`'>] " and abs(_nearest(data.altitude_feet)) > 999999:
-                # no /A= can hold it, and its first byte would read back as a type code
-                f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
+        feet = data.altitude_feet
+        # decoded data knows a /A= was where its altitude came from; neutral data's value decides
+        if data.altitude_in_comment or _altitude_in_text(feet):
+            altitude_later = f.guard(_altitude, feet, default="")
         else:
-            altitude_later = f.guard(_altitude, data.altitude_feet, default="")
+            mic = f.guard(_mic_e_altitude, feet, default="")
+            altitude_first = mic
+            if mic and not type_code and mic[0] in "`'>] ":
+                # the bytes have no clean form here (the first would read back as a type code):
+                # a /A= holds the value exactly when it is whole feet; one too big for any /A= has
+                # no form; any other does not read back
+                if _near_whole(feet) and -99999 <= round(feet) <= 999999:
+                    altitude_first = ""
+                    altitude_later = f.guard(_altitude, feet, default="")
+                elif abs(_nearest(feet)) > 999999:
+                    f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
     locator = ""
     if data.locator is not None:
         if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
@@ -1256,15 +1328,15 @@ def _mic_e(data: MicEReport) -> bytes:
             locator = data.locator.upper() + "/G"
     if sum(x is not None for x in (data.phg, data.range_miles, data.dfs)) > 1:
         f.add(RefusalCode.EXTENSION_CONFLICT, "more than one data extension")
+    # every extension given makes its bytes, though more than one is refused
     ext = f.guard(_phg_text, data, default="") + f.guard(_dfs_text, data, default="")
     if data.range_miles is not None:
-        ext = f.guard(_range_text, data.range_miles, default="")
+        ext += f.guard(_range_text, data.range_miles, default="")
     freq = "" if data.frequency is None else _frequency_text(data.frequency, f)
     if freq and ext and not altitude_later and not ext.endswith("/"):
         freq = "/" + freq
     telemetry = _telemetry_text(data.telemetry, f)
     dao = f.guard(_dao_text, data, a, o, default="")
-    f.finish()
 
     def build(comment: str) -> bytes:
         text = type_code + altitude_first + locator
@@ -1273,15 +1345,21 @@ def _mic_e(data: MicEReport) -> bytes:
             text += " "
         text += after + comment
         if not legacy and not type_code and text and text[0] in _MIC_E_STATUS_START:
-            # status text must not start with a type code character or 0x1D (APRS12c ch. 10),
+            # status text must not start with a type code character (APRS12c ch. 10),
             # so it goes after a / delimiter
             text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
 
+    # a head the faults kept from being written is still its 9 fixed bytes
+    f.size(len(build(" " + data.comment if data.comment and freq else data.comment)) + (0 if head else 9))
+    f.finish()
+
     if build(data.comment).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
         raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
-    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
+    return _sized(
+        _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
+    )
 
 
 # ---------------------------------------------------------------- messages
@@ -1336,6 +1414,7 @@ def _message(data: Message) -> bytes:
     _check_message_addressee(data.addressee, "a message")
     head = _addressee(data.addressee)
     _message_text(data.text)
+    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, data.reply_ack))
 
 
@@ -1365,6 +1444,7 @@ def _bulletin(data: Bulletin) -> bytes:
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "a group bulletin's identifier is a digit")
     head = _addressee(a)
     _message_text(data.text)
+    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, None))
 
 
@@ -1373,6 +1453,7 @@ def _nws(data: NwsBulletin) -> bytes:
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "an NWS bulletin's addressee starts NWS-")
     head = _addressee(data.addressee)
     _message_text(data.text, limit=False)
+    _sized((head + data.text).encode("utf-8"))
     return _checked(data, head + data.text + _message_id(data.message_id, None))
 
 
@@ -1467,16 +1548,17 @@ def _status(data: StatusReport) -> bytes:
             "1" <= b.power_code <= "9" or ":" <= b.power_code <= "K"
         ):
             f.add(RefusalCode.INVALID_CODE, "beam heading or power code out of range")
-    f.finish()
     if data.timestamp is not None:
         text += data.timestamp.text
     if data.locator is not None:
-        text += data.locator.upper() + str(data.symbol)
+        text += data.locator.upper() + (str(data.symbol) if data.symbol is not None else "")
         if data.text or data.beam:
             text += " "
     text += data.text
     if data.beam is not None:
         text += "^" + data.beam.heading_code + data.beam.power_code
+    f.size(_utf8_size(text))
+    f.finish()
     return _checked(data, text)
 
 
@@ -1497,13 +1579,14 @@ def _telemetry(data: TelemetryReport) -> bytes:
     if seq == "MIC" and data.analog and data.analog[0] is None:
         # no form reads back with the first channel empty after MIC (vectors ruling F12)
         f.add(RefusalCode.VALUE_HAS_NO_FORM, "T#MIC with an empty first channel has no form")
-    f.finish()
-    assert data.bits is not None
     texts = data.analog_text
     values: list[str] = []
     for i, v in enumerate(data.analog):
         t = texts[i] if i < len(texts) else None
-        if v is None:
+        if not isinstance(v, int) and v is not None and not math.isfinite(v):
+            # no digits to count: the NaN rule judges it
+            values.append("")
+        elif v is None:
             values.append("")
         elif t is not None and _same_number(t, v, _TELEMETRY_VALUE):
             values.append(t)
@@ -1514,7 +1597,10 @@ def _telemetry(data: TelemetryReport) -> bytes:
         else:
             values.append(_util.number_text(v))
     head = "T#" + seq + ("" if seq == "MIC" else ",")
-    return _checked(data, head + ",".join(values) + "," + data.bits + data.comment)
+    text = head + ",".join(values) + ("" if data.bits is None else "," + data.bits) + data.comment
+    f.size(_utf8_size(text))
+    f.finish()
+    return _checked(data, text)
 
 
 def _positionless_weather(data: PositionlessWeather) -> bytes:
@@ -1523,6 +1609,7 @@ def _positionless_weather(data: PositionlessWeather) -> bytes:
     if data.comment:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment")
     text = _weather_text(data.weather, positionless=True, compressed=False, f=f)
+    f.size(1 + len(data.timestamp.text) + _utf8_size(text))
     f.finish()
     return _checked(data, "_" + data.timestamp.text + text)
 
@@ -1546,6 +1633,7 @@ def _nmea(data: NmeaSentence) -> bytes:
     if not s or not _util.is_printable_ascii(s):
         raise _refuse(RefusalCode.INVALID_CHARACTER, "an NMEA sentence is printable ASCII")
     _check_text(data.comment, "comment")
+    _sized(("$" + s).encode("ascii") + data.comment.encode("utf-8", "replace"))
     star = s.find("*")
     if star >= 0 and (star != len(s) - 3 or not all(c in "0123456789ABCDEFabcdef" for c in s[star + 1 :])):
         raise _refuse(RefusalCode.INVALID_NMEA, "a * in an NMEA sentence starts its checksum, *hh at the end")
@@ -1648,6 +1736,7 @@ def _capabilities(data: Capabilities) -> bytes:
             items.append(f"{token}={value}")
         else:
             items.append(token)
+    f.size(1 + _utf8_size(",".join(items)))
     f.finish()
     return _checked(data, "<" + ",".join(items))
 
@@ -1712,7 +1801,7 @@ def _third_party(data: ThirdParty) -> bytes:
         destination = inner.destination
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
-    return b"}" + header.encode("ascii") + b":" + info
+    return _sized(b"}" + header.encode("ascii") + b":" + info)
 
 
 def _user_defined(data: UserDefined) -> bytes:
@@ -1729,11 +1818,13 @@ def _user_defined(data: UserDefined) -> bytes:
         ) from None
     if len(data.user_id) != 1 or len(data.packet_type) != 1:
         raise _refuse(RefusalCode.TOO_LONG, "user ID and packet type are one character each")
-    return encoded
+    return _sized(encoded)
 
 
 def _test(data: TestData) -> bytes:
-    _check_text(data.data, "test data")
+    if "\r" in data.data or "\n" in data.data:
+        # test data is not judged for control characters, but a line break would be one
+        raise _refuse(RefusalCode.INVALID_CHARACTER, "test data contains a line break")
     return _checked(data, "," + data.data)
 
 

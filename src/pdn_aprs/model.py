@@ -668,9 +668,11 @@ class MicEReport(PositionedData):
     ``type_code`` is the device type byte after the symbol (`` ` ``, ``'``, ``>``, ``]`` or a
     space) and ``device_suffix`` the device's suffix at the end, both lifted out of the
     comment. ``old_data`` is set by the ``'`` data type. ``destination_ssid`` is the
-    destination address's SSID, which an encoder writes back. ``altitude_in_comment`` asks an
-    encoder to write the altitude as a ``/A=`` in feet even where the Mic-E altitude bytes, in
-    metres, would hold it (a builder given an altitude in feet).
+    destination address's SSID, which an encoder writes back. ``altitude_in_comment`` says the
+    altitude was read from a ``/A=`` (the decoder sets it), so an encoder writes it back as one
+    whatever its value. Without it the altitude goes in the Mic-E altitude bytes, rounded to the
+    metre, unless only a ``/A=`` holds it exactly: whole feet within six digits that are not
+    whole metres (or are outside the bytes' -10,000 to 743,570 m).
     """
 
     kind: ClassVar[str] = "mic-e"

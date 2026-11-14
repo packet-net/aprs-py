@@ -437,14 +437,16 @@ def build(recipe: dict[str, Any]) -> Packet:
     for key in header:
         if key not in ("source", "destination", "path"):
             raise UnsupportedError(f"station: the builder has no {key}")
-    # a station says whether it can message, which position and Mic-E reports announce
-    messaging = args.pop("messaging", False) if report in ("position", "mic-e") else False
-    station = Station(
-        header["source"],
-        path=header.get("path", ()),
-        destination=header.get("destination", DEFAULT_DESTINATION),
-        messaging=bool(messaging),
-    )
+    # a station says whether it can message, which position and Mic-E reports announce; only what
+    # the recipe gives is passed, so the Station's own defaults are what is built
+    station_args: dict[str, Any] = {}
+    if "path" in header:
+        station_args["path"] = header["path"]
+    if "destination" in header:
+        station_args["destination"] = header["destination"]
+    if report in ("position", "mic-e") and "messaging" in args:
+        station_args["messaging"] = bool(args.pop("messaging"))
+    station = Station(header["source"], **station_args)
     takes = _TAKES.get(report)
     if takes is None:
         raise UnsupportedError(f"the builder has no {report} report")
@@ -492,9 +494,8 @@ def build(recipe: dict[str, Any]) -> Packet:
             beam=Beam(**args["beam"]) if "beam" in args else None,
         )
     if report == "telemetry":
-        return station.telemetry(
-            args["sequence"], args["analog"], args.get("bits", "00000000"), comment=args.get("comment", "")
-        )
+        given = {key: args[key] for key in ("sequence", "analog", "bits", "comment") if key in args}
+        return station.telemetry(**given)
     if report == "telemetry-names":
         return station.telemetry_names(args["names"], addressee=args.get("addressee"))
     if report == "telemetry-units":
@@ -512,6 +513,10 @@ def build_line(n: int, text: str) -> str:
             packet = build(recipe)
         except UnsupportedError as e:
             return dumps({"n": n, "result": "unsupported", "reason": str(e)})
+        except KeyError as e:
+            return dumps(
+                {"n": n, "result": "unsupported", "reason": f"{recipe['report']}: no {e.args[0]} in the recipe"}
+            )
         except (EncodeError, ValueError) as e:
             # the builder or the encoder declined
             record = {"n": n, "result": "refused", "reason": str(e)}

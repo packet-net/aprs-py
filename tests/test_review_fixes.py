@@ -25,7 +25,10 @@ def _telemetry(value: float) -> str:
 
 def test_telemetry_whole_numbers_are_shortest_decimal() -> None:
     assert _telemetry(1e23) == "T#001,1" + "0" * 23 + ",000,000,000,000,00000000"
-    assert _telemetry(1e308) == "T#001,1" + "0" * 308 + ",000,000,000,000,00000000"
+    assert _telemetry(1e200) == "T#001,1" + "0" * 200 + ",000,000,000,000,00000000"
+    with pytest.raises(EncodeError) as too_long:
+        _telemetry(1e308)  # 309 digits: the information field would be over 256 bytes
+    assert too_long.value.code is RefusalCode.TOO_LONG
     assert _telemetry(1000.0) == "T#001,1000,000,000,000,000,00000000"
     assert _telemetry(-1e23).startswith("T#001,-1" + "0" * 23 + ",")
     assert _telemetry(5.0) == "T#001,005,000,000,000,000,00000000"

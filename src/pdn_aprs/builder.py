@@ -66,16 +66,19 @@ from .symbols import Symbol
 
 __all__ = ["Station"]
 
-TimestampLike = Timestamp | datetime | bool | None
+TimestampLike = Timestamp | datetime | None
 
 
 def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
-    """``True`` means now; a datetime is taken as UTC when naive."""
-    if value is None or value is False:
+    """A datetime is taken as UTC when naive. A builder never reads the clock: for the time now,
+    pass ``datetime.now(timezone.utc)``."""
+    if value is None:
         return None
+    if isinstance(value, bool):
+        raise TypeError("timestamp=True is gone: a builder never reads the clock; pass datetime.now(timezone.utc)")
     if isinstance(value, Timestamp):
         return value
-    moment = datetime.now(timezone.utc) if value is True else value
+    moment = value
     if moment.tzinfo is not None:
         moment = moment.astimezone(timezone.utc)
     if hms:
@@ -239,9 +242,13 @@ class Station:
     ``altitude_m``, ``temperature_c``, ``rain_1h_mm``).
 
     A request the data cannot be sent as (a telemetry sequence over 999, a name too long, a
-    value out of range) raises :class:`~pdn_aprs.EncodeError`. A call that cannot mean anything
-    (a quantity given in both units, no symbol anywhere, a latitude without a longitude) raises
-    ``ValueError``.
+    value out of range, no symbol anywhere) raises :class:`~pdn_aprs.EncodeError`. A call that
+    cannot mean anything (a latitude without a longitude) raises ``ValueError``.
+
+    What is not given is never filled in from the clock: an object or a positionless weather
+    report with no ``timestamp`` is refused (``missing-field``); pass ``datetime.now(timezone.utc)``
+    for the time now. A station not said to message writes ``!``, ``/`` and, for Mic-E, the type
+    code ``'``; a Mic-E report with no message is off duty.
     """
 
     callsign: str
@@ -285,10 +292,9 @@ class Station:
         return packet
 
     def _symbol(self, symbol: Symbol | None) -> Symbol:
-        chosen = symbol or self.symbol
-        if chosen is None:
-            raise ValueError("give a symbol, here or on the Station")
-        return chosen
+        """The symbol given, or the Station's. With neither, a blank one, which the encoder refuses
+        as ``invalid-symbol`` where that code belongs in the order."""
+        return symbol or self.symbol or Symbol(" ", " ")
 
     # ------------------------------------------------------------ positions
 
@@ -317,7 +323,8 @@ class Station:
         """A position report. ``course_degrees`` in degrees, ``speed_knots`` in knots (or
         ``speed_kmh``), ``altitude_feet`` in feet (or ``altitude_m``).
 
-        ``timestamp=True`` stamps it with the time now. ``dao`` adds a ``!DAO!`` for about
+        ``timestamp`` is a ``datetime`` (UTC when naive) or a :class:`~pdn_aprs.Timestamp`; with
+        none, the report has none. ``dao`` adds a ``!DAO!`` for about
         a foot of precision. ``frequency`` is the voice frequency the station listens on: MHz,
         or a :class:`~pdn_aprs.VoiceFrequency` to give a tone or an offset as well.
         """
@@ -357,7 +364,7 @@ class Station:
         *,
         comment: str = "",
         killed: bool = False,
-        timestamp: TimestampLike = True,
+        timestamp: TimestampLike = None,
         course_degrees: float | None = None,
         speed_knots: float | None = None,
         altitude_feet: float | None = None,
@@ -373,12 +380,11 @@ class Station:
     ) -> Packet:
         """An object report: something else's position, under a name of up to 9 characters.
 
-        An object always has a timestamp; the default is the time now. ``killed=True``
-        removes the object from other stations' maps.
+        An object always has a timestamp, and the builder never reads the clock: with none given
+        the object is refused (``missing-field``). Pass ``datetime.now(timezone.utc)`` for the
+        time now. ``killed=True`` removes the object from other stations' maps.
         """
         stamp = _timestamp(timestamp)
-        if stamp is None:
-            raise EncodeError("an object always has a timestamp", RefusalCode.MISSING_FIELD)
         faults: list[EncodeError] = []
         data = ObjectReport(
             name=name,
@@ -463,7 +469,7 @@ class Station:
         longitude: float,
         symbol: Symbol | None = None,
         *,
-        mic_e_message: MicEMessage = MicEMessage.IN_SERVICE,
+        mic_e_message: MicEMessage = MicEMessage.OFF_DUTY,
         course_degrees: float | None = None,
         speed_knots: float | None = None,
         altitude_feet: float | None = None,
@@ -480,19 +486,29 @@ class Station:
         station can message.
 
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
-        An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
-        to the metre; one in feet goes in a ``/A=``."""
+        An altitude, in feet or metres, goes in the Mic-E altitude bytes, whose unit is the metre:
+        rounded once to the nearest metre from the value given (1000 feet is 305 metres). One
+        outside -10000 to 743570 metres is refused (``value-out-of-range``); it is never put in a
+        ``/A=``. Without ``mic_e_message`` the station is off duty."""
         faults: list[EncodeError] = []
         if course_degrees is not None and math.isfinite(course_degrees) and round_half_away(course_degrees) == 0:
             course_degrees = None
+        feet: float | None = altitude_feet
         if altitude_m is not None:
             if altitude_feet is not None:
                 _twice(faults, "altitude")
-                feet: float | None = altitude_feet
             else:
-                feet = (round_half_away(altitude_m) if math.isfinite(altitude_m) else altitude_m) * FEET_PER_METRE
-        else:
-            feet = altitude_feet
+                feet = altitude_m * FEET_PER_METRE
+        given = altitude_feet if altitude_feet is not None else altitude_m
+        if given is not None and math.isfinite(given):
+            # rounded once, from the value as given, to whole metres
+            metres = round_half_away(given if altitude_feet is None else given / FEET_PER_METRE)
+            if -10000 <= metres <= 743570:
+                feet = metres * FEET_PER_METRE
+            else:
+                faults.append(
+                    EncodeError("a Mic-E altitude is -10000 to 743570 metres", RefusalCode.VALUE_OUT_OF_RANGE)
+                )
         data = MicEReport(
             latitude=latitude,
             longitude=longitude,
@@ -501,7 +517,6 @@ class Station:
             course_degrees=course_degrees,
             speed_knots=_either(faults, speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
             altitude_feet=feet,
-            altitude_in_comment=altitude_feet is not None,
             comment=comment,
             ambiguity=ambiguity,
             frequency=_frequency(frequency),
@@ -541,7 +556,7 @@ class Station:
     ) -> Packet:
         """A weather report: with a position, a complete weather report (the ``_`` symbol, or the
         ``symbol`` given, an overlay say); without one, a positionless report (always timestamped,
-        now by default).
+        no timestamp is refused: the builder never reads the clock).
 
         Wind in degrees and mph, temperature in degrees Fahrenheit (or ``temperature_c``), rain
         in inches (or ``rain_1h_mm`` and so on), humidity in percent, pressure in millibars,
@@ -574,14 +589,21 @@ class Station:
         if latitude is None or longitude is None:
             if latitude is not None or longitude is not None:
                 raise EncodeError("give both latitude and longitude, or neither", RefusalCode.MISSING_FIELD)
-            moment = timestamp if isinstance(timestamp, datetime) else datetime.now(timezone.utc)
-            if moment.tzinfo is not None:
-                moment = moment.astimezone(timezone.utc)
-            stamp = (
-                timestamp
-                if isinstance(timestamp, Timestamp)
-                else Timestamp.mdhm(moment.month, moment.day, moment.hour, moment.minute)
-            )
+            if isinstance(timestamp, bool):
+                _timestamp(timestamp)
+            if timestamp is None:
+                # never the clock: refused as missing-field after any code that comes before it
+                faults.append(
+                    EncodeError("a positionless weather report always has a timestamp", RefusalCode.MISSING_FIELD)
+                )
+                stamp = Timestamp.mdhm(1, 1, 0, 0)
+            elif isinstance(timestamp, Timestamp):
+                stamp = timestamp
+            else:
+                moment = timestamp
+                if moment.tzinfo is not None:
+                    moment = moment.astimezone(timezone.utc)
+                stamp = Timestamp.mdhm(moment.month, moment.day, moment.hour, moment.minute)
             return self._send(PositionlessWeather(stamp, weather), faults)
         data = PositionReport(
             latitude=latitude,
@@ -635,21 +657,27 @@ class Station:
 
     def telemetry(
         self,
-        sequence: int,
-        analog: Iterable[float | None],
+        sequence: int | None = None,
+        analog: Iterable[float | None] | None = None,
         bits: str = "00000000",
         *,
         comment: str = "",
     ) -> Packet:
         """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
-        refused, not wrapped), five analog values and eight bits."""
+        refused, not wrapped; none is refused as ``missing-field``), five analog values (all
+        empty when none are given) and eight bits (``00000000`` when not given)."""
+        faults: list[EncodeError] = []
+        if sequence is None:
+            faults.append(EncodeError("a telemetry report has a sequence number", RefusalCode.MISSING_FIELD))
+            sequence = 0
         if isinstance(sequence, float) and not math.isfinite(sequence):
             raise EncodeError("a telemetry sequence is a number", RefusalCode.NOT_A_NUMBER)
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
         if not 0 <= sequence <= 999:
             raise EncodeError(f"telemetry sequence {sequence} is not 0-999", RefusalCode.VALUE_OUT_OF_RANGE)
-        return self.send(TelemetryReport(f"{sequence:03d}", tuple(analog), bits, comment))
+        values = (None,) * 5 if analog is None else tuple(analog)
+        return self._send(TelemetryReport(f"{sequence:03d}", values, bits, comment), faults)
 
     def telemetry_names(self, names: Iterable[str], *, addressee: str | None = None) -> Packet:
         """Names for the telemetry channels (``PARM.``), for ``addressee`` (this station by default)."""
