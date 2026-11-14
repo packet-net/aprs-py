@@ -39,29 +39,23 @@ import os
 import sys
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime
 from multiprocessing import Pool
 from typing import Any
 
+from recipe import UnsupportedError, build
+
 from pdn_aprs import (
     DEFAULT_DESTINATION,
-    Beam,
-    CommentTelemetry,
     EncodeError,
     HeaderError,
-    MicEMessage,
     MicEReport,
     Packet,
     ParseOptions,
     Phg,
     RefusalCode,
-    Station,
     Symbol,
     ThirdParty,
-    Timestamp,
-    ToneType,
     Unrecognized,
-    VoiceFrequency,
     decode_tnc2,
     encode_info,
     mic_e_destination,
@@ -209,41 +203,48 @@ def dump_line(n: int, hex_line: str) -> str:
 # ---------------------------------------------------------------- encode
 
 
-def _stand_in_symbols(value: Any) -> None:
+def _stand_in_symbols(value: Any) -> bool:
     """A symbol that is not two characters cannot be held by ``Symbol``; one that is invalid the
-    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol."""
+    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol.
+    True when one was put in."""
+    put_in = False
     if isinstance(value, dict):
         for key, inner in value.items():
             if key == "symbol" and isinstance(inner, str) and len(inner) != 2:
                 value[key] = "x-"
+                put_in = True
             else:
-                _stand_in_symbols(inner)
+                put_in = _stand_in_symbols(inner) or put_in
     elif isinstance(value, list):
         for inner in value:
-            _stand_in_symbols(inner)
+            put_in = _stand_in_symbols(inner) or put_in
+    return put_in
 
 
 def encode_line(n: int, text: str) -> str:
     item = json.loads(text)
     n = item.get("n", n)
-    _stand_in_symbols(item.get("data"))
+    stood_in = _stand_in_symbols(item.get("data"))
     try:
         try:
             data = from_neutral(item["data"])
         except EncodeError as e:
-            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
+            # the neutral reader's own limit (third-party data nested too deep), not the encoder's
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value, "via": "tool"})
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
             refusal = _refusal_for_unrepresentable(item["data"])
             if refusal is not None:
-                # the data type has no ID of its own to hold: the encoder's rule, not a gap
+                # an ack or a reject carries no message ID of its own, so the model cannot hold one
+                # and the tool's reader makes the refusal the encoder's rule gives (README, "Encode records")
                 return dumps(
                     {
                         "n": n,
                         "result": "refused",
-                        "reason": f"an {item['data']['type']} carries no message ID of its own"
+                        "reason": "an ack or a reject carries no message ID of its own"
                         if refusal is RefusalCode.FIELD_NOT_ALLOWED
-                        else f"refused as {refusal.value} (and an {item['data']['type']} carries no message ID)",
+                        else f"refused as {refusal.value} (and an ack or a reject carries no message ID)",
                         "refusal": refusal.value,
+                        "via": "tool",
                     }
                 )
             # this library's data cannot hold something in the neutral data
@@ -252,7 +253,11 @@ def encode_line(n: int, text: str) -> str:
             info = encode_info(data)
             destination = mic_e_destination(data) if isinstance(data, MicEReport) else DEFAULT_DESTINATION
         except EncodeError as e:
-            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
+            record = {"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value}
+            if stood_in and e.code is RefusalCode.INVALID_SYMBOL:
+                # the library refused the stand-in, which the tool put where the symbol it cannot hold was
+                record["via"] = "tool"
+            return dumps(record)
         try:
             packet = decode_tnc2(f"N0CALL>{destination}".encode("ascii") + b":" + info, LENIENT)
             again: dict[str, Any] = {
@@ -269,241 +274,6 @@ def encode_line(n: int, text: str) -> str:
 # ---------------------------------------------------------------- build
 
 
-class UnsupportedError(Exception):
-    """The builder has no way to say something a recipe asks for."""
-
-
-def _timestamp(stamp: dict[str, Any], *, positionless: bool = False) -> datetime | Timestamp:
-    """A recipe's time: the datetime itself where the builder makes the report's format from it
-    (day/hour/minute, or a positionless weather report's month/day/hour/minute), and otherwise
-    the timestamp in the format asked for."""
-    # fromisoformat takes a trailing Z only from Python 3.11
-    moment = datetime.fromisoformat(stamp["utc"].replace("Z", "+00:00"))
-    form = stamp.get("format")
-    if form == "hms":
-        return Timestamp.hms(moment.hour, moment.minute, moment.second)
-    if form == "dhm":
-        return Timestamp.dhm(moment.day, moment.hour, moment.minute) if positionless else moment
-    if form == "mdhm":
-        return moment if positionless else Timestamp.mdhm(moment.month, moment.day, moment.hour, moment.minute)
-    raise UnsupportedError(f"timestamp: the builder has no format {form!r}")
-
-
-def _frequency(f: dict[str, Any]) -> VoiceFrequency:
-    for key in f:
-        if key not in ("mhz", "tone", "tone_value", "offset_khz"):
-            raise UnsupportedError(f"frequency: the builder has no {key}")
-    tone = f.get("tone")
-    return VoiceFrequency(
-        f["mhz"],
-        tone=None if tone is None else ToneType(tone),
-        tone_value=f.get("tone_value"),
-        offset_khz=f.get("offset_khz"),
-    )
-
-
-def _same(value: Any) -> Any:
-    return value
-
-
-# The keyword each positioned recipe key goes to a Station method as, and its conversion.
-_POSITIONED: dict[str, tuple[str, Callable[[Any], Any]]] = {
-    "name": ("name", _same),
-    "latitude": ("latitude", _same),
-    "longitude": ("longitude", _same),
-    "symbol": ("symbol", Symbol.parse),
-    "comment": ("comment", _same),
-    "killed": ("killed", _same),
-    "timestamp": ("timestamp", _timestamp),
-    "course_degrees": ("course_degrees", _same),
-    "speed_knots": ("speed_knots", _same),
-    "speed_kmh": ("speed_kmh", _same),
-    "altitude_feet": ("altitude_feet", _same),
-    "altitude_m": ("altitude_m", _same),
-    "phg": ("phg", lambda d: Phg(**d)),
-    "range_miles": ("range_miles", _same),
-    "frequency": ("frequency", _frequency),
-    "compressed": ("compressed", _same),
-    "ambiguity": ("ambiguity", _same),
-    "dao": ("dao", _same),
-    "telemetry": ("telemetry", lambda t: CommentTelemetry(t["sequence"], tuple(t["analog"]), t.get("digital"))),
-    "mic_e_message": ("mic_e_message", MicEMessage),
-}
-
-_UNITS = {"course_degrees", "speed_knots", "speed_kmh", "altitude_feet", "altitude_m"}
-_EXTRAS = {"phg", "range_miles", "frequency", "compressed", "ambiguity", "dao", "telemetry"}
-
-# The recipe keys each Station method takes.
-_TAKES: dict[str, set[str]] = {
-    "position": {
-        "latitude",
-        "longitude",
-        "symbol",
-        "comment",
-        "timestamp",
-        *_UNITS,
-        "phg",
-        "range_miles",
-        "frequency",
-        "compressed",
-        "ambiguity",
-        "dao",
-        "telemetry",
-    },
-    "object": {
-        "name",
-        "latitude",
-        "longitude",
-        "symbol",
-        "comment",
-        "killed",
-        "timestamp",
-        *_UNITS,
-        *_EXTRAS,
-    },
-    "item": {"name", "latitude", "longitude", "symbol", "comment", "killed", *_UNITS, *_EXTRAS},
-    "mic-e": {
-        "latitude",
-        "longitude",
-        "symbol",
-        "mic_e_message",
-        "comment",
-        *_UNITS,
-        "frequency",
-        "ambiguity",
-        "dao",
-        "telemetry",
-    },
-    "weather": {
-        "latitude",
-        "longitude",
-        "symbol",
-        "timestamp",
-        "wind_direction_degrees",
-        "wind_speed_mph",
-        "wind_gust_mph",
-        "temperature_f",
-        "temperature_c",
-        "rain_1h_in",
-        "rain_24h_in",
-        "rain_midnight_in",
-        "rain_1h_mm",
-        "rain_24h_mm",
-        "rain_midnight_mm",
-        "humidity_percent",
-        "pressure_mbar",
-        "luminosity_w_m2",
-        "snow_24h_in",
-    },
-    "message": {"addressee", "text", "message_id", "reply_ack"},
-    "ack": {"addressee", "message_id"},
-    "reject": {"addressee", "message_id"},
-    "bulletin": {"id", "group", "text"},
-    "status": {"text", "timestamp", "locator", "symbol", "beam"},
-    "telemetry": {"sequence", "analog", "bits", "comment"},
-    "telemetry-names": {"names", "addressee"},
-    "telemetry-units": {"units", "addressee"},
-    "telemetry-coefficients": {"coefficients", "addressee"},
-    "telemetry-bits": {"bits", "project", "addressee"},
-}
-
-# The recipe keys that go to Station.weather by the same name.
-_WEATHER = {
-    "latitude",
-    "longitude",
-    "wind_direction_degrees",
-    "wind_speed_mph",
-    "wind_gust_mph",
-    "temperature_f",
-    "temperature_c",
-    "rain_1h_in",
-    "rain_24h_in",
-    "rain_midnight_in",
-    "rain_1h_mm",
-    "rain_24h_mm",
-    "rain_midnight_mm",
-    "humidity_percent",
-    "pressure_mbar",
-    "luminosity_w_m2",
-    "snow_24h_in",
-}
-
-
-def build(recipe: dict[str, Any]) -> Packet:
-    """The packet a recipe describes, from the Station methods, as a program would build it."""
-    header = recipe["station"]
-    report = recipe["report"]
-    args = dict(recipe.get("args", {}))
-    for key in header:
-        if key not in ("source", "destination", "path"):
-            raise UnsupportedError(f"station: the builder has no {key}")
-    # a station says whether it can message, which position and Mic-E reports announce
-    messaging = args.pop("messaging", False) if report in ("position", "mic-e") else False
-    station = Station(
-        header["source"],
-        path=header.get("path", ()),
-        destination=header.get("destination", DEFAULT_DESTINATION),
-        messaging=bool(messaging),
-    )
-    takes = _TAKES.get(report)
-    if takes is None:
-        raise UnsupportedError(f"the builder has no {report} report")
-    for key in args:
-        if key not in takes:
-            raise UnsupportedError(f"{report}: the builder has no {key}")
-
-    if report in ("position", "object", "item", "mic-e"):
-        kwargs = {}
-        for key, value in args.items():
-            name, convert = _POSITIONED[key]
-            kwargs[name] = convert(value)
-        if report == "position":
-            return station.position(**kwargs)
-        if report == "object":
-            return station.object(**kwargs)
-        if report == "item":
-            return station.item(**kwargs)
-        return station.mic_e(**kwargs)
-    if report == "weather":
-        weather = {key: value for key, value in args.items() if key in _WEATHER}
-        if "symbol" in args:
-            if "latitude" not in args:
-                raise UnsupportedError("weather: a positionless report has no symbol")
-            weather["symbol"] = Symbol.parse(args["symbol"])
-        if "timestamp" in args:
-            weather["timestamp"] = _timestamp(args["timestamp"], positionless="latitude" not in args)
-        return station.weather(**weather)
-    if report == "message":
-        return station.message(
-            args["addressee"], args.get("text", ""), message_id=args.get("message_id"), reply_ack=args.get("reply_ack")
-        )
-    if report == "ack":
-        return station.ack(args["addressee"], args["message_id"])
-    if report == "reject":
-        return station.reject(args["addressee"], args["message_id"])
-    if report == "bulletin":
-        return station.bulletin(args["id"], args.get("text", ""), group=args.get("group", ""))
-    if report == "status":
-        return station.status(
-            args.get("text", ""),
-            timestamp=_timestamp(args["timestamp"]) if "timestamp" in args else None,
-            locator=args.get("locator"),
-            symbol=Symbol.parse(args["symbol"]) if "symbol" in args else None,
-            beam=Beam(**args["beam"]) if "beam" in args else None,
-        )
-    if report == "telemetry":
-        return station.telemetry(
-            args["sequence"], args["analog"], args.get("bits", "00000000"), comment=args.get("comment", "")
-        )
-    if report == "telemetry-names":
-        return station.telemetry_names(args["names"], addressee=args.get("addressee"))
-    if report == "telemetry-units":
-        return station.telemetry_units(args["units"], addressee=args.get("addressee"))
-    if report == "telemetry-coefficients":
-        return station.telemetry_coefficients(args["coefficients"], addressee=args.get("addressee"))
-    return station.telemetry_bits(args["bits"], args.get("project", ""), addressee=args.get("addressee"))
-
-
 def build_line(n: int, text: str) -> str:
     recipe = json.loads(text)
     n = recipe.get("n", n)
@@ -512,11 +282,17 @@ def build_line(n: int, text: str) -> str:
             packet = build(recipe)
         except UnsupportedError as e:
             return dumps({"n": n, "result": "unsupported", "reason": str(e)})
+        except KeyError as e:
+            return dumps(
+                {"n": n, "result": "unsupported", "reason": f"{recipe['report']}: no {e.args[0]} in the recipe"}
+            )
         except (EncodeError, ValueError) as e:
             # the builder or the encoder declined
             record = {"n": n, "result": "refused", "reason": str(e)}
             if isinstance(e, EncodeError):
                 record["refusal"] = e.code.value
+            else:
+                record["via"] = "tool"  # the recipe's reader, not the builder, declined
             return dumps(record)
         line = packet.to_tnc2()
         try:

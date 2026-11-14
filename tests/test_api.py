@@ -45,6 +45,7 @@ def _close(a: object, b: object) -> bool:
 
 
 STATION = Station("M0LTE-9", path="WIDE1-1,WIDE2-1", symbol=Symbol.CAR, messaging=True)
+STAMP = datetime(2026, 11, 14, 9, 23, 59, tzinfo=timezone.utc)
 
 
 @pytest.mark.parametrize(
@@ -106,8 +107,13 @@ def test_built_packets_read_back(packet: aprs.Packet) -> None:
 
 
 def test_station_needs_a_symbol() -> None:
-    with pytest.raises(ValueError, match="symbol"):
-        Station("M0LTE").position(51.0, 0.0)
+    for build in (
+        lambda: Station("M0LTE").position(51.0, 0.0),
+        lambda: Station("M0LTE").mic_e(51.0, 0.0),
+        lambda: Station("M0LTE").item("ITEM", 51.0, 0.0),
+        lambda: Station("M0LTE").object("OBJ", 51.0, 0.0, timestamp=aprs.Timestamp.dhm(1, 2, 3)),
+    ):
+        assert _code(build) == "invalid-symbol"
 
 
 def test_station_metric_units() -> None:
@@ -121,12 +127,20 @@ def test_station_metric_units() -> None:
 
 
 def test_station_mic_e_altitude_in_metres_or_feet() -> None:
-    # B2: metres go in the Mic-E altitude bytes, rounded to the metre; feet in a /A=
+    # R5: an altitude in metres or feet goes in the Mic-E altitude bytes, rounded once to the metre
     in_metres = STATION.mic_e(51.45, -0.98, altitude_m=100.4)
     assert in_metres.info.endswith(b'"4{}')
     assert isinstance(in_metres.data, aprs.MicEReport)
-    for feet, written in ((0, b"/A=000000"), (1250, b"/A=001250"), (-12.5, b"/A=-00013")):
-        assert STATION.mic_e(51.45, -0.98, altitude_feet=feet).info.endswith(written)
+    for feet, written in ((0, b'"3r}'), (1250, b'"8(}'), (1000, b'"77}'), (-12.5, b'"3n}')):
+        info = STATION.mic_e(51.45, -0.98, altitude_feet=feet).info
+        assert info.endswith(written)
+        assert b"/A=" not in info
+    for build in (
+        lambda: STATION.mic_e(51.45, -0.98, altitude_feet=-50000),
+        lambda: STATION.mic_e(51.45, -0.98, altitude_m=743571),
+        lambda: STATION.mic_e(51.45, -0.98, altitude_m=-10001),
+    ):
+        assert _code(build) == "value-out-of-range"
 
 
 @pytest.mark.parametrize("course", [0, 0.3])
@@ -152,8 +166,8 @@ def test_station_telemetry_sequence_over_999_is_refused() -> None:
 
 def test_mic_e_altitude_in_comment_is_set_by_the_decoder() -> None:
     # D8: data says how its altitude is written, so a copy encodes to the same bytes
-    in_feet = STATION.mic_e(51.45, -0.98, altitude_feet=100.5, comment="x")
-    decoded = aprs.decode_tnc2(str(in_feet)).data
+    in_feet = aprs.decode_tnc2("N1JCM-9>TRQP7T:`c'wl|+>/`/A=001000x")
+    decoded = in_feet.data
     assert isinstance(decoded, aprs.MicEReport)
     assert decoded.altitude_in_comment
     assert aprs.encode_info(decoded) == in_feet.info
@@ -302,8 +316,8 @@ def test_parse_options() -> None:
 
 
 def test_every_tolerable_code_is_known() -> None:
-    assert len([c for c in DiagnosticCode if c.tolerable]) == 32
-    assert len(DiagnosticCode) == 64
+    assert len([c for c in DiagnosticCode if c.tolerable]) == 33
+    assert len(DiagnosticCode) == 66
     assert aprs.Diagnostic.parse("warning:non-utf8-text").code is DiagnosticCode.NON_UTF8_TEXT
 
 
@@ -566,11 +580,11 @@ def test_mic_e_speed_190_to_199_knots_is_a_slash() -> None:
     assert info[4:5] == b"/"
 
 
-def test_mic_e_comment_after_rev0_telemetry_starting_0x1d_is_text() -> None:
-    # after Rev 0 telemetry a comment starting with 0x1D is text, written straight on (ruling E6)
+def test_mic_e_comment_after_rev0_telemetry_starting_0x1d_is_refused() -> None:
+    # a comment starting with 0x1D holds a control character: refused, not written straight on
     line = b"N0CALL>SUSPU4:`c'wl|+>/\x1dABCD/\x1dABCDEhello"
     packet = aprs.decode_tnc2(line)
-    assert aprs.encode_info(packet.data) == packet.info
+    assert _code(lambda: aprs.encode_info(packet.data)) == "invalid-character"
 
 
 @pytest.mark.parametrize(
@@ -612,7 +626,10 @@ def test_compressed_speed_byte_of_90_is_written() -> None:
     [
         # no / before text that reads back as itself without one (ruling E7)
         "!/5L!!<*e7> sT.../...g...",
-        "=4903.50N/07201.75W-444.900MHz \x00173",
+        "=4903.50N/07201.75W-444.900MHz 173",
+        # a first character that starts a !DAO! or base-91 telemetry elsewhere, but is plain text here
+        "=4903.50N/07201.75W-444.900MHz !173",
+        "=4903.50N/07201.75W-444.900MHz |173",
     ],
 )
 def test_delimiter_only_where_needed(info: str) -> None:
@@ -634,11 +651,11 @@ def test_late_altitude_and_phg_in_mic_e_are_written_not_refused() -> None:
     assert to_neutral(again.data) == to_neutral(packet.data)
 
 
-def test_no_size_limit() -> None:
-    # refused means the Encoding rule declines the data, never that a buffer is full (ruling E11)
-    text = "\u00e9" * 2000
-    info = aprs.encode_info(aprs.StatusReport(text))
-    assert len(info) == 4001
+def test_information_field_is_at_most_256_bytes() -> None:
+    # 255 two-byte characters and the identifier are 256 bytes; one more character is 258
+    assert len(aprs.encode_info(aprs.StatusReport("\u00e9" * 127 + "x"))) == 256
+    assert _code(lambda: aprs.encode_info(aprs.StatusReport("\u00e9" * 128))) == "information-field-too-long"
+    assert _code(lambda: aprs.encode_info(aprs.StatusReport("x" * 256))) == "information-field-too-long"
 
 
 def test_compressed_weather_altitude_off_the_cs_steps_is_rounded() -> None:
@@ -814,9 +831,18 @@ def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
 
 @pytest.mark.parametrize("comment", ["{5}", "{}", "}:LoRa iGate"])
 def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) -> None:
-    # E12: after /A=000101, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
-    packet = STATION.mic_e(33.46, -2.69, altitude_feet=100.5, comment=comment)
-    assert packet.info.endswith(b"/A=000101 " + comment.encode())
+    # E12: after /A=001000, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
+    report = aprs.MicEReport(
+        mic_e_message=MicEMessage.OFF_DUTY,
+        latitude=33.46,
+        longitude=-2.69,
+        symbol=STATION.symbol,
+        type_code="`",
+        altitude_feet=1000,
+        comment=comment,
+    )
+    packet = aprs.build_packet("M0LTE-9", report)
+    assert packet.info.endswith(b"/A=001000 " + comment.encode())
     back = aprs.decode_tnc2(packet.to_tnc2())
     assert not back.diagnostics
     assert isinstance(back.data, aprs.MicEReport)
@@ -947,10 +973,10 @@ def test_strict_mic_e_rejects_only_an_altitude_joined_across_a_lifted_place() ->
 def test_object_and_item_take_the_position_options() -> None:
     st = Station("N0CALL", symbol=Symbol.CAR)
     phg = aprs.Phg(2, 3, 4, 0)
-    obj = st.object("OBJ", 51.5, -1.0, course_degrees=90, speed_kmh=37.04, altitude_m=100, ambiguity=1)
+    obj = st.object("OBJ", 51.5, -1.0, course_degrees=90, speed_kmh=37.04, altitude_m=100, ambiguity=1, timestamp=STAMP)
     assert obj.data.ambiguity == 1
     assert obj.data.speed_knots == pytest.approx(20)
-    assert st.object("OBJ", 51.5, -1.0, phg=phg).data.phg == phg
+    assert st.object("OBJ", 51.5, -1.0, phg=phg, timestamp=STAMP).data.phg == phg
     item = st.item(
         "ITEM",
         51.5,
@@ -1087,9 +1113,14 @@ def test_encode_error_without_a_code_is_the_fallback() -> None:
         ),
         (lambda: Station("N0CALL").telemetry(1000, [1, 2, 3, 4, 5], "00000000"), "value-out-of-range"),
         (
-            lambda: Station("N0CALL").weather(temperature_f=1, temperature_c=1, symbol=Symbol.WEATHER_STATION),
+            lambda: Station("N0CALL").weather(
+                temperature_f=1, temperature_c=1, symbol=Symbol.WEATHER_STATION, timestamp=STAMP
+            ),
             "value-given-twice",
         ),
+        (lambda: Station("N0CALL").weather(temperature_f=1), "missing-field"),
+        (lambda: Station("N0CALL", symbol=Symbol.CAR).object("OBJ", 1, 1), "missing-field"),
+        (lambda: Station("N0CALL").telemetry(None, [1, 2, 3, 4, 5]), "missing-field"),
     ],
 )
 def test_refusal_code(make: object, expected: str) -> None:
@@ -1124,9 +1155,10 @@ def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
     assert _code(lambda: aprs.encode_info(report)) == "invalid-character"
 
 
-def test_mic_e_status_text_that_reads_back_changed_is_text_reads_as_field() -> None:
+def test_mic_e_altitude_no_slash_a_holds_and_the_bytes_cannot_carry_first_has_no_form() -> None:
+    # 230,261 m is not a whole number of feet, and the Mic-E bytes first would read as a type code
     packet = aprs.decode_tnc2(b'LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}')
-    assert _code(lambda: aprs.encode_info(packet.data)) == "text-reads-as-field"
+    assert _code(lambda: aprs.encode_info(packet.data)) == "value-has-no-form"
 
 
 def test_station_reuse_keeps_no_quantity_between_calls() -> None:
@@ -1244,3 +1276,53 @@ def test_non_finite_builder_input_is_refused_never_raised() -> None:
         with pytest.raises(aprs.EncodeError) as err:
             build()
         assert err.value.code is nan_code
+
+
+def test_builder_never_reads_the_clock() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    assert _code(lambda: st.object("OBJ", 51.5, -1.0)) == "missing-field"
+    assert _code(lambda: st.weather(wind_direction_degrees=1)) == "missing-field"
+    with pytest.raises(TypeError, match="clock"):
+        st.position(51.5, -1.0, timestamp=True)  # type: ignore[arg-type]
+    # the time now is one explicit call away
+    now = st.object("OBJ", 51.5, -1.0, timestamp=datetime.now(timezone.utc))
+    assert isinstance(now.data, aprs.ObjectReport)
+    assert now.data.timestamp is not None
+    assert st.position(51.5, -1.0).info.startswith(b"!")
+
+
+def test_builder_defaults() -> None:
+    st = Station("N0CALL", symbol=Symbol.CAR)
+    # messaging not said is off, and a Mic-E message not given is off duty
+    assert st.position(51.5, -1.0).info.startswith(b"!")
+    mic_e = st.mic_e(51.5, -1.0)
+    assert isinstance(mic_e.data, aprs.MicEReport)
+    assert mic_e.data.mic_e_message is MicEMessage.OFF_DUTY
+    assert mic_e.data.type_code == "'"
+    # telemetry with no bits writes eight zeros, and with no sequence is refused
+    assert st.telemetry(1, [1, 2, 3, 4, 5]).info.endswith(b",00000000")
+    assert _code(lambda: st.telemetry(analog=[1, 2, 3, 4, 5])) == "missing-field"
+
+
+def test_text_with_a_control_character_is_refused() -> None:
+    for text in ("a\x00b", "a\tb", "a\x7fb", "a\rb", "a\nb"):
+        assert _code(lambda t=text: aprs.encode_info(aprs.StatusReport(t))) == "invalid-character"  # type: ignore[misc]
+        assert _code(lambda t=text: aprs.encode_info(aprs.Message("N0CALL", t))) == "invalid-character"  # type: ignore[misc]
+    # test data is not judged for control characters
+    assert aprs.encode_info(aprs.TestData("a\x00b")) == b",a\x00b"
+
+
+def test_decoder_warns_once_about_a_control_character() -> None:
+    packet = aprs.decode_tnc2(b"N0CALL>APZ001:>a\x00b\x01c")
+    assert [str(d) for d in packet.diagnostics] == ["warning:control-character-in-text"]
+    strict = aprs.decode_tnc2(b"N0CALL>APZ001:>a\x00b", aprs.ParseOptions.strict())
+    assert isinstance(strict.data, aprs.Unrecognized)
+    assert [str(d) for d in aprs.decode_tnc2(b"N0CALL>APZ001:,a\x00b").diagnostics] == []
+
+
+def test_run_on_weather_value_before_a_field_is_dropped() -> None:
+    packet = aprs.decode_tnc2("N0CALL>APZ001:_10090556c220s004g005t2147483647r000p000")
+    assert isinstance(packet.data, aprs.PositionlessWeather)
+    assert packet.data.weather.temperature_f is None
+    assert packet.data.weather.rain_1h_in == 0
+    assert [str(d) for d in packet.diagnostics] == ["info:obsolete-format", "warning:out-of-range-value"]

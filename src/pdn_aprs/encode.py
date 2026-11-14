@@ -3,7 +3,9 @@
 The encoder writes only what the specification allows and raises :class:`EncodeError`
 otherwise. Free text is checked by decoding what was written: a comment that would read back
 as something else (an altitude, a data extension, a leading delimiter...) gets a ``/`` delimiter
-in front, and is refused if even that does not read back.
+in front, and is refused if even that does not read back. An information field is at most 256
+bytes (:data:`INFORMATION_FIELD_LIMIT`), and text with a control character is refused as
+``invalid-character``.
 
 >>> from pdn_aprs import PositionReport, Symbol
 >>> from pdn_aprs.encode import encode_info
@@ -44,6 +46,7 @@ from .model import (
     MicEMessage,
     MicEReport,
     NmeaSentence,
+    NoSequence,
     NwsBulletin,
     ObjectReport,
     PositionedData,
@@ -76,6 +79,7 @@ from .packet import Packet, PathEntry, _tnc2_path
 
 __all__ = [
     "DEFAULT_DESTINATION",
+    "INFORMATION_FIELD_LIMIT",
     "MESSAGE_TEXT_LIMIT",
     "build_packet",
     "encode_info",
@@ -94,6 +98,9 @@ _T = TypeVar("_T")
 
 _nearest = _util.round_half_away
 """Every value the encoder rounds goes to the nearest step, halves away from zero."""
+
+INFORMATION_FIELD_LIMIT = 256
+"""The longest information field an encoder writes, in bytes (the vectors README, Encoding)."""
 
 _TELEMETRY_TITLE_LIMIT = 23
 _TIMESTAMPED = (TimestampKind.DHM_ZULU, TimestampKind.DHM_LOCAL, TimestampKind.HMS)
@@ -118,6 +125,11 @@ def _same_number(text: str, value: float, form: re.Pattern[str]) -> bool:
 
 def _refuse(code: RefusalCode, why: str) -> EncodeError:
     return EncodeError(why, code)
+
+
+class SizeError(EncodeError):
+    """The information field of otherwise sound data is over 256 bytes: the last check there is,
+    so a builder that noted a fault of its own (a left-out field) names that fault instead."""
 
 
 _ORDER = (
@@ -147,6 +159,7 @@ _ORDER = (
     RefusalCode.VALUE_GIVEN_TWICE,
     RefusalCode.TEXT_READS_AS_FIELD,
     RefusalCode.DOES_NOT_READ_BACK,
+    RefusalCode.INFORMATION_FIELD_TOO_LONG,
 )
 _PRIORITY = {code: rank for rank, code in enumerate(_ORDER)}
 """The order in which a refusal names its code when the data breaks several rules (the vectors'
@@ -175,12 +188,15 @@ class _Faults:
             raise min(self.found, key=lambda e: _PRIORITY[e.code])
 
 
-def _has_nonfinite(value: Any, ignore: frozenset[str] = frozenset()) -> bool:
+def _has_nonfinite(value: Any) -> bool:
+    """A NaN or infinity anywhere in ``value``, except in a field that has no place in the data
+    holding it (a third-party packet's inner data included)."""
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
         return any(_has_nonfinite(v) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        ignore = _no_place(value)
         return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value) if f.name not in ignore)
     return False
 
@@ -232,7 +248,7 @@ def _nan_or_earlier(data: Any, encoder: Callable[[Any], bytes], why: str) -> Enc
 def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
-    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data, _no_place(data)):
+    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
         return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
     return e
 
@@ -240,9 +256,29 @@ def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
 # ---------------------------------------------------------------- checks
 
 
+def _has_control(text: str) -> bool:
+    return any(c < " " or c == "\x7f" for c in text)
+
+
 def _check_text(text: str, what: str) -> None:
-    if "\r" in text or "\n" in text:
-        raise _refuse(RefusalCode.INVALID_CHARACTER, f"{what} contains a line break")
+    """Text is printable: a byte below 0x20 or 0x7F (a TAB, CR or LF included) is refused."""
+    if _has_control(text):
+        raise _refuse(RefusalCode.INVALID_CHARACTER, f"{what} contains a control character")
+
+
+def _written_comment(data: PositionedData) -> str:
+    """The comment as it is written first: after a voice frequency it follows a space."""
+    return " " + data.comment if data.comment and data.frequency is not None else data.comment
+
+
+def _sized(info: bytes) -> bytes:
+    """``info``, or ``information-field-too-long`` when it is over 256 bytes."""
+    if len(info) > INFORMATION_FIELD_LIMIT:
+        raise SizeError(
+            f"the information field is {len(info)} bytes, over {INFORMATION_FIELD_LIMIT}",
+            RefusalCode.INFORMATION_FIELD_TOO_LONG,
+        )
+    return info
 
 
 def _check_address(call: str, what: str, code: RefusalCode = RefusalCode.INVALID_ADDRESSEE) -> None:
@@ -300,6 +336,15 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
     return not _shape_differences(given, to_neutral(decoded), numbers=numbers)
 
 
+def _joins_frequency_fields(comment: str) -> bool:
+    """Whether ``comment`` after a space would be read as a tone, offset or range of the voice
+    frequency before it."""
+    from ._comment import _frequency
+
+    found = _frequency("144.390MHz " + comment)
+    return found is not None and found[0] != VoiceFrequency(mhz=144.39)
+
+
 def _with_comment(
     data: AprsData,
     comment: str,
@@ -310,12 +355,16 @@ def _with_comment(
     separating_space: bool = False,
 ) -> bytes:
     """The first way of writing the comment that reads back as the data: as it is, then after
-    a ``/`` delimiter. After a voice frequency it is written after a space, then straight
-    after the frequency, then after a space and a ``/``."""
+    a ``/`` delimiter. After a voice frequency it is written after a space; if a space would make
+    its first words a tone, offset or range field of the frequency, straight after the frequency;
+    else after a space and a ``/`` (only where it would not read back as itself without one: ``X``
+    ending the text would be the device suffix ` X`)."""
     if not comment:
         candidates = [""]
     elif after_frequency:
-        candidates = [" " + comment, comment, " /" + comment]
+        candidates = [" " + comment, " /" + comment]
+        if _joins_frequency_fields(comment):
+            candidates.insert(1, comment)
     else:
         candidates = [comment, "/" + comment]
     if comment and separating_space:
@@ -592,6 +641,9 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
             f.add(RefusalCode.MISSING_FIELD, "a GGA compressed position needs an altitude")
         else:
             alt = data.altitude_feet
+            if not math.isfinite(alt):
+                f.add(RefusalCode.NOT_A_NUMBER, "the altitude is not a number")
+                alt = 0.0
             value = _nearest(math.log(alt) / math.log(1.002)) if alt >= 1 else 0
             value = min(max(value, 0), 91 * 91 - 1)
             cs = _base91(value, 2)
@@ -676,7 +728,9 @@ def _storm_text(data: PositionedData, f: _Faults) -> str:
 
     def n(v: int | None, width: int) -> str:
         if v is None:
-            return "." * width
+            # storm fields are digits: there is no unknown to write
+            f.add(RefusalCode.MISSING_FIELD, "storm data needs every field but the whole gale radius")
+            return "0" * width
         if not 0 <= v < 10**width:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "storm value does not fit its field")
             return "0" * width
@@ -1142,19 +1196,38 @@ def _mic_e_destination(data: MicEReport, f: _Faults) -> str:
     return f"{call}-{ssid}" if ssid else call
 
 
-def _mic_e_altitude(feet: float) -> str | None:
-    """The Mic-E ``xxx}`` altitude, or None when it would not read back exactly."""
+_MIC_E_ALTITUDE_METRES = (-10000, 743570)
+"""The metres the Mic-E altitude bytes hold: three base-91 characters, 10,000 m below sea level."""
+
+
+def _near_whole(value: float) -> bool:
+    return abs(value - round(value)) <= 1e-6
+
+
+def _altitude_in_text(feet: float) -> bool:
+    """Whether neutral data's altitude goes in a ``/A=`` rather than the Mic-E altitude bytes:
+    only when only a ``/A=`` holds it exactly, a whole number of feet within its six digits that
+    the bytes do not hold exactly (not a whole number of metres, or outside their range)."""
+    if not _near_whole(feet) or not -99999 <= round(feet) <= 999999:
+        return False
+    metres = feet / _util.FEET_PER_METRE
+    low, high = _MIC_E_ALTITUDE_METRES
+    return not (_near_whole(metres) and low <= round(metres) <= high)
+
+
+def _mic_e_altitude(feet: float) -> str:
+    """The Mic-E ``xxx}`` altitude, rounded once to the nearest metre from the value given.
+    Raises ``value-out-of-range`` outside what the bytes hold."""
     metres = _nearest(feet / _util.FEET_PER_METRE)
-    value = metres + 10000
-    if not 0 <= value < 91**3:
-        return None
-    if not _util.number_equal(metres * _util.FEET_PER_METRE, feet):
-        return None
-    return _util.base91_text(value, 3) + "}"
+    low, high = _MIC_E_ALTITUDE_METRES
+    if not low <= metres <= high:
+        raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "a Mic-E altitude is -10000 to 743570 metres")
+    return _util.base91_text(metres + 10000, 3) + "}"
 
 
-_MIC_E_STATUS_START = "`'>] \x1d"
-"""What Mic-E status text cannot start with: a device type code, or 0x1D (obsolete telemetry)."""
+_MIC_E_STATUS_START = "`'>] "
+"""What Mic-E status text cannot start with: a device type code. (It cannot start with 0x1D, the
+obsolete telemetry marker, either: that is a control character, so such text is refused.)"""
 
 
 def _mic_e(data: MicEReport) -> bytes:
@@ -1240,14 +1313,22 @@ def _mic_e(data: MicEReport) -> bytes:
     altitude_first = ""
     altitude_later = ""
     if data.altitude_feet is not None:
-        mic = None if data.altitude_in_comment else _mic_e_altitude(data.altitude_feet)
-        if mic is not None:
-            altitude_first = mic
-            if not type_code and mic[0] in "`'>] " and abs(_nearest(data.altitude_feet)) > 999999:
-                # no /A= can hold it, and its first byte would read back as a type code
-                f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
+        feet = data.altitude_feet
+        # decoded data knows a /A= was where its altitude came from; neutral data's value decides
+        if data.altitude_in_comment or _altitude_in_text(feet):
+            altitude_later = f.guard(_altitude, feet, default="")
         else:
-            altitude_later = f.guard(_altitude, data.altitude_feet, default="")
+            mic = f.guard(_mic_e_altitude, feet, default="")
+            altitude_first = mic
+            if mic and not type_code and mic[0] in "`'>] ":
+                # the bytes have no clean form here (the first would read back as a type code):
+                # a /A= holds the value exactly when it is whole feet within its six digits; any
+                # other value (not whole feet, or beyond them) has no form
+                if _near_whole(feet) and -99999 <= round(feet) <= 999999:
+                    altitude_first = ""
+                    altitude_later = f.guard(_altitude, feet, default="")
+                else:
+                    f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
     locator = ""
     if data.locator is not None:
         if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
@@ -1256,15 +1337,15 @@ def _mic_e(data: MicEReport) -> bytes:
             locator = data.locator.upper() + "/G"
     if sum(x is not None for x in (data.phg, data.range_miles, data.dfs)) > 1:
         f.add(RefusalCode.EXTENSION_CONFLICT, "more than one data extension")
+    # every extension given makes its bytes, though more than one is refused
     ext = f.guard(_phg_text, data, default="") + f.guard(_dfs_text, data, default="")
     if data.range_miles is not None:
-        ext = f.guard(_range_text, data.range_miles, default="")
+        ext += f.guard(_range_text, data.range_miles, default="")
     freq = "" if data.frequency is None else _frequency_text(data.frequency, f)
     if freq and ext and not altitude_later and not ext.endswith("/"):
         freq = "/" + freq
     telemetry = _telemetry_text(data.telemetry, f)
     dao = f.guard(_dao_text, data, a, o, default="")
-    f.finish()
 
     def build(comment: str) -> bytes:
         text = type_code + altitude_first + locator
@@ -1273,10 +1354,12 @@ def _mic_e(data: MicEReport) -> bytes:
             text += " "
         text += after + comment
         if not legacy and not type_code and text and text[0] in _MIC_E_STATUS_START:
-            # status text must not start with a type code character or 0x1D (APRS12c ch. 10),
+            # status text must not start with a type code character (APRS12c ch. 10),
             # so it goes after a / delimiter
             text = "/" + text
         return head.encode("utf-8") + legacy + (text + telemetry + dao + suffix).encode("utf-8")
+
+    f.finish()
 
     if build(data.comment).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
@@ -1460,31 +1543,36 @@ def _status(data: StatusReport) -> bytes:
         elif not data.symbol.is_valid:
             f.add(RefusalCode.INVALID_SYMBOL, f"symbol {str(data.symbol)!r} is not a valid table and code")
     elif data.symbol is not None:
-        f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report's symbol goes with a grid locator")
+        f.add(RefusalCode.MISSING_FIELD, "a status report's symbol goes with a grid locator")
     if data.beam is not None:
         b = data.beam
         if not ("0" <= b.heading_code <= "9" or "A" <= b.heading_code <= "Z") or not (
             "1" <= b.power_code <= "9" or ":" <= b.power_code <= "K"
         ):
             f.add(RefusalCode.INVALID_CODE, "beam heading or power code out of range")
-    f.finish()
     if data.timestamp is not None:
         text += data.timestamp.text
     if data.locator is not None:
-        text += data.locator.upper() + str(data.symbol)
+        text += data.locator.upper() + (str(data.symbol) if data.symbol is not None else "")
         if data.text or data.beam:
             text += " "
     text += data.text
     if data.beam is not None:
         text += "^" + data.beam.heading_code + data.beam.power_code
+    f.finish()
     return _checked(data, text)
 
 
 def _telemetry(data: TelemetryReport) -> bytes:
     f = _Faults()
     seq = data.sequence
-    if not seq or not (seq.isascii() and seq.isalnum()):
+    if isinstance(seq, NoSequence):
+        f.add(RefusalCode.MISSING_FIELD, "a telemetry report has a sequence")
+    elif not seq or not (seq.isascii() and seq.isalnum()):
         f.add(RefusalCode.MALFORMED, "a telemetry sequence is letters and digits")
+    elif seq.startswith("MIC") and seq != "MIC":
+        # a sequence starting MIC is MIC itself (T#MIC has no comma): more characters cannot be written
+        f.add(RefusalCode.MALFORMED, "a telemetry sequence starting MIC is MIC itself")
     if len(data.analog) > 5:
         f.add(RefusalCode.TOO_LONG, "a telemetry report has five analog values")
     elif len(data.analog) < 5:
@@ -1497,13 +1585,14 @@ def _telemetry(data: TelemetryReport) -> bytes:
     if seq == "MIC" and data.analog and data.analog[0] is None:
         # no form reads back with the first channel empty after MIC (vectors ruling F12)
         f.add(RefusalCode.VALUE_HAS_NO_FORM, "T#MIC with an empty first channel has no form")
-    f.finish()
-    assert data.bits is not None
     texts = data.analog_text
     values: list[str] = []
     for i, v in enumerate(data.analog):
         t = texts[i] if i < len(texts) else None
-        if v is None:
+        if not isinstance(v, int) and v is not None and not math.isfinite(v):
+            # no digits to count: the NaN rule judges it
+            values.append("")
+        elif v is None:
             values.append("")
         elif t is not None and _same_number(t, v, _TELEMETRY_VALUE):
             values.append(t)
@@ -1514,7 +1603,9 @@ def _telemetry(data: TelemetryReport) -> bytes:
         else:
             values.append(_util.number_text(v))
     head = "T#" + seq + ("" if seq == "MIC" else ",")
-    return _checked(data, head + ",".join(values) + "," + data.bits + data.comment)
+    text = head + ",".join(values) + ("" if data.bits is None else "," + data.bits) + data.comment
+    f.finish()
+    return _checked(data, text)
 
 
 def _positionless_weather(data: PositionlessWeather) -> bytes:
@@ -1733,14 +1824,18 @@ def _user_defined(data: UserDefined) -> bytes:
 
 
 def _test(data: TestData) -> bytes:
-    _check_text(data.data, "test data")
+    if "\r" in data.data or "\n" in data.data:
+        # test data is not judged for control characters, but a line break would be one
+        raise _refuse(RefusalCode.INVALID_CHARACTER, "test data contains a line break")
     return _checked(data, "," + data.data)
 
 
 def _agrelo(data: AgreloDf) -> bytes:
-    if not 0 <= data.bearing_degrees <= 360 or not 0 <= data.quality <= 9:
+    # a bearing is degrees like a course: rounded to the nearest degree, then range-checked
+    bearing = _nearest(data.bearing_degrees)
+    if not 0 <= bearing <= 360 or not 0 <= data.quality <= 9:
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "an Agrelo bearing is 0-360 degrees and its quality one digit")
-    return f"%{data.bearing_degrees:03d}/{data.quality}".encode("ascii")
+    return f"%{bearing:03d}/{data.quality}".encode("ascii")
 
 
 _ENCODERS: dict[type[Any], Callable[[Any], bytes]] = {
@@ -1819,14 +1914,14 @@ def encode_info(data: AprsData) -> bytes:
 
 def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
     try:
-        return encoder(data)
+        return _sized(encoder(data))
     except EncodeError as e:
         raise _nan_rule(data, e) from None
     except UnicodeEncodeError:
         raise
     except OverflowError as e:
         # a number too large for the form it must be turned into (an infinity is judged as any NaN is)
-        if _has_nonfinite(data, _no_place(data)):
+        if _has_nonfinite(data):
             raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, f"cannot encode {type(data).__name__}: {e}") from e
     except (ValueError, ArithmeticError) as e:

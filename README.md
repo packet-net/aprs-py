@@ -5,7 +5,7 @@
 
 An APRS (Automatic Packet Reporting System) decoder and encoder for Python, checked against the language-neutral conformance vectors in [packet-net/aprs-vectors](https://github.com/packet-net/aprs-vectors).
 
-Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.1: every case passes.
+Conforms to [aprs-vectors](https://github.com/packet-net/aprs-vectors) 1.2: every case passes.
 
 - Decodes TNC2 / APRS-IS lines (`str` or `bytes`), AX.25 UI frames and KISS frames, into a packet with its header, the raw information field, the decoded data and diagnostics.
 - Every data type in the APRS 1.2 specification: positions (plain, compressed, with timestamps, weather, DF, storms, area objects), Mic-E, objects, items, messages, acks, bulletins, telemetry and its metadata, status, queries, capabilities, NMEA, raw weather, third-party, user-defined.
@@ -102,7 +102,7 @@ M0LTE-9>APZ001,WIDE1-1,WIDE2-1:=5127.00N/00058.80W>088/036Mobile
 >>> print(m0lte.position(51.45, -0.98, compressed=True, frequency=aprs.VoiceFrequency(145.5, tone=aprs.ToneType.TONE, tone_value=77)))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1:=/4M<<N7Jo> sT145.500MHz T077
 >>> print(m0lte.mic_e(51.4575, -0.9811, speed_knots=12, course_degrees=94))
-M0LTE-9>U1RWTU,WIDE1-1,WIDE2-1:`vVsm4z>/`
+M0LTE-9>UQRWTU,WIDE1-1,WIDE2-1:`vVsm4z>/`
 >>> print(m0lte.message("G4ABC", "See you at the club", message_id="42"))
 M0LTE-9>APZ001,WIDE1-1,WIDE2-1::G4ABC    :See you at the club{42
 >>> print(m0lte.ack("G4ABC", "7"))
@@ -119,11 +119,20 @@ M0LTE-13>APZ001::M0LTE-13 :PARM.Battery,Temp
 
 ```
 
-The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Every keyword has the name of the data field it fills (`course_degrees`, `speed_knots`, `wind_gust_mph`...); a metric alternative changes only the unit (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`). Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (MHz, or a `VoiceFrequency` to give a tone or offset), `telemetry` and `dao` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. A request that cannot be sent (a telemetry sequence over 999, a quantity given in both units) raises `EncodeError`, which is a `ValueError` and carries a reason code; one that cannot mean anything (no symbol anywhere) raises a plain `ValueError`. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
+The destination defaults to `APZ001`, the experimental tocall; give your application's own with `Station(..., destination="APxxxx")`. Quantities are in APRS's units: degrees, knots and feet, and for weather mph, degrees Fahrenheit, inches and millibars. Every keyword has the name of the data field it fills (`course_degrees`, `speed_knots`, `wind_gust_mph`...); a metric alternative changes only the unit (`speed_kmh`, `altitude_m`, `temperature_c`, `rain_1h_mm`). Position, object, item and Mic-E reports all take the same options where they apply: `compressed`, `ambiguity`, `phg`, `range_miles`, `frequency` (MHz, or a `VoiceFrequency` to give a tone or offset), `telemetry` and `dao` (a `!DAO!`), and a course, speed and altitude in APRS's or metric units. A request that cannot be sent (a telemetry sequence over 999, a quantity given in both units, no symbol anywhere) raises `EncodeError`, which is a `ValueError` and carries a reason code. `weather` takes any `symbol`, and `status` a meteor scatter `beam`.
+
+What a builder writes for an input you leave out depends only on what you give it, never on the clock:
+
+- No `timestamp`: an object or a positionless weather report is refused (`missing-field`); any other report has none. For the time now, pass it yourself: `timestamp=datetime.now(timezone.utc)` (`timestamp=True` is gone).
+- A `Station` that is not said to message (`messaging=False`, the default) writes `!` or `/` for a position and the type code `'` for Mic-E. A Mic-E report with no `mic_e_message` is off duty.
+- No symbol on a position, object, item or Mic-E report (and none on the `Station`) is refused (`invalid-symbol`); a weather report's is `/_`.
+- A telemetry report with no sequence is refused (`missing-field`); with no `bits` it writes `00000000`, and with no `analog` five empty channels.
+- No path, the destination `APZ001`, no ambiguity, no compression, no message ID, an object or item alive, telemetry metadata to the sending station, and a weather value left out written as unknown dots for `c`, `s`, `g` and `t`; Mic-E speed is 0.
+- A Mic-E altitude, in feet or metres, goes in the Mic-E altitude bytes, rounded once to the nearest metre (1000 feet is 305 m); outside -10,000 to 743,570 m it is refused (`value-out-of-range`).
 
 ## Encoding
 
-Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused.
+Any decoded or constructed data can be encoded. The encoder writes only what the specification allows and raises `EncodeError` otherwise. It checks free text by decoding what it wrote: a comment that would read back as something else gets a `/` delimiter, or is refused. An information field is at most 256 bytes (UTF-8, number text included; for a third-party packet the outermost field), and a longer one is refused as `information-field-too-long` (`too-long` is a field over its own limit, such as message text over 67 characters). A packet the program already holds is not re-encoded: `to_tnc2`, `to_ax25` and `to_kiss` write its information field as it stands, with no size check. Text with a control character (a byte below 0x20 or 0x7F, a TAB or a line break included) is refused as `invalid-character`. Decoding has no size limit, and warns of a control character in text (`control-character-in-text`), so a strict decoder rejects it.
 
 ```python
 >>> from pdn_aprs import PositionReport, encode_info
@@ -155,7 +164,7 @@ too-long True
 
 ```
 
-The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all six implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
+The values are the shared ids in the conformance vectors' `codes.json` under `refusals`, the same in all six implementations. A new code may be added in a later 1.x release, so keep a default for one you do not know. `information-field-too-long` is the whole field over 256 bytes. `does-not-read-back` is the fallback for the encoder's own read-back check when no rule names the cause; `to_ax25` refuses with `ax25-cannot-carry`.
 
 `build_packet(source, data, destination=..., path=...)` gives a whole packet, and computes a Mic-E report's destination.
 
@@ -177,7 +186,7 @@ Symbol('/f')
 
 ## Conformance
 
-The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), and the encode cases. Every case passes. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
+The vectors are a git submodule at `vectors/`, and `tests/test_vectors.py` runs every check their README defines for every case, one parametrised test per check with the case id as the test id: the lenient decoding, the strict one, the single-tolerance check, the re-encoding (byte for byte against the case's canonical bytes), the encode cases, and the build cases (a builder recipe through the real `Station` methods, by `tools/recipe.py`, the code the dump tool's build mode uses). Every case passes. A check that should be skipped goes in `tests/known_differences.json` with its reason; there are none.
 
 ### The dump tool
 
@@ -191,8 +200,8 @@ python3 vectors/tools/compare.py py.jsonl.gz ts.jsonl.gz --names py ts --input l
 ```
 
 - **Decode** (the default) reads one hex-encoded TNC2 line per line (the vectors' `tools/mutate.py` writes them). Each record holds the lenient and strict results in the neutral form, how the lenient data encodes again (`reencode`), the information field the encoder wrote (`written`, hex) and for Mic-E the destination it computed (`written_destination`), and `api`: what the public API says about the packet (source, destination, path, q-construct, whether it came from inside a third-party packet, `has_errors` and `has_warnings`, the TNC2 and AX.25 forms, the device, the symbol's description and what the PHG codes stand for, and the same for a third-party packet's inner packet).
-- **Encode** (`--encode`) reads neutral data from the vectors' `tools/generate.py`, encodes it with `encode_info` and writes the bytes, the destination and what they decode to, or `refused` with the encoder's reason.
-- **Build** (`--build`) reads builder recipes (`generate.py --recipes`) and calls the `Station` methods as a program would, writing the TNC2 line and what it decodes to, or `refused`. A recipe key the `Station` methods do not take is `unsupported`, and the reason names it.
+- **Encode** (`--encode`) reads neutral data from the vectors' `tools/generate.py`, encodes it with `encode_info` and writes the bytes, the destination and what they decode to, or `refused` with the encoder's reason. Data this library's types cannot hold but whose refusal its value alone decides is reported as that refusal, not `unsupported`: an ack or a reject given a message ID (also inside a third-party packet) is `field-not-allowed` unless an earlier code applies to the rest, and the record says `"via": "tool"`.
+- **Build** (`--build`) reads builder recipes (`generate.py --recipes`) and calls the `Station` methods as a program would, passing only the keys a recipe gives, so that the builder's own defaults are what is written, and writing the TNC2 line and what it decodes to, or `refused`. A recipe giving one quantity in two units is `value-given-twice` even when each one-unit build would only be over 256 bytes (the size counts after every other code). A recipe key the `Station` methods do not take is `unsupported`, and the reason names it. This library has no fixed capacity, so it never writes `implementation-limit`.
 
 The work is spread over processes: `--jobs N` (all cores by default) and `--chunk N` lines at a time (5,000); `--limit N` stops after N lines. A 6.9-million-line capture takes about two minutes to decode.
 

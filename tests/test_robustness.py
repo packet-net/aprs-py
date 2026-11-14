@@ -22,7 +22,7 @@ ALPHABET = bytes(range(0x20, 0x7F)) + b"\r\n\t\x00\x1c\x1d\x7f\x85\xa0\xb0\xb2\x
 def _seeds() -> list[tuple[str, bytes]]:
     seeds = []
     for case in load_cases():
-        if "encode" in case["input"] or "header_error" in case["expect"]:
+        if "encode" in case["input"] or "build" in case["input"] or "header_error" in case["expect"]:
             continue
         info, _, destination = raw_info(case)
         seeds.append((destination, info))

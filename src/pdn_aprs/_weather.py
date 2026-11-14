@@ -97,9 +97,24 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
     ``c`` field is read), ``s`` is the wind speed until the speed is known, and snowfall after
     that. Extra fields are a list, so a repeated extra letter does not end the run.
     """
+    forbid: set[int] = set()
+    while True:
+        result, retry = _scan(text, positionless, wind_known, forbid)
+        if retry is None:
+            return result
+        forbid.add(retry)
+
+
+def _scan(text: str, positionless: bool, wind_known: bool, forbid: set[int]) -> tuple[WeatherFields, int | None]:
+    """One reading of the fields. A fixed-width field whose digits run on by two or more is a
+    value out of range (dropped) when the run is followed by the end of the text or by a defined
+    field, which is then read; the reading is tentative, and when nothing is read after the run
+    it is given up: the index of that field comes back, to be read again at its own width."""
     result = WeatherFields()
     values = result.values
     defects = result.defects
+    pending_end: int | None = None
+    pending_at = -1
     seen: set[str] = set()
     extras: list[WeatherExtra] = []
     wind_as_fields = positionless
@@ -150,6 +165,8 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
             m = _EXTRA.match(text, i + 1)
             if not m or len(m.group()) < 2 or not m.group()[-1].isdigit():
                 break
+            if pending_end == i:
+                return result, pending_at
             extras.append(WeatherExtra(letter, m.group()))
             i = m.end()
             continue
@@ -158,6 +175,7 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
             break
         chunk = text[i + 1 : i + 1 + width]
         dots = _dots(text, i + 1)
+        dropped = False
         if dots >= width or chunk == " " * width:
             value = None
             length = width
@@ -173,8 +191,17 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
             if length < width or length == width + 1:
                 defects.append(C.NON_STANDARD_WEATHER_FIELD_WIDTH)
             elif length > width + 1:
-                length = width
-            value = int(text[i + 1 : i + 1 + length])
+                if i in forbid:
+                    length = width
+                else:
+                    # runs on by two or more: tentatively out of range, its value dropped
+                    pending_end = i + 1 + length
+                    pending_at = i
+                    defects.append(C.OUT_OF_RANGE_VALUE)
+                    dropped = True
+                    value = None
+            if not dropped:
+                value = int(text[i + 1 : i + 1 + length])
         if key == "wind_direction_degrees":
             result.direction_sent = True
             if not positionless:
@@ -193,10 +220,12 @@ def parse_weather_fields(text: str, *, positionless: bool, wind_known: bool) -> 
             else:
                 values[key] = convert(value)
         i += 1 + length
+    if pending_end is not None and pending_end < n and i == pending_end:
+        return result, pending_at
     if extras:
         values["extra"] = tuple(extras)
     result.text = text[i:]
-    return result
+    return result, None
 
 
 def raise_field_defects(result: WeatherFields, ctx: Ctx, *, positionless: bool) -> None:

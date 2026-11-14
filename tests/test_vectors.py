@@ -64,3 +64,9 @@ def test_reencode(case: dict[str, Any]) -> None:
 def test_encode(case: dict[str, Any]) -> None:
     """Encode cases: the information field (and Mic-E destination) written, or a refusal."""
     _run("encode", case)
+
+
+@pytest.mark.parametrize("case", _params("build"))
+def test_build(case: dict[str, Any]) -> None:
+    """Build cases: the builder gives the TNC2 line, or the refusal, the case names."""
+    _run("build", case)

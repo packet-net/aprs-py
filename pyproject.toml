@@ -49,7 +49,7 @@ include = ["src/pdn_aprs", "tests", "tools", "README.md", "CHANGELOG.md", "LICEN
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src", "README.md"]
-pythonpath = ["tests"]
+pythonpath = ["tests", "tools"]
 addopts = "--doctest-glob=README.md --doctest-modules"
 doctest_optionflags = ["NORMALIZE_WHITESPACE"]
 

@@ -25,7 +25,10 @@ def _telemetry(value: float) -> str:
 
 def test_telemetry_whole_numbers_are_shortest_decimal() -> None:
     assert _telemetry(1e23) == "T#001,1" + "0" * 23 + ",000,000,000,000,00000000"
-    assert _telemetry(1e308) == "T#001,1" + "0" * 308 + ",000,000,000,000,00000000"
+    assert _telemetry(1e200) == "T#001,1" + "0" * 200 + ",000,000,000,000,00000000"
+    with pytest.raises(EncodeError) as too_long:
+        _telemetry(1e308)  # 309 digits: the information field would be over 256 bytes
+    assert too_long.value.code is RefusalCode.INFORMATION_FIELD_TOO_LONG
     assert _telemetry(1000.0) == "T#001,1000,000,000,000,000,00000000"
     assert _telemetry(-1e23).startswith("T#001,-1" + "0" * 23 + ",")
     assert _telemetry(5.0) == "T#001,005,000,000,000,000,00000000"
@@ -193,3 +196,167 @@ def test_whole_exact_telemetry_values_keep_their_digits() -> None:
 def test_telemetry_sequence_type_error_names_the_type() -> None:
     with pytest.raises(TypeError, match="not Decimal"):
         _ST.telemetry(Decimal(1), (1, 2, 3, 4, 5))  # type: ignore[arg-type]
+
+
+def test_run_2_non_finite_value_with_no_place_and_gga_altitude() -> None:
+    from pdn_aprs._neutral import from_neutral
+
+    weather = {"wind_gust_mph": 0, "temperature_f": 50}
+    inner = {
+        "type": "position",
+        "timestamp": "092345z",
+        "latitude": 49.0,
+        "longitude": -72.0,
+        "symbol": "/_",
+        "weather": weather,
+        "altitude_feet": float("nan"),
+    }
+    third = {"type": "third-party", "packet": {"source": "A", "destination": "B", "data": inner}}
+    with pytest.raises(EncodeError) as e:
+        encode_info(from_neutral(third))
+    assert e.value.code is RefusalCode.FIELD_NOT_ALLOWED
+    gga = {
+        "type": "object",
+        "name": "147.345",
+        "latitude": 20.4,
+        "longitude": 10.0,
+        "symbol": "N0",
+        "compressed": True,
+        "compression": {"fix": "old", "source": "gga", "origin": "digipeater-conversion"},
+        "altitude_feet": float("-inf"),
+        "timestamp": "020226h",
+    }
+    with pytest.raises(EncodeError) as e:
+        encode_info(from_neutral(gga))
+    assert e.value.code is RefusalCode.NOT_A_NUMBER
+
+
+def test_run_2_agrelo_bearing_is_rounded_then_checked() -> None:
+    agrelo = aprs.AgreloDf
+    assert encode_info(agrelo(12.5, 5)) == b"%013/5"  # type: ignore[arg-type]
+    assert encode_info(agrelo(12.49, 5)) == b"%012/5"  # type: ignore[arg-type]
+    with pytest.raises(EncodeError) as e:
+        encode_info(agrelo(360.5, 5))  # type: ignore[arg-type]
+    assert e.value.code is RefusalCode.VALUE_OUT_OF_RANGE
+
+
+def test_run_2_two_units_beat_the_size() -> None:
+    with pytest.raises(EncodeError) as e:
+        _ST.position(49.0, -72.0, symbol=Symbol.CAR, altitude_feet=100, altitude_m=30.48, comment="x" * 236)
+    assert e.value.code is RefusalCode.VALUE_GIVEN_TWICE
+
+
+def _refusal(call: object) -> str:
+    with pytest.raises(EncodeError) as e:
+        call()  # type: ignore[operator]
+    return e.value.code.value
+
+
+def test_run_4_a_held_packet_is_written_as_it_stands() -> None:
+    # a decoded packet's TNC2, AX.25 and KISS forms are not an encoder: no size check
+    packet = aprs.decode_tnc2(b"N0CALL>APZ001:>" + b"x" * 300)
+    assert len(packet.info) == 301
+    assert packet.to_tnc2().endswith(b"x" * 300)
+    assert packet.to_ax25().endswith(b"x" * 300)
+    assert packet.to_kiss().endswith(b"x" * 300 + b"\xc0")
+    assert _refusal(lambda: encode_info(packet.data)) == "information-field-too-long"
+
+
+def test_run_4_storm_fields_are_digits() -> None:
+    head = ";BRENDA   *100045z4905.50N/07201.75W@101/047"
+    full = head + "/HC/104^123/0980>065&020%040"
+    assert aprs.decode_tnc2("N0CALL>APZ001:" + full).data.storm.whole_gale_radius_nm == 40  # type: ignore[attr-defined]
+    dotted = aprs.decode_tnc2("N0CALL>APZ001:" + head + "/HC/...^123/0980>065&020%040").data
+    assert dotted.storm is None  # type: ignore[attr-defined]
+    assert dotted.comment == "HC/...^123/0980>065&020%040"  # type: ignore[attr-defined]
+    ends = aprs.decode_tnc2("N0CALL>APZ001:" + head + "/HC/104^123/0980>065&020%4.410").data
+    assert ends.storm.whole_gale_radius_nm is None  # type: ignore[attr-defined]
+    assert ends.comment == "%4.410"  # type: ignore[attr-defined]
+    missing = aprs.ObjectReport(
+        name="BRENDA",
+        timestamp=aprs.Timestamp("100045z"),
+        latitude=49.0,
+        longitude=-72.0,
+        symbol=aprs.Symbol("/", "@"),
+        storm=aprs.Storm(aprs.StormType.HURRICANE, sustained_wind_knots=104),
+    )
+    assert _refusal(lambda: encode_info(missing)) == "missing-field"
+
+
+def test_run_4_a_telemetry_sequence_of_mic_and_more_is_malformed() -> None:
+    mic1 = aprs.TelemetryReport("MIC1", (1, 2, 3, 4, 5), "00000000")
+    assert _refusal(lambda: encode_info(mic1)) == "malformed"
+    assert _refusal(lambda: encode_info(dataclasses.replace(mic1, comment="x" * 240))) == "malformed"
+
+
+def test_run_4_a_run_on_value_ends_at_a_trailing_dao_or_telemetry() -> None:
+    dao = aprs.decode_tnc2("N0CALL>APZ001:!4903.50N/07201.75W_220/004g005t2147483647!W12!").data
+    assert dao.weather.temperature_f is None  # type: ignore[attr-defined]
+    assert dao.dao is not None  # type: ignore[attr-defined]
+
+
+def test_run_4_review_timestamp_false_is_no_timestamp() -> None:
+    assert ST.position(51.0, -1.0, timestamp=False).info == ST.position(51.0, -1.0).info
+    with pytest.raises(TypeError):
+        ST.position(51.0, -1.0, timestamp=True)  # type: ignore[arg-type]
+
+
+def test_run_4_review_a_finite_value_too_big_for_its_unit_is_out_of_range() -> None:
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_m=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_feet=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, speed_kmh=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.position(51.0, -1.0, altitude_m=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.weather(51.0, -1.0, temperature_c=1e308)) == "value-out-of-range"
+    assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_m=float("inf"))) == "not-a-number"
+
+
+_WX = "N0CALL>APZ001:!4903.50N/07201.75W_220/004g005"
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment", "temperature"),
+    [
+        ("t2147483647|!!!!|7k", "7k", None),
+        ("t247483647!W12!12!", "12!", None),
+        ("t072r12345!W12!r001", "r001", 72),
+        ("t072|!!!!|r000", "r000", 72),
+    ],
+)
+def test_run_5_a_run_on_value_ends_at_a_lifted_element_anywhere(
+    tail: str, comment: str, temperature: int | None
+) -> None:
+    result = aprs.decode_tnc2(_WX + tail)
+    assert result.data.comment == comment
+    assert result.data.weather.temperature_f == temperature
+    codes = {str(d) for d in result.diagnostics}
+    assert ("warning:out-of-range-value" in codes) == (temperature is None or "12345" in tail)
+
+
+def test_run_5_a_run_on_value_before_telemetry_in_other_weather_reports() -> None:
+    obj = aprs.decode_tnc2("N0CALL>APZ001:;OBJ      *092345z4903.50N/07201.75W_220/004g005h1234567|!!!!|t072")
+    assert obj.data.comment == "t072"
+    assert obj.data.weather.humidity_percent is None
+    assert "warning:out-of-range-value" in {str(d) for d in obj.diagnostics}
+    compressed = aprs.decode_tnc2("VK7DSH-1>APU25N:@252047z/c7NIs@rE_!!bg000t04600780|!)%Z'n|!r000p003P000h94b10236")
+    assert compressed.data.comment == "!r000p003P000h94b10236"
+    assert compressed.data.weather.temperature_f is None
+
+
+_ST = Station("M0LTE-7", destination="APZXYZ", symbol=Symbol.CAR)
+
+
+@pytest.mark.parametrize("comment", ["X", "Z", "Y"])
+def test_run_5_mic_e_comment_after_a_frequency(comment: str) -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment=comment, frequency=144.39).info
+    # only a comment that would read back as a device suffix needs the /
+    assert info.endswith(b"144.390MHz /X" if comment == "X" else b"144.390MHz " + comment.encode())
+
+
+def test_run_5_mic_e_suffix_like_comment_needs_no_slash_before_a_dao() -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment="X", frequency=144.39, dao=True).info
+    assert b"144.390MHz X!" in info
+
+
+def test_run_5_mic_e_comment_that_would_join_the_frequency_fields_follows_it_directly() -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment="-500 T110", frequency=144.39).info
+    assert info.endswith(b"144.390MHz-500 T110")
