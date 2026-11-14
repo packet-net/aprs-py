@@ -345,6 +345,8 @@ def _from_neutral(data: dict[str, Any]) -> AprsData:
         kwargs["name"] = ""
     if cls in (PositionReport, MicEReport, ObjectReport, ItemReport) and "symbol" not in kwargs:
         kwargs["symbol"] = Symbol.parse("x-")  # an unknown table: invalid-symbol
+    if cls is TelemetryReport and kwargs.get("sequence") == "":
+        del kwargs["sequence"]  # an empty string is absent in the neutral form
     if cls is TelemetryReport and "sequence" not in kwargs:
         kwargs["sequence"] = NoSequence()  # missing-field, not an empty sequence
     if "addressee" in cls.__dataclass_fields__ and "addressee" not in kwargs:
@@ -358,6 +360,19 @@ def _from_neutral(data: dict[str, Any]) -> AprsData:
         raise NeutralFormError(f"{kind}: {e}") from None
 
 
+def _without_message_id(data: dict[str, Any]) -> dict[str, Any] | None:
+    """``data`` without the message ID of an ack or a reject (itself, or one inside third-party
+    packets), or None when it has none."""
+    if data.get("type") in ("ack", "reject") and "message_id" in data:
+        return {k: v for k, v in data.items() if k != "message_id"}
+    packet = data.get("packet")
+    if data.get("type") == "third-party" and isinstance(packet, dict) and isinstance(packet.get("data"), dict):
+        inner = _without_message_id(packet["data"])
+        if inner is not None:
+            return {**data, "packet": {**packet, "data": inner}}
+    return None
+
+
 def _refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
     """The refusal an encoder gives data this library's data model cannot hold, or None.
 
@@ -367,10 +382,9 @@ def _refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
     """
     from .encode import _PRIORITY, encode_info
 
-    kind = data.get("type")
-    if kind not in ("ack", "reject") or "message_id" not in data:
+    rest = _without_message_id(data)
+    if rest is None:
         return None
-    rest = {k: v for k, v in data.items() if k != "message_id"}
     try:
         encode_info(from_neutral(rest))
     except EncodeError as e:

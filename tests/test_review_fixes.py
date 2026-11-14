@@ -196,3 +196,51 @@ def test_whole_exact_telemetry_values_keep_their_digits() -> None:
 def test_telemetry_sequence_type_error_names_the_type() -> None:
     with pytest.raises(TypeError, match="not Decimal"):
         _ST.telemetry(Decimal(1), (1, 2, 3, 4, 5))  # type: ignore[arg-type]
+
+
+def test_run_2_non_finite_value_with_no_place_and_gga_altitude() -> None:
+    from pdn_aprs._neutral import from_neutral
+
+    weather = {"wind_gust_mph": 0, "temperature_f": 50}
+    inner = {
+        "type": "position",
+        "timestamp": "092345z",
+        "latitude": 49.0,
+        "longitude": -72.0,
+        "symbol": "/_",
+        "weather": weather,
+        "altitude_feet": float("nan"),
+    }
+    third = {"type": "third-party", "packet": {"source": "A", "destination": "B", "data": inner}}
+    with pytest.raises(EncodeError) as e:
+        encode_info(from_neutral(third))
+    assert e.value.code is RefusalCode.FIELD_NOT_ALLOWED
+    gga = {
+        "type": "object",
+        "name": "147.345",
+        "latitude": 20.4,
+        "longitude": 10.0,
+        "symbol": "N0",
+        "compressed": True,
+        "compression": {"fix": "old", "source": "gga", "origin": "digipeater-conversion"},
+        "altitude_feet": float("-inf"),
+        "timestamp": "020226h",
+    }
+    with pytest.raises(EncodeError) as e:
+        encode_info(from_neutral(gga))
+    assert e.value.code is RefusalCode.NOT_A_NUMBER
+
+
+def test_run_2_agrelo_bearing_is_rounded_then_checked() -> None:
+    agrelo = aprs.AgreloDf
+    assert encode_info(agrelo(12.5, 5)) == b"%013/5"  # type: ignore[arg-type]
+    assert encode_info(agrelo(12.49, 5)) == b"%012/5"  # type: ignore[arg-type]
+    with pytest.raises(EncodeError) as e:
+        encode_info(agrelo(360.5, 5))  # type: ignore[arg-type]
+    assert e.value.code is RefusalCode.VALUE_OUT_OF_RANGE
+
+
+def test_run_2_two_units_beat_the_size() -> None:
+    with pytest.raises(EncodeError) as e:
+        _ST.position(49.0, -72.0, symbol=Symbol.CAR, altitude_feet=100, altitude_m=30.48, comment="x" * 236)
+    assert e.value.code is RefusalCode.VALUE_GIVEN_TWICE

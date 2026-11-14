@@ -31,7 +31,7 @@ from fractions import Fraction
 from typing import Any, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, _real, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _real, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -117,7 +117,8 @@ def _one_unit_each(*pairs: tuple[str, str]) -> Callable[[_F], _F]:
                     fn(self, *args, **variant)
                 except EncodeError as e:
                     found.append(e)
-            raise min(found, key=lambda e: _PRIORITY[e.code])
+            # a result refused only for the information field's size counts after every other code
+            raise min(found, key=lambda e: (isinstance(e, SizeError), _PRIORITY[e.code]))
 
         return wrapper  # type: ignore[return-value]
 

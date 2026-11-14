@@ -187,12 +187,15 @@ class _Faults:
             raise min(self.found, key=lambda e: _PRIORITY[e.code])
 
 
-def _has_nonfinite(value: Any, ignore: frozenset[str] = frozenset()) -> bool:
+def _has_nonfinite(value: Any) -> bool:
+    """A NaN or infinity anywhere in ``value``, except in a field that has no place in the data
+    holding it (a third-party packet's inner data included)."""
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
         return any(_has_nonfinite(v) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        ignore = _no_place(value)
         return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value) if f.name not in ignore)
     return False
 
@@ -244,7 +247,7 @@ def _nan_or_earlier(data: Any, encoder: Callable[[Any], bytes], why: str) -> Enc
 def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
-    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data, _no_place(data)):
+    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
         return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
     return e
 
@@ -623,6 +626,9 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
             f.add(RefusalCode.MISSING_FIELD, "a GGA compressed position needs an altitude")
         else:
             alt = data.altitude_feet
+            if not math.isfinite(alt):
+                f.add(RefusalCode.NOT_A_NUMBER, "the altitude is not a number")
+                alt = 0.0
             value = _nearest(math.log(alt) / math.log(1.002)) if alt >= 1 else 0
             value = min(max(value, 0), 91 * 91 - 1)
             cs = _base91(value, 2)
@@ -1805,9 +1811,11 @@ def _test(data: TestData) -> bytes:
 
 
 def _agrelo(data: AgreloDf) -> bytes:
-    if not 0 <= data.bearing_degrees <= 360 or not 0 <= data.quality <= 9:
+    # a bearing is degrees like a course: rounded to the nearest degree, then range-checked
+    bearing = _nearest(data.bearing_degrees)
+    if not 0 <= bearing <= 360 or not 0 <= data.quality <= 9:
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "an Agrelo bearing is 0-360 degrees and its quality one digit")
-    return f"%{data.bearing_degrees:03d}/{data.quality}".encode("ascii")
+    return f"%{bearing:03d}/{data.quality}".encode("ascii")
 
 
 _ENCODERS: dict[type[Any], Callable[[Any], bytes]] = {
@@ -1893,7 +1901,7 @@ def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
         raise
     except OverflowError as e:
         # a number too large for the form it must be turned into (an infinity is judged as any NaN is)
-        if _has_nonfinite(data, _no_place(data)):
+        if _has_nonfinite(data):
             raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, f"cannot encode {type(data).__name__}: {e}") from e
     except (ValueError, ArithmeticError) as e:

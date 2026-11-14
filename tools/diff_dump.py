@@ -229,15 +229,17 @@ def encode_line(n: int, text: str) -> str:
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
             refusal = _refusal_for_unrepresentable(item["data"])
             if refusal is not None:
-                # the data type has no ID of its own to hold: the encoder's rule, not a gap
+                # an ack or a reject carries no message ID of its own, so the model cannot hold one
+                # and the tool's reader makes the refusal the encoder's rule gives (README, "Encode records")
                 return dumps(
                     {
                         "n": n,
                         "result": "refused",
-                        "reason": f"an {item['data']['type']} carries no message ID of its own"
+                        "reason": "an ack or a reject carries no message ID of its own"
                         if refusal is RefusalCode.FIELD_NOT_ALLOWED
-                        else f"refused as {refusal.value} (and an {item['data']['type']} carries no message ID)",
+                        else f"refused as {refusal.value} (and an ack or a reject carries no message ID)",
                         "refusal": refusal.value,
+                        "via": "tool",
                     }
                 )
             # this library's data cannot hold something in the neutral data
