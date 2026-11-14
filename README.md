@@ -214,4 +214,4 @@ mypy
 
 ## Licence
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). The device identification data comes from the aprs-deviceid database, under CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT; see [LICENSE](LICENSE). The device identification data comes from the aprs-deviceid database, under CC BY-SA 2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
