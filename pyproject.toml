@@ -7,7 +7,7 @@ name = "pdn-aprs"
 dynamic = ["version"]
 description = "APRS (Automatic Packet Reporting System) decoder and encoder, checked against language-neutral conformance vectors"
 readme = "README.md"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Tom Fanning, M0LTE", email = "tom@fann.ing" }]
 requires-python = ">=3.10"
