@@ -336,6 +336,15 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
     return not _shape_differences(given, to_neutral(decoded), numbers=numbers)
 
 
+def _joins_frequency_fields(comment: str) -> bool:
+    """Whether ``comment`` after a space would be read as a tone, offset or range of the voice
+    frequency before it."""
+    from ._comment import _frequency
+
+    found = _frequency("144.390MHz " + comment)
+    return found is not None and found[0] != VoiceFrequency(mhz=144.39)
+
+
 def _with_comment(
     data: AprsData,
     comment: str,
@@ -346,12 +355,16 @@ def _with_comment(
     separating_space: bool = False,
 ) -> bytes:
     """The first way of writing the comment that reads back as the data: as it is, then after
-    a ``/`` delimiter. After a voice frequency it is written after a space, then straight
-    after the frequency, then after a space and a ``/``."""
+    a ``/`` delimiter. After a voice frequency it is written after a space; if a space would make
+    its first words a tone, offset or range field of the frequency, straight after the frequency;
+    else after a space and a ``/`` (only where it would not read back as itself without one: ``X``
+    ending the text would be the device suffix ` X`)."""
     if not comment:
         candidates = [""]
     elif after_frequency:
-        candidates = [" " + comment, comment, " /" + comment]
+        candidates = [" " + comment, " /" + comment]
+        if _joins_frequency_fields(comment):
+            candidates.insert(1, comment)
     else:
         candidates = [comment, "/" + comment]
     if comment and separating_space:

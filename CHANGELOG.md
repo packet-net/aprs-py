@@ -10,13 +10,15 @@ All notable changes to this project are documented here. The format follows [Kee
 - `decode_tnc2` given a `str` holding the lone surrogates `bytes.decode("utf-8", "surrogateescape")` makes no longer raises `UnicodeEncodeError`: the original bytes are restored. Any other lone surrogate is read as U+FFFD, or makes the header unusable if it is in the header.
 - Builders and `encode_info` raise only `EncodeError` for bad numbers and text: `ambiguity=1.0`, a `Decimal` NaN and an integer too large for a float no longer leak `TypeError`, `InvalidOperation` or `OverflowError`; a number too large to use is `value-out-of-range`; a lone surrogate in text is `text-reads-as-field`, not `not-a-number`.
 - `Decimal` is accepted wherever another real number is (a `Decimal('51.45')` latitude was refused).
+- A Mic-E builder's comment after a voice frequency follows a space, and takes a `/` only where it would not read back as itself: `X` ending the text is written ` /X` (not `MHzX`, which is not a form the rule gives), since ` X` would read back as the device suffix; a comment that a space would turn into the frequency's tone or offset still follows the frequency directly.
+- A weather text ends where the first lifted base-91 telemetry or `!DAO!` starts, wherever it sits, not only at the end: a run-on value that reaches it is dropped as `out-of-range-value`, and the text after the element is comment text on its own, never joined to the run.
 - Decoding no longer takes quadratic time on a very long run of digits in `EQNS.` coefficients, telemetry values and query footprints; accepted text is unchanged.
 
 ### Changed
 
 - `identify_tocall` and `identify_mic_e` are exported from the package top level.
 
-Round 4 rulings of the vectors (aprs-vectors `round-4`, commit 11e59df), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
+Round 4 rulings of the vectors (aprs-vectors `round-4`, commit a405bac), shared by all six libraries as 1.2.0. Conforms to aprs-vectors 1.2.
 
 - The licence is now MIT from this release; versions up to 1.1.0 were published under AGPL-3.0-or-later and keep it. The conformance vectors are CC0.
 

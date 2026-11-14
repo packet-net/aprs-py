@@ -308,3 +308,55 @@ def test_run_4_review_a_finite_value_too_big_for_its_unit_is_out_of_range() -> N
     assert _refusal(lambda: ST.position(51.0, -1.0, altitude_m=1e308)) == "value-out-of-range"
     assert _refusal(lambda: ST.weather(51.0, -1.0, temperature_c=1e308)) == "value-out-of-range"
     assert _refusal(lambda: ST.mic_e(51.0, -1.0, altitude_m=float("inf"))) == "not-a-number"
+
+
+_WX = "N0CALL>APZ001:!4903.50N/07201.75W_220/004g005"
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment", "temperature"),
+    [
+        ("t2147483647|!!!!|7k", "7k", None),
+        ("t247483647!W12!12!", "12!", None),
+        ("t072r12345!W12!r001", "r001", 72),
+        ("t072|!!!!|r000", "r000", 72),
+    ],
+)
+def test_run_5_a_run_on_value_ends_at_a_lifted_element_anywhere(
+    tail: str, comment: str, temperature: int | None
+) -> None:
+    result = aprs.decode_tnc2(_WX + tail)
+    assert result.data.comment == comment
+    assert result.data.weather.temperature_f == temperature
+    codes = {str(d) for d in result.diagnostics}
+    assert ("warning:out-of-range-value" in codes) == (temperature is None or "12345" in tail)
+
+
+def test_run_5_a_run_on_value_before_telemetry_in_other_weather_reports() -> None:
+    obj = aprs.decode_tnc2("N0CALL>APZ001:;OBJ      *092345z4903.50N/07201.75W_220/004g005h1234567|!!!!|t072")
+    assert obj.data.comment == "t072"
+    assert obj.data.weather.humidity_percent is None
+    assert "warning:out-of-range-value" in {str(d) for d in obj.diagnostics}
+    compressed = aprs.decode_tnc2("VK7DSH-1>APU25N:@252047z/c7NIs@rE_!!bg000t04600780|!)%Z'n|!r000p003P000h94b10236")
+    assert compressed.data.comment == "!r000p003P000h94b10236"
+    assert compressed.data.weather.temperature_f is None
+
+
+_ST = Station("M0LTE-7", destination="APZXYZ", symbol=Symbol.CAR)
+
+
+@pytest.mark.parametrize("comment", ["X", "Z", "Y"])
+def test_run_5_mic_e_comment_after_a_frequency(comment: str) -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment=comment, frequency=144.39).info
+    # only a comment that would read back as a device suffix needs the /
+    assert info.endswith(b"144.390MHz /X" if comment == "X" else b"144.390MHz " + comment.encode())
+
+
+def test_run_5_mic_e_suffix_like_comment_needs_no_slash_before_a_dao() -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment="X", frequency=144.39, dao=True).info
+    assert b"144.390MHz X!" in info
+
+
+def test_run_5_mic_e_comment_that_would_join_the_frequency_fields_follows_it_directly() -> None:
+    info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment="-500 T110", frequency=144.39).info
+    assert info.endswith(b"144.390MHz-500 T110")

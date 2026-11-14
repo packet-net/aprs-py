@@ -335,17 +335,14 @@ def lifted_places(text: str, cuts: tuple[int, ...] = ()) -> tuple[str, tuple[int
 
 
 def trailing_lifted_start(text: str) -> int:
-    """Where the base-91 telemetry and ``!DAO!`` that end ``text`` start (``len(text)`` when none
-    does): the end of a positioned weather report's weather text."""
+    """Where the first base-91 telemetry or ``!DAO!`` lifted from ``text`` starts (``len(text)``
+    when none is): the end of a positioned weather report's weather text, wherever the element
+    sits. What follows it is comment text on its own; taking the element out never joins the text
+    either side of it."""
     tel = _telemetry(text) if "|" in text else None
     dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), ()) if "!" in text else None
-    spans = ([(tel[1], tel[2])] if tel is not None else []) + ([(dao[3], dao[3] + 5)] if dao is not None else [])
-    end = len(text)
-    for start, stop in sorted(spans, reverse=True):
-        if stop != end:
-            break
-        end = start
-    return end
+    starts = ([tel[1]] if tel is not None else []) + ([dao[3]] if dao is not None else [])
+    return min(starts, default=len(text))
 
 
 def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:
