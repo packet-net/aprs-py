@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-14
+
 Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libraries as 1.1.0.
 
 ### Changed
@@ -189,7 +191,8 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/packet-net/aprs-py/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/packet-net/aprs-py/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/packet-net/aprs-py/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/packet-net/aprs-py/compare/v0.2.0...v0.3.0
