@@ -1127,3 +1127,120 @@ def test_mic_e_legacy_telemetry_ending_in_cr_is_an_invalid_character() -> None:
 def test_mic_e_status_text_that_reads_back_changed_is_text_reads_as_field() -> None:
     packet = aprs.decode_tnc2(b'LA7DHA-8>U9UR55,LD1OE*,WIDE2-1,qAS,LB1HG-10:`&>]l#MPY/>"3}')
     assert _code(lambda: aprs.encode_info(packet.data)) == "text-reads-as-field"
+
+
+def test_station_reuse_keeps_no_quantity_between_calls() -> None:
+    """Each call stands alone: a quantity in the other unit on an earlier call never counts,
+    and value-given-twice is only for one call with both units."""
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    first = str(st.position(10.0, 20.0, speed_knots=10, course_degrees=90))
+    kmh = str(st.position(10.0, 20.0, speed_kmh=20, course_degrees=90))
+    last = str(st.position(10.0, 20.0, speed_knots=5, course_degrees=90))
+    assert "090/010" in first
+    assert "090/011" in kmh
+    assert "090/005" in last
+    with pytest.raises(aprs.EncodeError) as err:
+        st.position(10.0, 20.0, speed_knots=10, speed_kmh=20)
+    assert err.value.code is aprs.RefusalCode.VALUE_GIVEN_TWICE
+    assert "090/005" in str(st.position(10.0, 20.0, speed_knots=5, course_degrees=90))
+
+
+def test_a_refused_builder_call_leaks_nothing_into_the_next() -> None:
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    with pytest.raises(aprs.EncodeError) as err:
+        st.weather(temperature_c=10, temperature_f=50, symbol=aprs.Symbol.CAR)
+    assert err.value.code is aprs.RefusalCode.SYMBOL_MISMATCH
+    assert str(st.message("N0CALL-1", "hi")).endswith(":N0CALL-1 :hi")
+
+
+def test_a_caller_built_third_party_chain_ten_thousand_deep_is_refused_without_recursion() -> None:
+    from pdn_aprs import Packet, StatusReport, ThirdParty
+    from pdn_aprs._neutral import to_neutral
+
+    data: aprs.AprsData = StatusReport("hi")
+    for _ in range(10_000):
+        data = ThirdParty(Packet("A", "B", (), b"", data))
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(data)
+    assert err.value.code is aprs.RefusalCode.INVALID_THIRD_PARTY_HEADER
+    with pytest.raises(aprs.EncodeError):
+        aprs.build_packet("N0CALL", data)
+    neutral = to_neutral(data)
+    assert neutral["type"] == "third-party"
+    assert neutral["packet"]["data"]["type"] == "third-party"
+
+
+def test_from_neutral_refuses_a_chain_ten_thousand_deep_without_recursion() -> None:
+    from pdn_aprs._neutral import from_neutral
+
+    data: dict[str, object] = {"type": "status", "text": "hi"}
+    for _ in range(10_000):
+        data = {"type": "third-party", "packet": {"source": "A", "destination": "B", "data": data}}
+    with pytest.raises(aprs.EncodeError) as err:
+        from_neutral(data)
+    assert err.value.code is aprs.RefusalCode.INVALID_THIRD_PARTY_HEADER
+
+
+def test_the_header_is_judged_first_and_an_invalid_source_is_refused() -> None:
+    st = aprs.Station("BAD!!", symbol=aprs.Symbol.CAR)
+    for build in (
+        lambda: st.position(10.0, 10.0),
+        lambda: st.position(10.0, 10.0, course_degrees=999),
+        lambda: st.mic_e(10.0, 10.0, course_degrees=999),
+    ):
+        with pytest.raises(aprs.EncodeError) as err:
+            build()
+        assert err.value.code is aprs.RefusalCode.INVALID_ADDRESS
+
+
+def test_a_quantity_in_two_units_is_ranked_with_each_value_checked() -> None:
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+
+    def code(build: object) -> aprs.RefusalCode:
+        with pytest.raises(aprs.EncodeError) as err:
+            build()  # type: ignore[operator]
+        return err.value.code
+
+    twice = aprs.RefusalCode.VALUE_GIVEN_TWICE
+    out = aprs.RefusalCode.VALUE_OUT_OF_RANGE
+    assert code(lambda: st.position(10.0, 10.0, speed_knots=5, speed_kmh=9)) is twice
+    assert code(lambda: st.position(10.0, 10.0, speed_knots=799.5, speed_kmh=-1)) is out
+    assert code(lambda: st.position(10.0, 10.0, altitude_feet=5, altitude_m=304800)) is out
+    assert code(lambda: st.weather(10.0, 10.0, temperature_f=50, temperature_c=10, humidity_percent=0)) is (
+        aprs.RefusalCode.VALUE_HAS_NO_FORM
+    )
+    assert code(lambda: st.weather(10.0, 10.0, rain_1h_in=1, rain_1h_mm=1000, pressure_mbar=99999)) is out
+
+
+def test_a_name_or_timestamp_fault_comes_before_not_a_number() -> None:
+    nan = float("nan")
+    weather = aprs.Weather(wind_direction_degrees=nan, wind_speed_mph=1, wind_gust_mph=2, temperature_f=3)
+    stamp = aprs.Timestamp("092460z")
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(aprs.PositionlessWeather(stamp, weather))
+    assert err.value.code is aprs.RefusalCode.INVALID_TIMESTAMP
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(aprs.ObjectReport(name="TOOLONGNAME1", latitude=1, longitude=nan, symbol=aprs.Symbol.CAR))
+    assert err.value.code is aprs.RefusalCode.INVALID_NAME
+    with pytest.raises(aprs.EncodeError) as err:
+        aprs.encode_info(
+            aprs.ObjectReport(
+                name="OK", timestamp=aprs.Timestamp("111111z"), latitude=1, longitude=nan, symbol=aprs.Symbol.CAR
+            )
+        )
+    assert err.value.code is aprs.RefusalCode.NOT_A_NUMBER
+
+
+def test_non_finite_builder_input_is_refused_never_raised() -> None:
+    inf = float("inf")
+    st = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    nan_code = aprs.RefusalCode.NOT_A_NUMBER
+    for build in (
+        lambda: st.mic_e(10.0, 10.0, course_degrees=-inf),
+        lambda: st.mic_e(10.0, 10.0, altitude_m=inf),
+        lambda: st.mic_e(10.0, 10.0, ambiguity=inf),  # type: ignore[arg-type]
+        lambda: st.telemetry(float("nan"), [1, 2, 3, 4, 5]),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(aprs.EncodeError) as err:
+            build()
+        assert err.value.code is nan_code

@@ -66,7 +66,13 @@ from pdn_aprs import (
     encode_info,
     mic_e_destination,
 )
-from pdn_aprs._neutral import NeutralFormError, from_neutral, packet_to_neutral, to_neutral
+from pdn_aprs._neutral import (
+    NeutralFormError,
+    _refusal_for_unrepresentable,
+    from_neutral,
+    packet_to_neutral,
+    to_neutral,
+)
 
 LENIENT = ParseOptions.lenient()
 STRICT = ParseOptions.strict()
@@ -203,21 +209,41 @@ def dump_line(n: int, hex_line: str) -> str:
 # ---------------------------------------------------------------- encode
 
 
+def _stand_in_symbols(value: Any) -> None:
+    """A symbol that is not two characters cannot be held by ``Symbol``; one that is invalid the
+    same way (an unknown table) stands in for it, so the encoder refuses it as invalid-symbol."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key == "symbol" and isinstance(inner, str) and len(inner) != 2:
+                value[key] = "x-"
+            else:
+                _stand_in_symbols(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            _stand_in_symbols(inner)
+
+
 def encode_line(n: int, text: str) -> str:
     item = json.loads(text)
     n = item.get("n", n)
+    _stand_in_symbols(item.get("data"))
     try:
         try:
             data = from_neutral(item["data"])
+        except EncodeError as e:
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value})
         except (NeutralFormError, ValueError, KeyError, TypeError) as e:
-            if item["data"].get("type") in ("ack", "reject") and "message_id" in item["data"]:
+            refusal = _refusal_for_unrepresentable(item["data"])
+            if refusal is not None:
                 # the data type has no ID of its own to hold: the encoder's rule, not a gap
                 return dumps(
                     {
                         "n": n,
                         "result": "refused",
-                        "reason": f"an {item['data']['type']} carries no message ID of its own",
-                        "refusal": RefusalCode.FIELD_NOT_ALLOWED.value,
+                        "reason": f"an {item['data']['type']} carries no message ID of its own"
+                        if refusal is RefusalCode.FIELD_NOT_ALLOWED
+                        else f"refused as {refusal.value} (and an {item['data']['type']} carries no message ID)",
+                        "refusal": refusal.value,
                     }
                 )
             # this library's data cannot hold something in the neutral data

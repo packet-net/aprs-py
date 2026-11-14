@@ -24,7 +24,13 @@ from pdn_aprs import (
     decode_ax25,
     decode_tnc2,
 )
-from pdn_aprs._neutral import NeutralFormError, from_neutral, header_to_neutral, to_neutral
+from pdn_aprs._neutral import (
+    NeutralFormError,
+    _refusal_for_unrepresentable,
+    from_neutral,
+    header_to_neutral,
+    to_neutral,
+)
 from pdn_aprs.encode import encode_info, mic_e_destination
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,6 +235,13 @@ def check_tolerance(case: dict[str, Any]) -> list[str]:
     return check_strict_expectation(decode_case(case, options), case)
 
 
+def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:
+    """A refusal must carry the reason code a case names (when it names one)."""
+    if want is None or error.code.value == want:
+        return []
+    return [f"refused as {error.code.value}, expected {want}: {error}"]
+
+
 def check_reencode(case: dict[str, Any]) -> list[str]:
     outcome = decode_case(case, ParseOptions.lenient())
     assert outcome.packet is not None
@@ -239,7 +252,7 @@ def check_reencode(case: dict[str, Any]) -> list[str]:
         new_destination = mic_e_destination(data) if isinstance(data, MicEReport) else destination
     except EncodeError as e:
         if case["reencode"] == "refused":
-            return []
+            return _refusal_differences(case.get("reencode_refusal"), e)
         return [f"refused: {e}"]
     if case["reencode"] == "refused":
         return [f"expected the encoder to refuse, it wrote {written!r}"]
@@ -274,15 +287,26 @@ def check_encode(case: dict[str, Any]) -> list[str]:
     expect = case["expect"]
     try:
         data = from_neutral(case["input"]["encode"])
+    except EncodeError as e:
+        # refused before it is built (third-party data nested too deep)
+        if expect.get("refused"):
+            return _refusal_differences(expect.get("refusal"), e)
+        return [f"refused: {e}"]
     except NeutralFormError as e:
         # the data model cannot even hold this (an ack with its own message ID, say)
-        return [] if expect.get("refused") else [f"cannot represent: {e}"]
+        if not expect.get("refused"):
+            return [f"cannot represent: {e}"]
+        code = _refusal_for_unrepresentable(case["input"]["encode"])
+        want = expect.get("refusal")
+        if want is None or (code is not None and code.value == want):
+            return []
+        return [f"cannot represent ({e}), expected {want}"]
     try:
         written = encode_info(data)
         destination = mic_e_destination(data) if isinstance(data, MicEReport) else None
     except EncodeError as e:
         if expect.get("refused"):
-            return []
+            return _refusal_differences(expect.get("refusal"), e)
         return [f"refused: {e}"]
     if expect.get("refused"):
         return [f"expected the encoder to refuse, it wrote {written!r}"]

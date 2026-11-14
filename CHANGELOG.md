@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+Round 3 rulings of the vectors (aprs-vectors `round-3`), shared by all six libraries as 1.1.0.
+
+### Changed
+
+- Third-party packets nest at most four deep: a fifth `}` is not read, and the packet whose information field it starts is `unrecognized` (`malformed`) with `error:invalid-third-party`. A line of thousands of `}` no longer recurses to the interpreter's limit.
+- An AX.25 address is upper-case letters and digits, then padding. A lower-case letter is still tolerated (`invalid-ax25-address-characters`); any other character, a space before the last character included, makes the header unusable (`invalid-address`), so no TNC2 line is written from it.
+- A `!DAO!` on an ambiguous position in a weather report is met before the weather comment, so a strict decoder rejects it as `dao-with-ambiguity`, not `weather-comment`.
+- Refusal order, where a record has several faults: more analog values than a telemetry report (5), base-91 telemetry (1-5) or `EQNS.` (15) holds is `too-long`, fewer is `malformed`; a message with an invalid reply-ack and no message ID is `invalid-message-id`; a directed query's addressee is judged before its type; a weather report's altitude has no place, so it is `field-not-allowed` whatever its value; a status locator with an unknown symbol table is `invalid-symbol`, and a lower-case locator (status, Mic-E or Maidenhead beacon) is `malformed` whatever else is missing; a course, speed or range in the place a weather report's wind or a GGA altitude holds keeps its own checks (`value-out-of-range`, `value-has-no-form`) ahead of `extension-conflict`; compressed wind with only a direction or only a speed still has the one given checked; undecoded inner data of a third-party packet is `not-encodable`, ahead of its header.
+- NMEA data is its sentence: a sentence given without the fields it holds is written, a field given that disagrees with it is `invalid-nmea`, and so is a comment given with a sentence that has no checksum (it was `field-not-allowed`).
+- A Mic-E report with no speed given is written (its read-back always has speed 0), so a Mic-E position within a rounding step of 90 or 180 degrees, with ambiguity, is written in the box below the edge as the ruling says.
+- Text the neutral form leaves out is empty text: no positioned symbol is `invalid-symbol`, no name `invalid-name`, no addressee `invalid-addressee`, and a general or directed query with no type is `invalid-code` (a query with no type was `missing-field`).
+- Base-91 telemetry on a weather report has no place: `field-not-allowed`, and its own checks do not run.
+- Undecoded data at any depth of third-party nesting is `not-encodable`, ahead of the outer header.
+
+- Third-party data nested more than four deep is refused with `invalid-third-party-header`, ahead of any fault inside it (undecoded data at the end of the chain is still `not-encodable`). The chain is walked in a loop, as `to_neutral` does, so a chain built thousands deep is refused or converted without a recursion error.
+
+### Behaviour changes for 1.x callers
+
+- Lower-case locators (status, Mic-E, Maidenhead beacon) are refused as `malformed`, where the encoder used to write them in upper case. The `Station` builders still write them in upper case.
+- AX.25 addresses with punctuation, control characters or a space before the last character are `invalid-address` (an unusable header), not a tolerated defect.
+- Telemetry with more values than the field holds is `too-long` (was `malformed`); a comment with an NMEA sentence that has no checksum is `invalid-nmea`; a weather report's altitude and telemetry are `field-not-allowed`.
+- Decoding stops at four levels of third-party nesting.
+
+### Fixed
+
+- A NaN or infinity no longer hides an earlier code: a name, timestamp, addressee or header fault is named ahead of `not-a-number`, as the order has it, and a NaN in a field a weather report has no place for (an altitude without GGA bytes, telemetry, a frequency) is not judged.
+- `Station` builders refuse non-finite Mic-E course, altitude, ambiguity and telemetry sequence with `not-a-number` instead of raising `OverflowError` or `TypeError`.
+- A `Station` method given one quantity in both units (speed, altitude, temperature, rain) is built once with each unit and refuses with the first code in the Refusal reasons order among each result and `value-given-twice` (which sits after `missing-field`), so a value out of range in either unit, or any earlier fault, wins; it is never built from one unit.
+- `build_packet` and the `Station` builders check the header first and as APRS-IS has it: a source, destination or path entry that is not 1-9 letters, digits or `-` (`BAD!!`) is `invalid-address`, ahead of any fault in the data. It used to accept any printable text.
+- `Station` builders name a quantity given in both units (`value-given-twice`) in the Refusal reasons order, after any earlier code, instead of at once; a Mic-E report is refused for its out-of-range values (a speed of 999.5) before its destination at the poles is judged.
+- The vectors runner compares refusal codes (`refusal` and `reencode_refusal`), not only that a refusal happened.
+- The dump tool stands in an invalid symbol for one that is not two characters, so such data is refused as `invalid-symbol` instead of being reported unsupported, and names the refusal for an ack or reject given a message ID.
+
 ## [1.0.1] - 2026-11-12
 
 ### Added

@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any
 
 from .diagnostics import Diagnostic
-from .errors import AprsError
+from .errors import AprsError, EncodeError, RefusalCode
 from .model import (
     Ack,
     AgreloDf,
@@ -78,7 +78,13 @@ from .model import (
 from .packet import Packet, PathEntry
 from .symbols import Symbol
 
-__all__ = ["NeutralFormError", "from_neutral", "header_to_neutral", "packet_to_neutral", "to_neutral"]
+__all__ = [
+    "NeutralFormError",
+    "from_neutral",
+    "header_to_neutral",
+    "packet_to_neutral",
+    "to_neutral",
+]
 
 
 class NeutralFormError(AprsError):
@@ -157,10 +163,33 @@ def _object(obj: Any) -> dict[str, Any]:
 
 
 def to_neutral(data: AprsData) -> dict[str, Any]:
-    """Decoded data in the neutral form, with its ``type``."""
-    out: dict[str, Any] = {"type": data.kind}
-    out.update(_object(data))
-    return out
+    """Decoded data in the neutral form, with its ``type``.
+
+    A chain of third-party packets is walked in a loop, so one built by a caller thousands deep
+    does not exhaust the stack."""
+    if not isinstance(data, ThirdParty):
+        out: dict[str, Any] = {"type": data.kind}
+        out.update(_object(data))
+        return out
+    top: dict[str, Any] = {"type": data.kind}
+    target = top
+    current: AprsData = data
+    while isinstance(current, ThirdParty):
+        packet = current.packet
+        inner: dict[str, Any] = {"source": packet.source, "destination": packet.destination}
+        if packet.path:
+            inner["path"] = [str(p) for p in packet.path]
+        target["packet"] = inner
+        if isinstance(packet.data, ThirdParty):
+            nested: dict[str, Any] = {"type": packet.data.kind}
+            inner["data"] = nested
+            target = nested
+        else:
+            inner["data"] = to_neutral(packet.data)
+        if packet.diagnostics:
+            inner["diagnostics"] = [str(d) for d in packet.diagnostics]
+        current = packet.data
+    return top
 
 
 def header_to_neutral(packet: Packet) -> dict[str, Any]:
@@ -242,7 +271,7 @@ def _packet(d: dict[str, Any]) -> Packet:
     diagnostics = tuple(Diagnostic.parse(x) for x in d.get("diagnostics", ()))
     # a header's source and destination are always written, even when empty; one left out is empty
     source, destination = d.get("source", ""), d.get("destination", "")
-    return Packet(source, destination, path, b"", from_neutral(d["data"]), diagnostics, third_party=True)
+    return Packet(source, destination, path, b"", _from_neutral(d["data"]), diagnostics, third_party=True)
 
 
 _CONVERT: dict[str, Any] = {
@@ -273,7 +302,23 @@ _CONVERT: dict[str, Any] = {
 
 
 def from_neutral(data: dict[str, Any]) -> AprsData:
-    """Data from the neutral form (the inverse of :func:`to_neutral`)."""
+    """Data from the neutral form (the inverse of :func:`to_neutral`).
+
+    Third-party packets nest at most four deep: the input's depth is counted in a loop before
+    anything recurses, and a deeper chain raises :class:`EncodeError`
+    (``invalid-third-party-header``), as the encoder refuses it."""
+    depth = 0
+    node: Any = data
+    while isinstance(node, dict) and node.get("type") == "third-party":
+        depth += 1
+        if depth > 4:
+            raise EncodeError("third-party packets nest at most 4 deep", RefusalCode.INVALID_THIRD_PARTY_HEADER)
+        packet = node.get("packet")
+        node = packet.get("data") if isinstance(packet, dict) else None
+    return _from_neutral(data)
+
+
+def _from_neutral(data: dict[str, Any]) -> AprsData:
     kind = data["type"]
     try:
         cls = TYPES[kind]
@@ -291,6 +336,16 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             kwargs[key] = _CONVERT[key](value)
         else:
             kwargs[key] = value
+    # text the neutral form leaves out is empty text, which the encoder refuses as such
+    # (vectors interpretations.md, "Absent text is empty text")
+    if cls in (Query, DirectedQuery) and "query_type" not in kwargs:
+        kwargs["query_type"] = ""
+    if cls in (ObjectReport, ItemReport) and "name" not in kwargs:
+        kwargs["name"] = ""
+    if cls in (PositionReport, MicEReport, ObjectReport, ItemReport) and "symbol" not in kwargs:
+        kwargs["symbol"] = Symbol.parse("x-")  # an unknown table: invalid-symbol
+    if "addressee" in cls.__dataclass_fields__ and "addressee" not in kwargs:
+        kwargs["addressee"] = ""
     if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
         # empty text is left out of the neutral form
         kwargs["text"] = ""
@@ -298,3 +353,26 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
         return cls(**kwargs)
     except TypeError as e:
         raise NeutralFormError(f"{kind}: {e}") from None
+
+
+def _refusal_for_unrepresentable(data: dict[str, Any]) -> RefusalCode | None:
+    """The refusal an encoder gives data this library's data model cannot hold, or None.
+
+    An ack or a reject has no message ID of its own, so one given is a field the report has no
+    place for (``field-not-allowed``); the data's other faults are judged without it, and a code
+    that comes before ``field-not-allowed`` in the vectors' order wins.
+    """
+    from .encode import _PRIORITY, encode_info
+
+    kind = data.get("type")
+    if kind not in ("ack", "reject") or "message_id" not in data:
+        return None
+    rest = {k: v for k, v in data.items() if k != "message_id"}
+    try:
+        encode_info(from_neutral(rest))
+    except EncodeError as e:
+        if _PRIORITY[e.code] < _PRIORITY[RefusalCode.FIELD_NOT_ALLOWED]:
+            return e.code
+    except (NeutralFormError, ValueError, KeyError, TypeError):
+        return None
+    return RefusalCode.FIELD_NOT_ALLOWED

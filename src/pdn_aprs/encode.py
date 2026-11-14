@@ -174,20 +174,64 @@ class _Faults:
             raise min(self.found, key=lambda e: _PRIORITY[e.code])
 
 
-def _has_nonfinite(value: Any) -> bool:
+def _has_nonfinite(value: Any, ignore: frozenset[str] = frozenset()) -> bool:
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
         return any(_has_nonfinite(v) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value))
+        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value) if f.name not in ignore)
     return False
+
+
+def _no_place(data: Any) -> frozenset[str]:
+    """The fields of ``data`` that have no place in it, whose own checks (a NaN among them) do
+    not run: a weather report has no comment to carry an altitude, telemetry or a frequency."""
+    if isinstance(data, PositionedData) and data.weather is not None:
+        gga = data.compressed and data.compression is not None and data.compression.source is CompressionSource.GGA
+        names = {"telemetry", "frequency"}
+        if not gga:
+            names.add("altitude_feet")
+        return frozenset(names)
+    return frozenset()
+
+
+def _finite(value: Any) -> Any:
+    """``value`` with every NaN or infinity in it replaced by 0.0."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0.0
+    if isinstance(value, tuple):
+        return tuple(_finite(v) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        changes = {}
+        for fld in dataclasses.fields(value):
+            old = getattr(value, fld.name)
+            new = _finite(old)
+            if new is not old and new != old:
+                changes[fld.name] = new
+        return dataclasses.replace(value, **changes) if changes else value
+    return value
+
+
+def _nan_or_earlier(data: Any, encoder: Callable[[Any], bytes], why: str) -> EncodeError:
+    """The refusal for data a NaN or infinity made the encoder fail on: ``not-a-number``, unless
+    a code that comes before it in the order (a name, a timestamp, an addressee...) applies, which
+    is found by encoding the data again with the non-finite values made finite."""
+    nan = _refuse(RefusalCode.NOT_A_NUMBER, why)
+    try:
+        encoder(_finite(data))
+    except EncodeError as e:
+        if _PRIORITY[e.code] < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
+            return e
+    except (ValueError, OverflowError):
+        pass
+    return nan
 
 
 def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
-    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
+    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data, _no_place(data)):
         return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
     return e
 
@@ -203,6 +247,12 @@ def _check_text(text: str, what: str) -> None:
 def _check_address(call: str, what: str, code: RefusalCode = RefusalCode.INVALID_ADDRESSEE) -> None:
     if not call or len(call) > 9 or not _util.is_printable_ascii(call) or " " in call or ":" in call:
         raise _refuse(code, f"{what} {call!r} is not 1-9 printable characters without spaces or colons")
+
+
+def _check_header_address(call: str, what: str) -> None:
+    """A source, destination or path entry as APRS-IS carries it: 1-9 letters, digits or ``-``."""
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,9}", call):
+        raise _refuse(RefusalCode.INVALID_ADDRESS, f"{what} {call!r} is not 1-9 letters, digits or -")
 
 
 def _check_symbol(data: PositionedData) -> None:
@@ -242,7 +292,11 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
     decoded = decode_info(info, destination, ctx)
     if any(d.severity is not Severity.INFO for d in ctx.diags):
         return False
-    return not _shape_differences(to_neutral(data), to_neutral(decoded), numbers=numbers)
+    given = to_neutral(data)
+    if isinstance(data, MicEReport):
+        # a Mic-E report always has a speed: one not given is 0
+        given.setdefault("speed_knots", 0)
+    return not _shape_differences(given, to_neutral(decoded), numbers=numbers)
 
 
 def _with_comment(
@@ -455,6 +509,17 @@ def _course_speed(course: float, knots: float, *, is_course: bool = True) -> str
     return chr(c + 33) + chr(s + 33)
 
 
+def _check_compressed_course_speed(course: float | None, knots: float | None, f: _Faults) -> None:
+    """A compressed course and speed's own checks, which hold whatever else wants the cs bytes."""
+    if course is not None:
+        if not 0 <= _nearest(course) <= 360:
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"course {course} is not 0-360")
+        elif _nearest(course) == 0:
+            f.add(RefusalCode.VALUE_HAS_NO_FORM, "a compressed course of 0 has no form; north is 360")
+    if knots is not None and (knots <= -1 or not 0 <= _nearest(math.log(knots + 1) / math.log(1.08)) <= 90):
+        f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"speed {knots} knots has no compressed step")
+
+
 def _altitude(feet: float) -> str:
     value = _nearest(feet)
     if value < 0:
@@ -506,17 +571,19 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
         if w.wind_direction_degrees is None or w.wind_speed_mph is None:
             f.add(RefusalCode.MISSING_FIELD, "compressed wind needs both a direction and a speed")
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
+            _check_compressed_course_speed(data.course_degrees, data.speed_knots, f)
             f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report's cs bytes carry the wind")
         if data.altitude_feet is not None:
             f.add(
                 RefusalCode.EXTENSION_CONFLICT if gga else RefusalCode.FIELD_NOT_ALLOWED,
                 "a weather report's cs bytes carry the wind, not an altitude",
             )
-        if w.wind_direction_degrees is not None and w.wind_speed_mph is not None:
-            speed = w.wind_speed_mph / _util.KNOTS_TO_MPH
-            cs = f.guard(lambda: _course_speed(w.wind_direction_degrees or 0, speed, is_course=False), default="  ")
+        # what is given is judged even when the other half is missing
+        speed = (w.wind_speed_mph or 0) / _util.KNOTS_TO_MPH
+        cs = f.guard(lambda: _course_speed(w.wind_direction_degrees or 0, speed, is_course=False), default="  ")
     elif gga:
         if data.course_degrees is not None or data.speed_knots is not None or data.range_miles is not None:
+            _check_compressed_course_speed(data.course_degrees, data.speed_knots, f)
             f.add(
                 RefusalCode.EXTENSION_CONFLICT, "a GGA compressed position carries altitude, not course, speed or range"
             )
@@ -539,26 +606,19 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
                 altitude_text = f.guard(_altitude, data.altitude_feet, default="")
         course, knots = data.course_degrees, data.speed_knots
         if course is not None or knots is not None:
+            before = len(f.found)
+            _check_compressed_course_speed(course, knots, f)
             if weather:
                 f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report carries wind, not course and speed")
-            else:
-                before = len(f.found)
-                if course is not None:
-                    if not 0 <= _nearest(course) <= 360:
-                        f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"course {course} is not 0-360")
-                    elif _nearest(course) == 0:
-                        f.add(RefusalCode.VALUE_HAS_NO_FORM, "a compressed course of 0 has no form; north is 360")
-                if knots is not None and (knots <= -1 or not 0 <= _nearest(math.log(knots + 1) / math.log(1.08)) <= 90):
-                    f.add(RefusalCode.VALUE_OUT_OF_RANGE, f"speed {knots} knots has no compressed step")
-                if data.range_miles is not None:
-                    f.add(
-                        RefusalCode.EXTENSION_CONFLICT,
-                        "a compressed position carries course and speed, or range, not both",
-                    )
-                elif course is None or knots is None:
-                    f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
-                elif len(f.found) == before:
-                    cs = _course_speed(course, knots)
+            elif data.range_miles is not None:
+                f.add(
+                    RefusalCode.EXTENSION_CONFLICT,
+                    "a compressed position carries course and speed, or range, not both",
+                )
+            elif course is None or knots is None:
+                f.add(RefusalCode.MISSING_FIELD, "a compressed course and speed needs both")
+            elif len(f.found) == before:
+                cs = _course_speed(course, knots)
         if range_cs is not None and course is None and knots is None:
             cs = range_cs
     if cs is None:
@@ -735,7 +795,9 @@ def _frequency_text(fq: VoiceFrequency, f: _Faults) -> str:
 def _telemetry_text(t: CommentTelemetry | None, f: _Faults) -> str:
     if t is None:
         return ""
-    if not 1 <= len(t.analog) <= 5:
+    if len(t.analog) > 5:
+        f.add(RefusalCode.TOO_LONG, "comment telemetry has 1-5 analog values")
+    elif not t.analog:
         f.add(RefusalCode.MALFORMED, "comment telemetry has 1-5 analog values")
     values = [t.sequence, *t.analog]
     if t.digital is not None:
@@ -892,9 +954,20 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
         if data.compression is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a compression type needs a compressed position")
         position = f.guard(_uncompressed, data, lat_units, lon_units, default="")
-        altitude = "" if data.altitude_feet is None else f.guard(_altitude, data.altitude_feet, default="")
+        altitude = ""
+        if data.altitude_feet is not None:
+            if weather:
+                # no comment to hold an /A=, so no place for it: its range is not judged
+                f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment for an /A= altitude")
+            else:
+                altitude = f.guard(_altitude, data.altitude_feet, default="")
     dao = f.guard(_dao_text, data, a, o, default="")
-    telemetry = _telemetry_text(data.telemetry, f)
+    if weather and data.telemetry is not None:
+        # no comment to carry it: no place, so its own checks do not run
+        f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment to carry telemetry")
+        telemetry = ""
+    else:
+        telemetry = _telemetry_text(data.telemetry, f)
     if weather:
         if data.comment:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment")
@@ -905,8 +978,6 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
                 RefusalCode.FIELD_NOT_ALLOWED,
                 "a weather report has no comment for an /A= altitude the cs bytes cannot hold",
             )
-        if telemetry:
-            f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment to carry telemetry")
         if data.frequency is not None or data.signpost is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report carries weather, not other data")
         if not data.compressed and any(
@@ -922,7 +993,8 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
                 data.storm,
             )
         ):
-            # the wind holds the data extension
+            # the wind holds the data extension; what was given there still gets its own checks
+            _extension(data, f)
             f.add(RefusalCode.EXTENSION_CONFLICT, "a weather report carries wind, not another data extension")
         body = position + _weather_text(data.weather or Weather(), positionless=False, compressed=data.compressed, f=f)
         return lambda comment: body + dao
@@ -1177,7 +1249,7 @@ def _mic_e(data: MicEReport) -> bytes:
             altitude_later = f.guard(_altitude, data.altitude_feet, default="")
     locator = ""
     if data.locator is not None:
-        if not _util.is_locator(data.locator):
+        if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
             f.add(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
         else:
             locator = data.locator.upper() + "/G"
@@ -1235,6 +1307,10 @@ def _is_id(text: str) -> bool:
 def _message_id(msg_id: str | None, reply_ack: str | None) -> str:
     if msg_id is None:
         if reply_ack is not None:
+            if reply_ack and not _is_id(reply_ack):
+                raise _refuse(
+                    RefusalCode.INVALID_MESSAGE_ID, f"reply-ack {reply_ack!r} is not up to 5 letters and digits"
+                )
             raise _refuse(RefusalCode.MISSING_FIELD, "a reply-ack goes with a message ID")
         return ""
     if not _is_id(msg_id):
@@ -1319,7 +1395,9 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
     elif isinstance(data, TelemetryCoefficients):
         if not all(math.isfinite(v) for v in data.coefficients):
             raise _refuse(RefusalCode.NOT_A_NUMBER, "a coefficient is a finite number")
-        if not 1 <= len(data.coefficients) <= 15:
+        if len(data.coefficients) > 15:
+            raise _refuse(RefusalCode.TOO_LONG, "EQNS. carries 1-15 coefficients")
+        if not data.coefficients:
             raise _refuse(RefusalCode.MALFORMED, "EQNS. carries 1-15 coefficients")
         texts = data.coefficients_text
         if len(texts) != len(data.coefficients) or any(
@@ -1346,6 +1424,7 @@ _DEFINED_QUERIES = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST
 
 def _directed_query(data: DirectedQuery) -> bytes:
     _check_message_addressee(data.addressee, "a directed query")
+    head = _addressee(data.addressee)
     qtype = data.query_type
     target = data.target or ""
     if target and (len(target) > 9 or not all(c.isascii() and (c.isalnum() or c == "-") for c in target)):
@@ -1358,7 +1437,7 @@ def _directed_query(data: DirectedQuery) -> bytes:
         target = target.ljust(9)
     elif target and qtype not in _DEFINED_QUERIES:
         target = " " + target
-    return _checked(data, _addressee(data.addressee) + "?" + qtype + target)
+    return _checked(data, head + "?" + qtype + target)
 
 
 # ---------------------------------------------------------------- the rest
@@ -1373,10 +1452,12 @@ def _status(data: StatusReport) -> bytes:
     if data.locator is not None:
         if data.timestamp is not None:
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report with a grid locator has no timestamp")
-        if not _util.is_locator(data.locator):
+        if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
             f.add(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
-        if data.symbol is None or not data.symbol.is_valid:
+        if data.symbol is None:
             f.add(RefusalCode.MISSING_FIELD, "a grid locator status report needs a symbol")
+        elif not data.symbol.is_valid:
+            f.add(RefusalCode.INVALID_SYMBOL, f"symbol {str(data.symbol)!r} is not a valid table and code")
     elif data.symbol is not None:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a status report's symbol goes with a grid locator")
     if data.beam is not None:
@@ -1403,7 +1484,9 @@ def _telemetry(data: TelemetryReport) -> bytes:
     seq = data.sequence
     if not seq or not (seq.isascii() and seq.isalnum()):
         f.add(RefusalCode.MALFORMED, "a telemetry sequence is letters and digits")
-    if len(data.analog) != 5:
+    if len(data.analog) > 5:
+        f.add(RefusalCode.TOO_LONG, "a telemetry report has five analog values")
+    elif len(data.analog) < 5:
         f.add(RefusalCode.MALFORMED, "a telemetry report has five analog values")
     if data.bits is None:
         f.add(RefusalCode.MISSING_FIELD, "a telemetry report has eight 0/1 bits")
@@ -1475,16 +1558,34 @@ def _nmea(data: NmeaSentence) -> bytes:
         if got != int(s[star + 1 :], 16):
             raise _refuse(RefusalCode.INVALID_NMEA, "the NMEA checksum does not match the sentence")
     if data.comment and not data.has_checksum:
-        raise _refuse(RefusalCode.FIELD_NOT_ALLOWED, "a comment goes after the sentence's checksum")
+        # only a checksum ends a sentence: written, the comment would read back as part of it
+        raise _refuse(RefusalCode.INVALID_NMEA, "a comment goes after the sentence's checksum")
     raw = ("$" + s).encode("ascii") + data.comment.encode("utf-8")
-    if not _reads_back(data, raw, DEFAULT_DESTINATION, numbers=True):
+    if not _nmea_reads_back(data, raw):
         raise _refuse(RefusalCode.INVALID_NMEA, "the sentence does not read back as the same NMEA data")
     return raw
 
 
+def _nmea_reads_back(data: NmeaSentence, raw: bytes) -> bool:
+    """Whether ``raw`` reads back with the sentence and comment as given and every field given
+    agreeing with the sentence: a field left out is the sentence's own (vectors interpretations.md,
+    NMEA data is its sentence)."""
+    from ._decode import Ctx, decode_info
+    from ._neutral import to_neutral
+
+    ctx = Ctx(_LENIENT)
+    decoded = decode_info(raw, DEFAULT_DESTINATION, ctx)
+    if any(d.severity is not Severity.INFO for d in ctx.diags):
+        return False
+    given, found = to_neutral(data), to_neutral(decoded)
+    if found.get("type") != "nmea":
+        return False
+    return not any(_shape_differences(v, found.get(k), numbers=True) for k, v in given.items())
+
+
 def _maidenhead(data: MaidenheadBeacon) -> bytes:
     _check_text(data.comment, "comment")
-    if not _util.is_locator(data.locator):
+    if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
         raise _refuse(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
     return _checked(data, "[" + data.locator.upper() + "]" + data.comment)
 
@@ -1554,11 +1655,36 @@ _INNER_HEADER_DEFECTS = frozenset(
 )
 
 
+MAX_THIRD_PARTY_DEPTH = 4
+"""Third-party packets nest at most four deep (vectors interpretations.md)."""
+
+
+def _third_party_walk(data: ThirdParty) -> tuple[int, str | None]:
+    """How many third-party levels ``data`` holds, and the type name of undecoded data at the end
+    of the chain (None when it ends in something that can be written). A loop, not a recursion,
+    so a chain built thousands deep is judged without exhausting the stack."""
+    depth = 0
+    current: AprsData = data
+    while isinstance(current, ThirdParty):
+        depth += 1
+        packet = current.packet
+        if packet.info or packet.data == Unrecognized(UnrecognizedReason.EMPTY):
+            return depth, None
+        current = packet.data
+    return depth, None if type(current) in _ENCODERS else type(current).__name__
+
+
 def _third_party(data: ThirdParty) -> bytes:
     from ._decode import _ADDRESS, _THIRD_PARTY_SOURCE
 
     inner = data.packet
     bad = RefusalCode.INVALID_THIRD_PARTY_HEADER
+    depth, undecoded = _third_party_walk(data)
+    if undecoded is not None:
+        # data with no form to write comes first in the order, ahead of the header
+        raise _refuse(RefusalCode.NOT_ENCODABLE, f"{undecoded} cannot be encoded")
+    if depth > MAX_THIRD_PARTY_DEPTH:
+        raise _refuse(bad, f"third-party packets nest at most {MAX_THIRD_PARTY_DEPTH} deep")
     # the inner header comes before the inner data, so its faults are named first
     if any(d.code in _INNER_HEADER_DEFECTS for d in inner.diagnostics):
         # the defect is part of the data, and no clean header reproduces it
@@ -1651,13 +1777,26 @@ def encode_info(data: AprsData) -> bytes:
     encoder = _ENCODERS.get(type(data))
     if encoder is None:
         raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(data).__name__} cannot be encoded")
+    if isinstance(data, ThirdParty):
+        # judged in a loop before anything recurses (the NaN rule below walks the data)
+        depth, undecoded = _third_party_walk(data)
+        if undecoded is not None:
+            raise _refuse(RefusalCode.NOT_ENCODABLE, f"{undecoded} cannot be encoded")
+        if depth > MAX_THIRD_PARTY_DEPTH:
+            raise _refuse(
+                RefusalCode.INVALID_THIRD_PARTY_HEADER, f"third-party packets nest at most {MAX_THIRD_PARTY_DEPTH} deep"
+            )
+    amb = getattr(data, "ambiguity", 0)
+    if isinstance(amb, float) and not math.isfinite(amb):
+        # an ambiguity of NaN is no level to cut a position to: judged as any NaN is
+        raise _nan_or_earlier(data, encoder, "ambiguity is a number")
     try:
         return encoder(data)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
     except (ValueError, OverflowError) as e:
         # a value no packet can hold, such as a NaN latitude
-        raise _refuse(RefusalCode.NOT_A_NUMBER, f"cannot encode {type(data).__name__}: {e}") from e
+        raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
 
 
 def build_packet(
@@ -1672,15 +1811,16 @@ def build_packet(
     For a Mic-E report the destination is computed from the data (with its
     ``destination_ssid``), and ``destination`` is ignored.
     """
-    _check_address(source, "source", RefusalCode.INVALID_ADDRESS)
+    _check_header_address(source, "source")
     entries = tuple(p if isinstance(p, PathEntry) else PathEntry(p.rstrip("*"), p.endswith("*")) for p in path)
     for entry in entries:
-        _check_address(entry.address, "path entry", RefusalCode.INVALID_ADDRESS)
+        _check_header_address(entry.address, "path entry")
     if len(entries) > 8:
         raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
+    if not isinstance(data, MicEReport):
+        _check_header_address(destination, "destination")
+    # the information field first: it names the first code that applies across all the data
+    info = encode_info(data)
     if isinstance(data, MicEReport):
         destination = mic_e_destination(data)
-    else:
-        _check_address(destination, "destination", RefusalCode.INVALID_ADDRESS)
-    info = encode_info(data)
     return Packet(source, destination, entries, info, data)

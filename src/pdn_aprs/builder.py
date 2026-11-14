@@ -20,13 +20,15 @@ Speed, altitude, temperature and rain can be given in metric units instead (``sp
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import functools
+import math
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TypedDict
+from typing import Any, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import DEFAULT_DESTINATION, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -78,12 +80,60 @@ def _timestamp(value: TimestampLike, *, hms: bool = False) -> Timestamp | None:
     return Timestamp.dhm(moment.day, moment.hour, moment.minute)
 
 
-def _either(value: float | None, metric: float | None, per_unit: float, what: str) -> float | None:
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+_SPEED_AND_ALTITUDE = (("speed_knots", "speed_kmh"), ("altitude_feet", "altitude_m"))
+_WEATHER_UNITS = (
+    ("temperature_f", "temperature_c"),
+    ("rain_1h_in", "rain_1h_mm"),
+    ("rain_24h_in", "rain_24h_mm"),
+    ("rain_midnight_in", "rain_midnight_mm"),
+)
+
+
+def _one_unit_each(*pairs: tuple[str, str]) -> Callable[[_F], _F]:
+    """A builder method given one quantity in both units at once refuses with the first code in
+    the Refusal reasons order among each unit's own result and ``value-given-twice``: it is built
+    once with each unit, and never from one of them (vectors README, Builder rules)."""
+
+    def decorate(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            both = [(a, b) for a, b in pairs if kwargs.get(a) is not None and kwargs.get(b) is not None]
+            if not both:
+                return fn(self, *args, **kwargs)
+            found = [EncodeError("give each quantity once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)]
+            for keep in (0, 1):
+                variant = dict(kwargs)
+                for pair in both:
+                    variant[pair[1 - keep]] = None
+                try:
+                    fn(self, *args, **variant)
+                except EncodeError as e:
+                    found.append(e)
+            raise min(found, key=lambda e: _PRIORITY[e.code])
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorate
+
+
+def _twice(faults: list[EncodeError], what: str) -> None:
+    """Note a quantity given in both units: the data is built with the value in APRS's unit and
+    the fault named with the encoder's, in the Refusal reasons order (``value-given-twice`` comes
+    late in it, so an earlier code wins)."""
+    faults.append(EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE))
+
+
+def _either(
+    faults: list[EncodeError], value: float | None, metric: float | None, per_unit: float, what: str
+) -> float | None:
     """A quantity given in APRS's unit or in a metric one, which is divided by ``per_unit``."""
     if metric is None:
         return value
     if value is not None:
-        raise EncodeError(f"give the {what} once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
+        _twice(faults, what)
+        return value
     return metric / per_unit
 
 
@@ -109,6 +159,7 @@ class _Extras(TypedDict):
 
 
 def _extras(
+    faults: list[EncodeError],
     *,
     course_degrees: float | None,
     speed_knots: float | None,
@@ -124,11 +175,11 @@ def _extras(
     dao: bool,
 ) -> _Extras:
     """The fields a position, object or item report share, from the builder's arguments."""
-    speed = _either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
+    speed = _either(faults, speed_knots, speed_kmh, KMH_PER_KNOT, "speed")
     return {
         "course_degrees": course_degrees,
         "speed_knots": speed,
-        "altitude_feet": _either(altitude_feet, altitude_m, 1 / FEET_PER_METRE, "altitude"),
+        "altitude_feet": _either(faults, altitude_feet, altitude_m, 1 / FEET_PER_METRE, "altitude"),
         "compressed": compressed,
         "compression": CompressionType() if compressed and (course_degrees is not None or speed is not None) else None,
         "ambiguity": ambiguity,
@@ -183,7 +234,22 @@ class Station:
 
     def send(self, data: AprsData) -> Packet:
         """Any data as a packet from this station."""
-        return build_packet(self.callsign, data, destination=self.destination, path=self.path)
+        return self._send(data, [])
+
+    def _send(self, data: AprsData, faults: list[EncodeError]) -> Packet:
+        """Build the packet; ``faults`` are ones the caller noted while gathering its arguments,
+        named in the Refusal reasons order along with whatever the encoder refuses."""
+        try:
+            packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
+        except EncodeError as e:
+            if faults:
+                from .encode import _PRIORITY
+
+                raise min([e, *faults], key=lambda x: _PRIORITY[x.code]) from None
+            raise
+        if faults:
+            raise faults[0]
+        return packet
 
     def _symbol(self, symbol: Symbol | None) -> Symbol:
         chosen = symbol or self.symbol
@@ -193,6 +259,7 @@ class Station:
 
     # ------------------------------------------------------------ positions
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def position(
         self,
         latitude: float,
@@ -221,6 +288,7 @@ class Station:
         a foot of precision. ``frequency`` is the voice frequency the station listens on: MHz,
         or a :class:`~pdn_aprs.VoiceFrequency` to give a tone or an offset as well.
         """
+        faults: list[EncodeError] = []
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -229,6 +297,7 @@ class Station:
             messaging=self.messaging,
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -243,8 +312,9 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def object(
         self,
         name: str,
@@ -276,6 +346,7 @@ class Station:
         stamp = _timestamp(timestamp)
         if stamp is None:
             raise EncodeError("an object always has a timestamp", RefusalCode.MISSING_FIELD)
+        faults: list[EncodeError] = []
         data = ObjectReport(
             name=name,
             killed=killed,
@@ -285,6 +356,7 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -299,8 +371,9 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def item(
         self,
         name: str,
@@ -324,6 +397,7 @@ class Station:
         dao: bool = False,
     ) -> Packet:
         """An item report: a named thing's position (3-9 characters), without a timestamp."""
+        faults: list[EncodeError] = []
         data = ItemReport(
             name=name,
             killed=killed,
@@ -332,6 +406,7 @@ class Station:
             symbol=self._symbol(symbol),
             comment=comment,
             **_extras(
+                faults,
                 course_degrees=course_degrees,
                 speed_knots=speed_knots,
                 altitude_feet=altitude_feet,
@@ -346,8 +421,9 @@ class Station:
                 dao=dao,
             ),
         )
-        return self.send(data)
+        return self._send(data, faults)
 
+    @_one_unit_each(*_SPEED_AND_ALTITUDE)
     def mic_e(
         self,
         latitude: float,
@@ -373,12 +449,15 @@ class Station:
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude in metres goes in the Mic-E altitude bytes, whose unit is the metre, rounded
         to the metre; one in feet goes in a ``/A=``."""
-        if course_degrees is not None and round_half_away(course_degrees) == 0:
+        faults: list[EncodeError] = []
+        if course_degrees is not None and math.isfinite(course_degrees) and round_half_away(course_degrees) == 0:
             course_degrees = None
         if altitude_m is not None:
             if altitude_feet is not None:
-                raise EncodeError("give the altitude once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
-            feet: float | None = round_half_away(altitude_m) * FEET_PER_METRE
+                _twice(faults, "altitude")
+                feet: float | None = altitude_feet
+            else:
+                feet = (round_half_away(altitude_m) if math.isfinite(altitude_m) else altitude_m) * FEET_PER_METRE
         else:
             feet = altitude_feet
         data = MicEReport(
@@ -387,7 +466,7 @@ class Station:
             symbol=self._symbol(symbol),
             mic_e_message=mic_e_message,
             course_degrees=course_degrees,
-            speed_knots=_either(speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
+            speed_knots=_either(faults, speed_knots, speed_kmh, KMH_PER_KNOT, "speed") or 0,
             altitude_feet=feet,
             altitude_in_comment=altitude_feet is not None,
             comment=comment,
@@ -397,10 +476,11 @@ class Station:
             dao=Dao("W", DaoPrecision.BASE91) if dao else None,
             type_code="`" if self.messaging else "'",
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     # ------------------------------------------------------------ weather
 
+    @_one_unit_each(*_WEATHER_UNITS)
     def weather(
         self,
         latitude: float | None = None,
@@ -435,10 +515,12 @@ class Station:
         luminosity in W/m2, snow in inches. Each keyword is the name of the field it fills in
         :class:`~pdn_aprs.Weather`.
         """
+        faults: list[EncodeError] = []
         if temperature_c is not None:
             if temperature_f is not None:
-                raise EncodeError("give the temperature once, not in both units", RefusalCode.VALUE_GIVEN_TWICE)
-            temperature_f = temperature_c * 9 / 5 + 32
+                _twice(faults, "temperature")
+            else:
+                temperature_f = temperature_c * 9 / 5 + 32
         if symbol != Symbol.WEATHER_STATION and (latitude is None or longitude is None):
             raise EncodeError("a positionless weather report has no symbol", RefusalCode.SYMBOL_MISMATCH)
         weather = Weather(
@@ -446,9 +528,9 @@ class Station:
             wind_speed_mph=wind_speed_mph,
             wind_gust_mph=wind_gust_mph,
             temperature_f=temperature_f,
-            rain_1h_in=_either(rain_1h_in, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
-            rain_24h_in=_either(rain_24h_in, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
-            rain_midnight_in=_either(rain_midnight_in, rain_midnight_mm, MM_PER_INCH, "rain since midnight"),
+            rain_1h_in=_either(faults, rain_1h_in, rain_1h_mm, MM_PER_INCH, "rain in the last hour"),
+            rain_24h_in=_either(faults, rain_24h_in, rain_24h_mm, MM_PER_INCH, "rain in the last 24 hours"),
+            rain_midnight_in=_either(faults, rain_midnight_in, rain_midnight_mm, MM_PER_INCH, "rain since midnight"),
             humidity_percent=humidity_percent,
             pressure_mbar=pressure_mbar,
             luminosity_w_m2=luminosity_w_m2,
@@ -467,7 +549,7 @@ class Station:
                 if isinstance(timestamp, Timestamp)
                 else Timestamp.mdhm(moment.month, moment.day, moment.hour, moment.minute)
             )
-            return self.send(PositionlessWeather(stamp, weather))
+            return self._send(PositionlessWeather(stamp, weather), faults)
         data = PositionReport(
             latitude=latitude,
             longitude=longitude,
@@ -476,7 +558,7 @@ class Station:
             messaging=self.messaging,
             weather=weather,
         )
-        return self.send(data)
+        return self._send(data, faults)
 
     # ------------------------------------------------------------ messages
 
@@ -528,6 +610,8 @@ class Station:
     ) -> Packet:
         """A telemetry report: a sequence number (0-999, written in three digits; a larger one is
         refused, not wrapped), five analog values and eight bits."""
+        if isinstance(sequence, float) and not math.isfinite(sequence):
+            raise EncodeError("a telemetry sequence is a number", RefusalCode.NOT_A_NUMBER)
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise TypeError(f"telemetry sequence must be an int, not {type(sequence).__name__}")
         if not 0 <= sequence <= 999:
