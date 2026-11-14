@@ -1,6 +1,6 @@
 # Third-party notices
 
-pdn-aprs is licensed under the GNU Affero General Public License v3.0 or later (see [LICENSE](LICENSE)). It includes the following third-party material under its own licence.
+pdn-aprs is licensed under the MIT licence (see [LICENSE](LICENSE)). It includes the following third-party material under its own licence.
 
 ## aprs-deviceid
 
