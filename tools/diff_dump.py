@@ -299,7 +299,7 @@ def build_line(n: int, text: str) -> str:
             if isinstance(e, EncodeError):
                 record["refusal"] = e.code.value
                 record["ax25"] = "refused"
-                record["ax25_refusal"] = e.frame_code.value
+                record["ax25_refusal"] = e.code.value
             else:
                 record["via"] = "tool"  # the recipe's reader, not the builder, declined
             return dumps(record)

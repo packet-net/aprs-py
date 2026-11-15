@@ -294,11 +294,7 @@ class Station:
                 # the size is the last check, on bytes actually written: a fault the builder noted
                 # means the bytes are not the ones the program asked for, so it is not measured
                 found = faults if isinstance(e, SizeError) else [e, *faults]
-                chosen = min(found, key=lambda x: _PRIORITY[x.code])
-                if chosen is not e and e.frame_code != e.code:
-                    # a header a frame cannot carry comes before every fault the builder noted
-                    chosen = EncodeError(str(chosen), chosen.code, e.frame_code)
-                raise chosen from None
+                raise min(found, key=lambda x: _PRIORITY[x.code]) from None
             raise
         if faults:
             raise faults[0]

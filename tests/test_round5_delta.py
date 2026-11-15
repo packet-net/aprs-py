@@ -1,5 +1,4 @@
-"""Round 5, the read-back delta: a builder's empty message ID, a header fault before a data fault in
-the form written, a frame's empty destination and a builder's Mic-E altitude."""
+"""Round 5, the read-back delta: a builder's empty message ID, a data fault before a header the form cannot carry, a frame's empty destination and a builder's Mic-E altitude."""
 
 from __future__ import annotations
 
@@ -17,19 +16,20 @@ def test_a_builders_empty_message_id_is_invalid_not_missing() -> None:
     assert station.message("N0CALL", "hi").info == b":N0CALL   :hi"
 
 
-def test_a_header_fault_comes_before_a_data_fault_in_the_form_written() -> None:
-    station = aprs.Station("N0CALL", path=["WIDE1-1", "N0CALL-1*"])
+def test_a_data_fault_comes_before_a_header_the_form_cannot_carry() -> None:
+    when = aprs.Timestamp.dhm(27, 9, 23)
+    for path in (["WIDE1-1", "N0CALL-1*"], "QAR123456"):
+        with pytest.raises(aprs.EncodeError) as caught:
+            aprs.Station("N0CALL", path=path).object("TOOLONGNAME", 1, 2, aprs.Symbol.CAR, timestamp=when)
+        assert caught.value.code is aprs.RefusalCode.INVALID_NAME
+    # with sound data the call that writes a form names the header
+    packet = aprs.Station("N0CALL", path=["WIDE1-1", "N0CALL-1*"]).status("hi")
     with pytest.raises(aprs.EncodeError) as caught:
-        station.object("TOOLONGNAME", 1, 2, aprs.Symbol.CAR, timestamp=aprs.Timestamp.dhm(27, 9, 23))
+        packet.to_tnc2()
     assert caught.value.code is aprs.RefusalCode.TNC2_CANNOT_CARRY
-    assert caught.value.frame_code is aprs.RefusalCode.AX25_CANNOT_CARRY
-    # a header only a frame cannot carry: the line's code is the data's
     with pytest.raises(aprs.EncodeError) as caught:
-        aprs.Station("N0CALL", path="QAR123456").object(
-            "TOOLONGNAME", 1, 2, aprs.Symbol.CAR, timestamp=aprs.Timestamp.dhm(27, 9, 23)
-        )
-    assert caught.value.code is aprs.RefusalCode.INVALID_NAME
-    assert caught.value.frame_code is aprs.RefusalCode.AX25_CANNOT_CARRY
+        packet.to_ax25()
+    assert caught.value.code is aprs.RefusalCode.AX25_CANNOT_CARRY
 
 
 def test_an_empty_destination_is_written_as_six_spaces_in_a_frame() -> None:

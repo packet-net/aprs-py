@@ -258,13 +258,11 @@ def check_tolerance(case: dict[str, Any]) -> list[str]:
     return check_strict_expectation(outcome, case)
 
 
-def _refusal_differences(want: str | None, error: EncodeError, *, frame: bool = False) -> list[str]:
-    """A refusal must carry the reason code a case names (when it names one): the frame's where an
-    AX.25 frame was asked for."""
-    code = error.frame_code if frame else error.code
-    if want is None or code.value == want:
+def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:
+    """A refusal must carry the reason code a case names (when it names one)."""
+    if want is None or error.code.value == want:
         return []
-    return [f"refused as {code.value}, expected {want}: {error}"]
+    return [f"refused as {error.code.value}, expected {want}: {error}"]
 
 
 def check_reencode(case: dict[str, Any]) -> list[str]:
@@ -355,7 +353,7 @@ def check_build(case: dict[str, Any]) -> list[str]:
         return [f"the builder cannot say what the recipe asks: {e}"]
     except EncodeError as e:
         if expect.get("refused"):
-            return _refusal_differences(expect.get("refusal"), e, frame=frame)
+            return _refusal_differences(expect.get("refusal"), e)
         return [f"refused: {e}"]
     if expect.get("refused"):
         return [f"expected the builder to refuse, it wrote {written!r}"]

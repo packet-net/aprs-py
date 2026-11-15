@@ -139,8 +139,6 @@ class SizeError(EncodeError):
 _ORDER = (
     RefusalCode.NOT_ENCODABLE,
     RefusalCode.INVALID_ADDRESS,
-    RefusalCode.AX25_CANNOT_CARRY,
-    RefusalCode.TNC2_CANNOT_CARRY,
     RefusalCode.INVALID_THIRD_PARTY_HEADER,
     RefusalCode.INVALID_ADDRESSEE,
     RefusalCode.INVALID_NAME,
@@ -163,6 +161,8 @@ _ORDER = (
     RefusalCode.VALUE_GIVEN_TWICE,
     RefusalCode.TEXT_READS_AS_FIELD,
     RefusalCode.DOES_NOT_READ_BACK,
+    RefusalCode.AX25_CANNOT_CARRY,
+    RefusalCode.TNC2_CANNOT_CARRY,
     RefusalCode.INFORMATION_FIELD_TOO_LONG,
 )
 _PRIORITY = {code: rank for rank, code in enumerate(_ORDER)}
@@ -2040,28 +2040,6 @@ def _normalise(value: Any, leaf: Callable[[Any], Any]) -> Any:
     return value
 
 
-def _header_first(source: str, destination: str, entries: tuple[PathEntry, ...], fault: EncodeError) -> EncodeError:
-    """``fault``, a refusal of the data, with the header's own refusal put before it in each form: a
-    header a TNC2 line cannot carry gives that code (``code``), one an AX.25 frame cannot gives its code
-    (``frame_code``), whichever form is later asked for, as the Refusal reasons order says. The
-    destination is the one given (a Mic-E report's is computed from data that was refused)."""
-    if fault.code is RefusalCode.NOT_ENCODABLE:
-        return fault
-    probe = Packet(source, destination, entries, b"", StatusReport(""))
-    codes: list[RefusalCode | None] = []
-    for write in (lambda: probe.header, probe.to_ax25):
-        try:
-            write()
-        except EncodeError as e:
-            codes.append(e.code)
-        else:
-            codes.append(None)
-    line, frame = codes
-    if line is None and frame is None:
-        return fault
-    return EncodeError(str(fault), line or fault.code, frame or fault.code)
-
-
 def build_packet(
     source: str,
     data: AprsData,
@@ -2082,12 +2060,9 @@ def build_packet(
         raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
     if not isinstance(data, MicEReport):
         _check_header_address(destination, "destination")
-    # the information field first: it names the first code that applies across all the data, except
-    # that a header the line or the frame cannot carry is refused before any data fault, in that form
-    try:
-        written = _write(data)
-    except EncodeError as e:
-        raise _header_first(source, destination, entries, e) from None
+    # the information field first: it names the first code that applies across all the data; a header
+    # the line or the frame cannot carry comes after every data fault, from the call that writes the form
+    written = _write(data)
     if isinstance(data, MicEReport):
         destination = written.destination
     return Packet(source, destination, entries, written.info, data)
