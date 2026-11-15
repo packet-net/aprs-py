@@ -90,3 +90,9 @@ def test_encode(case: dict[str, Any]) -> None:
 def test_build(case: dict[str, Any]) -> None:
     """Build cases: the builder gives the TNC2 line, or the refusal, the case names."""
     _run("build", case)
+
+
+@pytest.mark.parametrize("case", _params("pass_through"))
+def test_pass_through(case: dict[str, Any]) -> None:
+    """Pass-through cases: the lenient packet written back as a TNC2 line and an AX.25 frame, or the refusal."""
+    _run("pass_through", case)

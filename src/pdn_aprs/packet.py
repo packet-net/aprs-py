@@ -162,7 +162,8 @@ class Packet:
         path = self.path
         if len(path) > 8:
             raise EncodeError("an AX.25 frame has at most 8 digipeaters", RefusalCode.AX25_CANNOT_CARRY)
-        frame = bytearray(_ax25_address(self.destination, command=True))
+        # an empty destination (a defect the held packet carries) is written as six spaces
+        frame = bytearray(_ax25_address(self.destination, command=True, may_be_empty=True))
         frame += _ax25_address(self.source, last=not path)
         for i, entry in enumerate(path):
             frame += _ax25_address(entry.address, last=i == len(path) - 1, repeated=entry.used)
@@ -205,7 +206,11 @@ class Packet:
         return self.to_tnc2().decode("utf-8", "backslashreplace")
 
 
-def _ax25_address(name: str, *, last: bool = False, command: bool = False, repeated: bool = False) -> bytes:
+def _ax25_address(
+    name: str, *, last: bool = False, command: bool = False, repeated: bool = False, may_be_empty: bool = False
+) -> bytes:
+    if may_be_empty and name == "":
+        return b"\x40" * 6 + bytes([0x60 | (0x80 if command else 0) | (1 if last else 0)])
     call, dash, ssid_text = name.partition("-")
     if dash and not ssid_text:
         # a dash with no SSID would come back from the frame as no dash

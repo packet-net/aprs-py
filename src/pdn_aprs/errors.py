@@ -69,8 +69,18 @@ class EncodeError(AprsError):
     """The data cannot be written as APRS without breaking the specification.
 
     ``code`` says why, as a :class:`RefusalCode`; the message text is for people and may change.
+    ``frame_code`` is the code when what was asked is an AX.25 frame rather than a TNC2 line: the same
+    as ``code`` except where a builder refused the data and the header it was given also cannot be
+    written in one of the two forms. The header's refusal comes first, in the form written, so
+    ``code`` is for the line and ``frame_code`` for the frame.
     """
 
-    def __init__(self, message: str, code: RefusalCode = RefusalCode.DOES_NOT_READ_BACK) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: RefusalCode = RefusalCode.DOES_NOT_READ_BACK,
+        frame_code: RefusalCode | None = None,
+    ) -> None:
         super().__init__(message)
         self.code: RefusalCode = code
+        self.frame_code: RefusalCode = frame_code or code

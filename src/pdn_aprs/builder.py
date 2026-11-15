@@ -31,7 +31,7 @@ from fractions import Fraction
 from typing import Any, Literal, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _real, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, BuilderAltitude, SizeError, _real, build_packet
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -294,7 +294,11 @@ class Station:
                 # the size is the last check, on bytes actually written: a fault the builder noted
                 # means the bytes are not the ones the program asked for, so it is not measured
                 found = faults if isinstance(e, SizeError) else [e, *faults]
-                raise min(found, key=lambda x: _PRIORITY[x.code]) from None
+                chosen = min(found, key=lambda x: _PRIORITY[x.code])
+                if chosen is not e and e.frame_code != e.code:
+                    # a header a frame cannot carry comes before every fault the builder noted
+                    chosen = EncodeError(str(chosen), chosen.code, e.frame_code)
+                raise chosen from None
             raise
         if faults:
             raise faults[0]
@@ -496,9 +500,10 @@ class Station:
 
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude, in feet or metres, goes in the Mic-E altitude bytes, whose unit is the metre:
-        rounded once to the nearest metre from the value given (1000 feet is 305 metres). One
-        outside -10000 to 743570 metres is refused (``value-out-of-range``); it is never put in a
-        ``/A=``. Without ``mic_e_message`` the station is off duty."""
+        rounded once to the nearest metre from the value given (1000 feet is 305 metres); a ``/A=`` is
+        written instead only where the comment would read as an altitude beside the bytes and the
+        ``/A=`` holds the value exactly (whole feet). One outside -10000 to 743570 metres is refused
+        (``value-out-of-range``). Without ``mic_e_message`` the station is off duty."""
         faults: list[EncodeError] = []
         if course_degrees is not None and math.isfinite(course_degrees) and round_half_away(course_degrees) == 0:
             course_degrees = None
@@ -512,10 +517,11 @@ class Station:
                 feet = None  # set below, once it is known to be in range (the product could overflow)
         given = altitude_feet if altitude_feet is not None else altitude_m
         if given is not None and math.isfinite(given):
-            # rounded once, from the value as given, to whole metres
+            # judged in whole metres, rounded once from the value as given; the encoder writes the Mic-E
+            # bytes first and a /A= only where it holds the value exactly, so the value goes on as given
             metres = round_half_away(given if altitude_feet is None else given / FEET_PER_METRE)
             if -10000 <= metres <= 743570:
-                feet = metres * FEET_PER_METRE
+                feet = BuilderAltitude(altitude_feet if altitude_feet is not None else given * FEET_PER_METRE)
             else:
                 faults.append(
                     EncodeError("a Mic-E altitude is -10000 to 743570 metres", RefusalCode.VALUE_OUT_OF_RANGE)
@@ -636,8 +642,14 @@ class Station:
         self, addressee: str, text: str = "", *, message_id: str | None = None, reply_ack: str | None = None
     ) -> Packet:
         """A message to one station. Give a ``message_id`` to ask for an acknowledgement. With no
-        ``text`` the message is empty text, which is refused (``malformed``)."""
-        return self.send(Message(addressee, text, message_id, reply_ack))
+        ``text`` the message is empty text, which is refused (``malformed``). An empty ``message_id``
+        is refused too (``invalid-message-id``): a builder is given a message ID or none (``None``)."""
+        faults: list[EncodeError] = []
+        if message_id == "":
+            faults.append(
+                EncodeError("a message ID is 1-5 letters and digits, not empty", RefusalCode.INVALID_MESSAGE_ID)
+            )
+        return self._send(Message(addressee, text, message_id or None, reply_ack), faults)
 
     def ack(self, addressee: str, message_id: str) -> Packet:
         """Acknowledge message ``message_id`` from ``addressee``."""

@@ -989,12 +989,18 @@ def _weather_text(w: Weather, *, positionless: bool, compressed: bool, f: _Fault
             or extra.letter in "cgtrpPhbLls"
         ):
             f.add(RefusalCode.TEXT_READS_AS_FIELD, f"weather extra field letter {extra.letter!r}")
+        if _has_control(extra.value):
+            f.add(RefusalCode.INVALID_CHARACTER, f"weather extra field {extra.letter!r} contains a control character")
         out.append(extra.letter + extra.value)
-    if w.software is not None or w.unit is not None:
-        if not w.software or not w.unit:
-            f.add(RefusalCode.MISSING_FIELD, "software type and unit go together")
-        else:
-            out.append(w.software + w.unit)
+    # free text: a control character is refused by its own rule before the read-back can find it changed
+    for what, text in (("software type", w.software), ("unit", w.unit)):
+        if text and _has_control(text):
+            f.add(RefusalCode.INVALID_CHARACTER, f"the weather {what} contains a control character")
+    # a software type and a unit are one thing (an empty one is absent)
+    if bool(w.software) != bool(w.unit):
+        f.add(RefusalCode.MISSING_FIELD, "software type and unit go together")
+    elif w.software and w.unit:
+        out.append(w.software + w.unit)
     return "".join(out)
 
 
@@ -1227,6 +1233,14 @@ _MIC_E_ALTITUDE_METRES = (-10000, 743570)
 """The metres the Mic-E altitude bytes hold: three base-91 characters, 10,000 m below sea level."""
 
 
+class BuilderAltitude(float):
+    """An altitude a builder was given, in feet. Neutral data's whole feet that the bytes do not hold
+    exactly go in a ``/A=``; a builder's altitude goes in the Mic-E bytes first (whatever unit it was
+    given in) and takes a ``/A=`` only where the comment would read as an altitude beside the bytes."""
+
+    __slots__ = ()
+
+
 def _near_whole(value: float) -> bool:
     return abs(value - round(value)) <= 1e-6
 
@@ -1337,25 +1351,30 @@ def _mic_e(data: MicEReport) -> _Forms:
                 )
             else:
                 f.add(RefusalCode.MISSING_FIELD, f"device suffix {suffix!r} needs a type code before it")
-    altitude_first = ""
-    altitude_later = ""
+    # the forms of the altitude, in order (Encoding rule): the Mic-E bytes (nearest metre) unless only a
+    # /A= holds the value exactly, then a /A= only if it holds the value exactly; each is tried with the
+    # comment straight on, after a /, then after a space
+    altitude_forms: list[tuple[str, str]] = [("", "")]
     if data.altitude_feet is not None:
         feet = data.altitude_feet
+        exact = _near_whole(feet) and -99999 <= round(feet) <= 999999
         # decoded data knows a /A= was where its altitude came from; neutral data's value decides
-        if data.altitude_in_comment or _altitude_in_text(feet):
-            altitude_later = f.guard(_altitude, feet, default="")
+        if data.altitude_in_comment or (_altitude_in_text(feet) and not isinstance(feet, BuilderAltitude)):
+            altitude_forms = [("", f.guard(_altitude, feet, default=""))]
         else:
             mic = f.guard(_mic_e_altitude, feet, default="")
-            altitude_first = mic
+            altitude_forms = [(mic, "")]
             if mic and not type_code and mic[0] in "`'>] ":
                 # the bytes have no clean form here (the first would read back as a type code):
                 # a /A= holds the value exactly when it is whole feet within its six digits; any
                 # other value (not whole feet, or beyond them) has no form
-                if _near_whole(feet) and -99999 <= round(feet) <= 999999:
-                    altitude_first = ""
-                    altitude_later = f.guard(_altitude, feet, default="")
+                if exact:
+                    altitude_forms = [("", f.guard(_altitude, feet, default=""))]
                 else:
                     f.add(RefusalCode.VALUE_HAS_NO_FORM, "this Mic-E altitude would read back with a type code")
+            elif mic and exact:
+                # the next form, where the comment holds an altitude the bytes would give way to
+                altitude_forms.append(("", f.guard(_altitude, feet, default="")))
     locator = ""
     if data.locator is not None:
         if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
@@ -1369,14 +1388,13 @@ def _mic_e(data: MicEReport) -> _Forms:
     if data.range_miles is not None:
         ext += f.guard(_range_text, data.range_miles, default="")
     freq = "" if data.frequency is None else _frequency_text(data.frequency, f)
-    if freq and ext and not altitude_later and not ext.endswith("/"):
-        freq = "/" + freq
     telemetry = _telemetry_text(data.telemetry, f)
     dao = f.guard(_dao_text, data, a, o, default="")
 
-    def build(comment: str) -> bytes:
+    def build(comment: str, altitude_first: str, altitude_later: str) -> bytes:
         text = type_code + altitude_first + locator
-        after = ext + altitude_later + freq
+        written_freq = "/" + freq if freq and ext and not altitude_later and not ext.endswith("/") else freq
+        after = ext + altitude_later + written_freq
         if locator and (after or comment):
             text += " "
         text += after + comment
@@ -1388,14 +1406,19 @@ def _mic_e(data: MicEReport) -> _Forms:
 
     f.finish()
 
-    if build(data.comment).endswith((b"\r", b"\n")):
+    if build(data.comment, *altitude_forms[0]).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
         raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
-    return _Forms(
-        _comment_forms(data.comment, build, after_frequency=bool(freq)),
-        _unreadable(data, data.comment),
-        destination,
-    )
+
+    def candidates() -> Iterator[bytes]:
+        for first, later in altitude_forms:
+
+            def written(comment: str, first: str = first, later: str = later) -> bytes:
+                return build(comment, first, later)
+
+            yield from _comment_forms(data.comment, written, after_frequency=bool(freq))
+
+    return _Forms(candidates(), _unreadable(data, data.comment), destination)
 
 
 # ---------------------------------------------------------------- messages
@@ -2017,6 +2040,28 @@ def _normalise(value: Any, leaf: Callable[[Any], Any]) -> Any:
     return value
 
 
+def _header_first(source: str, destination: str, entries: tuple[PathEntry, ...], fault: EncodeError) -> EncodeError:
+    """``fault``, a refusal of the data, with the header's own refusal put before it in each form: a
+    header a TNC2 line cannot carry gives that code (``code``), one an AX.25 frame cannot gives its code
+    (``frame_code``), whichever form is later asked for, as the Refusal reasons order says. The
+    destination is the one given (a Mic-E report's is computed from data that was refused)."""
+    if fault.code is RefusalCode.NOT_ENCODABLE:
+        return fault
+    probe = Packet(source, destination, entries, b"", StatusReport(""))
+    codes: list[RefusalCode | None] = []
+    for write in (lambda: probe.header, probe.to_ax25):
+        try:
+            write()
+        except EncodeError as e:
+            codes.append(e.code)
+        else:
+            codes.append(None)
+    line, frame = codes
+    if line is None and frame is None:
+        return fault
+    return EncodeError(str(fault), line or fault.code, frame or fault.code)
+
+
 def build_packet(
     source: str,
     data: AprsData,
@@ -2037,8 +2082,12 @@ def build_packet(
         raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
     if not isinstance(data, MicEReport):
         _check_header_address(destination, "destination")
-    # the information field first: it names the first code that applies across all the data
-    written = _write(data)
+    # the information field first: it names the first code that applies across all the data, except
+    # that a header the line or the frame cannot carry is refused before any data fault, in that form
+    try:
+        written = _write(data)
+    except EncodeError as e:
+        raise _header_first(source, destination, entries, e) from None
     if isinstance(data, MicEReport):
         destination = written.destination
     return Packet(source, destination, entries, written.info, data)

@@ -258,11 +258,13 @@ def check_tolerance(case: dict[str, Any]) -> list[str]:
     return check_strict_expectation(outcome, case)
 
 
-def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:
-    """A refusal must carry the reason code a case names (when it names one)."""
-    if want is None or error.code.value == want:
+def _refusal_differences(want: str | None, error: EncodeError, *, frame: bool = False) -> list[str]:
+    """A refusal must carry the reason code a case names (when it names one): the frame's where an
+    AX.25 frame was asked for."""
+    code = error.frame_code if frame else error.code
+    if want is None or code.value == want:
         return []
-    return [f"refused as {error.code.value}, expected {want}: {error}"]
+    return [f"refused as {code.value}, expected {want}: {error}"]
 
 
 def check_reencode(case: dict[str, Any]) -> list[str]:
@@ -353,7 +355,7 @@ def check_build(case: dict[str, Any]) -> list[str]:
         return [f"the builder cannot say what the recipe asks: {e}"]
     except EncodeError as e:
         if expect.get("refused"):
-            return _refusal_differences(expect.get("refusal"), e)
+            return _refusal_differences(expect.get("refusal"), e, frame=frame)
         return [f"refused: {e}"]
     if expect.get("refused"):
         return [f"expected the builder to refuse, it wrote {written!r}"]
@@ -363,6 +365,34 @@ def check_build(case: dict[str, Any]) -> list[str]:
     return []
 
 
+def check_pass_through(case: dict[str, Any]) -> list[str]:
+    """The lenient packet written back as a program holds it: its TNC2 line and AX.25 frame (or the
+    refusal each writer gives) as ``pass_through`` says."""
+    outcome = decode_case(case, ParseOptions.lenient())
+    assert outcome.packet is not None
+    packet = outcome.packet
+    want = case["pass_through"]
+    out: list[str] = []
+    for name, writer, key in (("tnc2", packet.to_tnc2, "tnc2"), ("ax25", packet.to_ax25, "ax25_hex")):
+        if key not in want and f"{name}_refusal" not in want:
+            continue
+        try:
+            written: bytes | None = writer()
+        except EncodeError as e:
+            if f"{name}_refusal" not in want:
+                out.append(f"{name} refused: {e}")
+            else:
+                out.extend(_refusal_differences(want[f"{name}_refusal"], e))
+            continue
+        if f"{name}_refusal" in want:
+            out.append(f"{name}: expected a refusal, it wrote {written!r}")
+        else:
+            expected = want[key].encode("utf-8") if key == "tnc2" else bytes.fromhex(want[key])
+            if written != expected:
+                out.append(f"{name} wrote {written!r}, expected {expected!r}")
+    return out
+
+
 CHECKS = {
     "lenient": check_lenient,
     "strict": check_strict,
@@ -370,6 +400,7 @@ CHECKS = {
     "reencode": check_reencode,
     "encode": check_encode,
     "build": check_build,
+    "pass_through": check_pass_through,
 }
 
 
@@ -383,4 +414,6 @@ def checks_for(case: dict[str, Any]) -> list[str]:
         names.append("tolerance")
     if "reencode" in case:
         names.append("reencode")
+    if "pass_through" in case:
+        names.append("pass_through")
     return names
