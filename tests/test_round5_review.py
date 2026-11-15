@@ -776,3 +776,48 @@ def test_n6_a_kiss_port_is_a_whole_number_and_an_empty_path_entry_is_refused_by_
         RefusalCode.INVALID_ADDRESS
     )
     assert aprs.Station("N0CALL", path="").status("hi").path == ()
+
+
+# ---------------------------------------------------------------- reading under the header written
+
+MIC_E_SHAPED = b'`(_fn"Oj/'
+
+
+def _raw(destination: str) -> aprs.Packet:
+    """Undecoded bytes shaped like Mic-E, held with the error they were decoded with, under a destination."""
+    held = aprs.decode_tnc2(b"N0CALL>APZ001:" + MIC_E_SHAPED)
+    assert isinstance(held.data, aprs.Unrecognized)
+    return replace(held, destination=destination)
+
+
+def test_raw_bytes_shaped_like_mic_e_are_refused_under_a_destination_that_makes_them_mic_e() -> None:
+    plain, mic_e = _raw("APZ001"), _raw("S32U6T")
+    assert plain.to_tnc2() == b'N0CALL>APZ001:`(_fn"Oj/'
+    assert plain.to_ax25()
+    for write in (mic_e.to_tnc2, mic_e.to_ax25, mic_e.to_kiss, lambda: mic_e.header):
+        assert _code(write) is RefusalCode.NOT_ENCODABLE
+    # as a third-party inner packet, written under its own header and on its own
+    assert enc.encode_info(aprs.ThirdParty(plain)) == b'}N0CALL>APZ001:`(_fn"Oj/'
+    assert _code(lambda: enc.encode_info(aprs.ThirdParty(mic_e))) is RefusalCode.NOT_ENCODABLE
+    assert _code(lambda: enc.encode_info(_depth(aprs.ThirdParty(mic_e), 1))) is RefusalCode.NOT_ENCODABLE
+
+
+def test_a_held_packet_re_addressed_in_either_direction_is_read_under_the_new_header() -> None:
+    held = aprs.decode_tnc2(b'N0CALL>APZ001:`(_fn"Oj/')
+    assert _code(replace(held, destination="S32U6T").to_tnc2) is RefusalCode.NOT_ENCODABLE
+    assert replace(held, destination="APRS").to_tnc2() == b'N0CALL>APRS:`(_fn"Oj/'
+    report = aprs.decode_tnc2(b'N0CALL>S32U6T:`(_fn"Oj/')
+    assert isinstance(report.data, aprs.MicEReport)
+    assert _code(replace(report, destination="APZ001").to_ax25) is RefusalCode.NOT_ENCODABLE
+    assert report.to_tnc2() == b'N0CALL>S32U6T:`(_fn"Oj/'
+
+
+def test_inner_mic_e_data_is_written_under_the_destination_it_computes_and_no_other() -> None:
+    report = from_neutral(MIC_E)
+    assert isinstance(report, aprs.MicEReport)
+    computed = enc.mic_e_destination(report)
+    written = enc.encode_info(aprs.ThirdParty(aprs.Packet("N0CALL", computed, (), b"", report)))
+    assert written.startswith(f"}}N0CALL>{computed}:".encode())
+    assert _code(lambda: enc.encode_info(aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", report)))) is (
+        RefusalCode.NOT_ENCODABLE
+    )

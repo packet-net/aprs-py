@@ -96,3 +96,9 @@ def test_build(case: dict[str, Any]) -> None:
 def test_pass_through(case: dict[str, Any]) -> None:
     """Pass-through cases: the lenient packet written back as a TNC2 line and an AX.25 frame, or the refusal."""
     _run("pass_through", case)
+
+
+@pytest.mark.parametrize("case", _params("pass_through_inner"))
+def test_pass_through_inner(case: dict[str, Any]) -> None:
+    """The inner packet of a third-party packet written on its own, or the refusal, as the case says."""
+    _run("pass_through_inner", case)

@@ -4,6 +4,7 @@ back as the data given, and never raise anything else; a NaN or an infinity is n
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import math
 from collections.abc import Iterator
@@ -137,7 +138,11 @@ def _put(obj: Any, path: tuple[Any, ...], value: Any) -> Any:
 
 def _wrap(data: aprs.AprsData, depth: int) -> aprs.AprsData:
     for _ in range(depth):
-        data = aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", data))
+        destination = "APRS"
+        if isinstance(data, aprs.MicEReport):
+            with contextlib.suppress(EncodeError):
+                destination = enc.mic_e_destination(data)  # inner Mic-E data is written under its own
+        data = aprs.ThirdParty(aprs.Packet("N0CALL", destination, (), b"", data))
     return data
 
 

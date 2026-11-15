@@ -22,6 +22,41 @@ def _is_q_construct(call: str) -> bool:
     return len(call) == 3 and call.startswith("qA") and call[2].isascii() and call[2].isalpha()
 
 
+_MIC_E_DATA_TYPES = ("`", "'", "\x1c", "\x1d")
+"""The data type identifiers whose reading depends on the destination: the Mic-E ones."""
+_AMBIGUITY_BOX_DEGREES = (1 / 6000, 10 / 6000, 100 / 6000, 1000 / 6000, 6000 / 6000)
+
+
+def _reads_as_given(data: AprsData, info: bytes, destination: str) -> bool:
+    """Whether ``info`` read under ``destination`` is the data given. The header changes a reading
+    only through a Mic-E destination, so only a field that starts with a Mic-E data type identifier
+    is read again: raw bytes that would become a Mic-E position under it, or a Mic-E report that
+    would lose its position, do not read as given."""
+    if not info or chr(info[0]) not in _MIC_E_DATA_TYPES:
+        return True
+    from ._decode import Ctx, decode_info
+    from .model import MicEReport
+    from .options import _LENIENT
+
+    again = decode_info(info, destination, Ctx(_LENIENT))
+    if isinstance(data, MicEReport) != isinstance(again, MicEReport):
+        return False
+    if not isinstance(data, MicEReport) or not isinstance(again, MicEReport):
+        return True
+    box = (
+        _AMBIGUITY_BOX_DEGREES[data.ambiguity] if isinstance(data.ambiguity, int) and 0 <= data.ambiguity <= 4 else 1.0
+    )
+    try:
+        return (
+            again.mic_e_message == data.mic_e_message
+            and again.destination_ssid == data.destination_ssid
+            and abs(again.latitude - data.latitude) <= box + 1e-6
+            and abs(again.longitude - data.longitude) <= box + 1e-6
+        )
+    except TypeError:
+        return False
+
+
 def _tnc2_path(path: tuple[PathEntry, ...]) -> str:
     """A path as TNC2 writes it: a ``*`` after the last entry used, which implies the ones
     before it."""
@@ -137,6 +172,10 @@ class Packet:
         read-back of the form written."""
         from ._decode import _ADDRESS
 
+        if not _reads_as_given(self.data, self.info, self.destination):
+            raise EncodeError(
+                "the information field would read as other data under this destination", RefusalCode.NOT_ENCODABLE
+            )
         calls = (self.source, *(p.address for p in self.path))
         if not all(_ADDRESS.match(call) for call in calls) or (
             self.destination and not _ADDRESS.match(self.destination)

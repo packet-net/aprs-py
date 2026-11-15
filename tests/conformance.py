@@ -8,6 +8,7 @@ skipped with their reasons.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from pdn_aprs import (
     MicEReport,
     Packet,
     ParseOptions,
+    PathEntry,
+    ThirdParty,
     decode_ax25,
     decode_tnc2,
 )
@@ -363,13 +366,22 @@ def check_build(case: dict[str, Any]) -> list[str]:
     return []
 
 
-def check_pass_through(case: dict[str, Any]) -> list[str]:
-    """The lenient packet written back as a program holds it: its TNC2 line and AX.25 frame (or the
-    refusal each writer gives) as ``pass_through`` says."""
-    outcome = decode_case(case, ParseOptions.lenient())
-    assert outcome.packet is not None
-    packet = outcome.packet
-    want = case["pass_through"]
+def _readdressed(packet: Any, header: dict[str, Any] | None) -> Any:
+    """The held packet under another header, as the case's ``header`` says (its information field and data kept)."""
+    if not header:
+        return packet
+    changes: dict[str, Any] = {}
+    for key in ("source", "destination"):
+        if key in header:
+            changes[key] = header[key]
+    if "path" in header:
+        changes["path"] = tuple(PathEntry(p.rstrip("*"), p.endswith("*")) for p in header["path"])
+    return dataclasses.replace(packet, **changes)
+
+
+def _check_written(packet: Any, want: dict[str, Any]) -> list[str]:
+    """A held packet written as a TNC2 line and an AX.25 frame (or the refusal each writer gives)."""
+    packet = _readdressed(packet, want.get("header"))
     out: list[str] = []
     for name, writer, key in (("tnc2", packet.to_tnc2, "tnc2"), ("ax25", packet.to_ax25, "ax25_hex")):
         if key not in want and f"{name}_refusal" not in want:
@@ -391,6 +403,23 @@ def check_pass_through(case: dict[str, Any]) -> list[str]:
     return out
 
 
+def check_pass_through(case: dict[str, Any]) -> list[str]:
+    """The lenient packet written back as a program holds it: its TNC2 line and AX.25 frame (or the
+    refusal each writer gives) as ``pass_through`` says, under the case's ``header`` when it gives one."""
+    outcome = decode_case(case, ParseOptions.lenient())
+    assert outcome.packet is not None
+    return _check_written(outcome.packet, case["pass_through"])
+
+
+def check_pass_through_inner(case: dict[str, Any]) -> list[str]:
+    """The same for a third-party packet's inner packet, taken out of the outer one and written on its own."""
+    outcome = decode_case(case, ParseOptions.lenient())
+    assert outcome.packet is not None
+    data = outcome.packet.data
+    assert isinstance(data, ThirdParty)
+    return _check_written(data.packet, case["pass_through_inner"])
+
+
 CHECKS = {
     "lenient": check_lenient,
     "strict": check_strict,
@@ -399,6 +428,7 @@ CHECKS = {
     "encode": check_encode,
     "build": check_build,
     "pass_through": check_pass_through,
+    "pass_through_inner": check_pass_through_inner,
 }
 
 
@@ -414,4 +444,6 @@ def checks_for(case: dict[str, Any]) -> list[str]:
         names.append("reencode")
     if "pass_through" in case:
         names.append("pass_through")
+    if "pass_through_inner" in case:
+        names.append("pass_through_inner")
     return names

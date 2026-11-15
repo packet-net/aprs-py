@@ -81,7 +81,7 @@ from .model import (
     VoiceFrequency,
     Weather,
 )
-from .packet import Packet, PathEntry, _skips_a_used_entry, _tnc2_path
+from .packet import Packet, PathEntry, _reads_as_given, _skips_a_used_entry, _tnc2_path
 
 __all__ = [
     "DEFAULT_DESTINATION",
@@ -1873,11 +1873,17 @@ def _third_party(data: ThirdParty) -> _Forms:
         if given:
             raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY)
         info = written.info
-        destination = written.destination if isinstance(inner.data, MicEReport) else inner.destination
+        destination = inner.destination
+        if isinstance(inner.data, MicEReport) and inner.destination != written.destination:
+            # written under another destination it would not be this report, and the computed one is not
+            # the one given
+            raise _refuse(RefusalCode.NOT_ENCODABLE, "inner Mic-E data is written under the destination it computes")
     else:
         # the original information field must not be changed (APRS12c ch. 17), even when empty
         info = inner.info
         destination = inner.destination
+        if not _reads_as_given(inner.data, info, destination):
+            raise _refuse(RefusalCode.NOT_ENCODABLE, "the inner field would read as other data under its destination")
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
     return _one(b"}" + header.encode("ascii") + b":" + info, free_text=False)
