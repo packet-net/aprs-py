@@ -949,7 +949,13 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         rest = rest[consumed:]
         # base-91 telemetry and a !DAO! are lifted out of the status text before the locator is
         # read, so a locator followed straight by either has no missing space (vectors ruling F16)
-        if rest and rest[0] != " " and lift_telemetry_dao(rest, CommentParts())[:1] not in ("", " "):
+        # (a later Mic-E altitude is lifted first, and the telemetry it leaves counts too)
+        probe = rest
+        if altitude is None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
+            later = _MICE_ALTITUDE.search(probe)
+            if later is not None:
+                probe = probe[: later.start()] + probe[later.end() :]
+        if rest and rest[0] != " " and lift_telemetry_dao(probe, CommentParts())[:1] not in ("", " "):
             ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
         elif rest[:1] == " ":
             rest = rest[1:]

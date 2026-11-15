@@ -9,7 +9,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conformance import CHECKS, VECTORS, checks_for, load_cases, load_known_differences
+from conformance import (
+    CHECKS,
+    VECTORS,
+    checks_for,
+    lenient_single_tolerance,
+    load_cases,
+    load_known_differences,
+)
 
 if not (VECTORS / "cases").is_dir():
     pytest.skip("the vectors submodule is not checked out (git submodule update --init)", allow_module_level=True)
@@ -51,6 +58,16 @@ def test_strict(case: dict[str, Any]) -> None:
 def test_tolerance(case: dict[str, Any]) -> None:
     """Turning off only the one tolerance a case used gives the ``strict`` result."""
     _run("tolerance", case)
+
+
+def test_tolerance_check_leaves_only_the_one_case() -> None:
+    """The check runs on every case with one tolerance except the one whose strict rejection is by another code."""
+    candidates = [c for c in CASES if "encode" not in c["input"] and "build" not in c["input"]]
+    named = [c for c in candidates if lenient_single_tolerance(c) is not None]
+    ran = [c for c in named if "tolerance" in checks_for(c)]
+    skipped = sorted(c["id"] for c in named if "tolerance" not in checks_for(c))
+    print(f"tolerance check runs on {len(ran)} of {len(named)} cases")
+    assert skipped == ["mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment"]
 
 
 @pytest.mark.parametrize("case", _params("reencode"))

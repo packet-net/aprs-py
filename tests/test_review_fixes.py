@@ -417,3 +417,27 @@ def test_garbled_timestamp_short_field_does_not_take_the_new_branch() -> None:
     packet = aprs.decode_tnc2(b"A>APRS:@R30549z")
     assert _codes(packet) == ["malformed-timestamp"]
     assert isinstance(packet.data, aprs.Unrecognized)
+
+
+_ALT_TELEMETRY = 'N0CALL>S32UVT:`(_fn"Oj/`IO91/G|!:&0hl!Y[/>"4e}=\'p|'
+
+
+def _line_codes(line: str, options: aprs.ParseOptions | None = None) -> list[str]:
+    packet = aprs.decode_tnc2(line) if options is None else aprs.decode_tnc2(line, options)
+    return [d.code.value for d in packet.diagnostics]
+
+
+@pytest.mark.parametrize("tail", [" DG2MM", " ", " x y"])
+def test_round_5_mic_e_locator_space_is_judged_after_a_lifted_altitude_leaves_telemetry(tail: str) -> None:
+    # the altitude between the bars is lifted, the 14 bytes left are telemetry, so the locator has its space
+    packet = aprs.decode_tnc2(_ALT_TELEMETRY + tail)
+    assert _line_codes(_ALT_TELEMETRY + tail) == ["mic-e-altitude-not-first"]
+    assert packet.data.telemetry is not None
+    # strict leaves the altitude as text: no telemetry, so the locator's space is missing
+    assert "missing-space-after-locator" in _line_codes(_ALT_TELEMETRY + tail, aprs.ParseOptions.strict())
+
+
+def test_round_5_mic_e_locator_without_telemetry_still_misses_its_space() -> None:
+    # nothing left between the bars once the altitude is out, so it is not telemetry
+    codes = _line_codes('N0CALL>S32UVT:`(_fn"Oj/`IO91/G|"4e}|DG2MM')
+    assert "missing-space-after-locator" in codes

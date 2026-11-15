@@ -6,7 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at b118424 (packet-net/aprs-vectors#30).
+- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at 201f7b2 (packet-net/aprs-vectors#30).
+- A Mic-E report whose later altitude, lifted from between two `|`, leaves base-91 telemetry after the locator no longer gets `missing-space-after-locator`: the locator's space is judged on the text once the altitude and the telemetry are out (`IO91/G|...|` then ` DG2MM`). Strict, which leaves the altitude as text, still rejects.
 
 ## [1.2.0] - 2026-11-14
 

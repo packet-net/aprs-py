@@ -209,7 +209,7 @@ def check_strict_expectation(outcome: Outcome, case: dict[str, Any]) -> list[str
     return check_result(outcome, expect, device=False)
 
 
-def single_tolerance(case: dict[str, Any]) -> str | None:
+def lenient_single_tolerance(case: dict[str, Any]) -> str | None:
     """The one tolerable code a case's lenient decoding used, if exactly one."""
     codes = {
         d.partition(":")[2]
@@ -217,6 +217,17 @@ def single_tolerance(case: dict[str, Any]) -> str | None:
         if d.startswith("warning:") and d.partition(":")[2] in TOLERABLE
     }
     return next(iter(codes)) if len(codes) == 1 else None
+
+
+def single_tolerance(case: dict[str, Any]) -> str | None:
+    """The one tolerance the tolerance check turns off, or None where it does not run: the case
+    does not name exactly one, or its ``strict`` is rejected by a different code (turning the
+    tolerance off can bring out that other defect, so the check's result is neither lenient nor strict)."""
+    code = lenient_single_tolerance(case)
+    strict = case.get("strict", "same")
+    if code is not None and isinstance(strict, dict) and "rejected_by" in strict and strict["rejected_by"] != code:
+        return None
+    return code
 
 
 # ---------------------------------------------------------------- checks
