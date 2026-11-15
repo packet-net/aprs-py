@@ -1,7 +1,7 @@
 """Data extensions, and the structured elements lifted out of a comment.
 
 The elements are lifted in this order, so that one is not taken for another: base-91
-telemetry (between the last two ``|``) and a ``!DAO!`` (the last one outside it); a ``/A=``
+telemetry (the last valid block between neighbouring ``|``) and a ``!DAO!`` (the last one outside it); a ``/A=``
 altitude anywhere; signpost or corridor braces; a data extension later in the text, only when
 none came straight after the symbol; a voice frequency at the start. Last, one leading space or
 ``/`` is dropped from what is left.
@@ -251,22 +251,26 @@ class Fragments:
         return self.texts[index][offset:] + "".join(self.texts[index + 1 :])
 
 
-def _telemetry(text: str) -> tuple[CommentTelemetry, int, int] | None:
-    """Base-91 telemetry between the last two ``|``: the telemetry and its span."""
+def _telemetry(text: str, cuts: tuple[int, ...] = ()) -> tuple[CommentTelemetry, int, int] | None:
+    """Base-91 telemetry: the last pair of neighbouring ``|`` (as sent) enclosing a valid block, 4 to
+    14 bytes, an even number, each ``!`` to ``{``. The pairs slide: each ``|`` closes one pair and
+    opens the next. Bars around anything else are text, with no diagnostic, and a pair a cut runs
+    through does not stand whole, so it is no block. One backward pass: linear in the text."""
     end = text.rfind("|")
-    if end <= 0:
-        return None
-    start = text.rfind("|", 0, end)
-    if start < 0:
-        return None
-    body = text[start + 1 : end]
-    n = len(body)
-    if n < 4 or n > 14 or n % 2 or not _util.is_base91(body):
-        return None
-    values = [_util.base91_value(body[i : i + 2]) for i in range(0, n, 2)]
-    # eight binary channels; bits 9 to 13 are reserved (APRS12c ch. 13)
-    digital = values[6] & 0xFF if len(values) == 7 else None
-    return CommentTelemetry(values[0], tuple(values[1:6]), digital), start, end + 1
+    while end > 0:
+        start = text.rfind("|", 0, end)
+        if start < 0:
+            return None
+        n = end - start - 1
+        whole = not any(start < cut < end + 1 for cut in cuts)
+        if 4 <= n <= 14 and not n % 2 and whole and _util.is_base91(text[start + 1 : end]):
+            body = text[start + 1 : end]
+            values = [_util.base91_value(body[i : i + 2]) for i in range(0, n, 2)]
+            # eight binary channels; bits 9 to 13 are reserved (APRS12c ch. 13)
+            digital = values[6] & 0xFF if len(values) == 7 else None
+            return CommentTelemetry(values[0], tuple(values[1:6]), digital), start, end + 1
+        end = start
+    return None
 
 
 def _dao_at(text: str, i: int) -> tuple[Dao, float, float] | None:
@@ -431,9 +435,7 @@ def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = (
     The telemetry is found first, and the DAO is the last one outside it, in the text as sent
     (across no cut): taking the telemetry out never joins one.
     """
-    tel = _telemetry(text) if "|" in text else None
-    if tel is not None and any(tel[1] < cut < tel[2] for cut in cuts):
-        tel = None
+    tel = _telemetry(text, cuts) if "|" in text else None
     dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
     spans: list[tuple[int, int]] = []
     if tel is not None:

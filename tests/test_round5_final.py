@@ -64,7 +64,7 @@ def test_a_comment_after_an_altitude_that_looks_like_an_altitude_is_written_stra
 
 # ------------------------------------------------------------------ hostile input stays linear
 
-_ELEMENTS = ["{", "PHG1", "|!!|", "/A=000001", "/A=000001}", "!W12!", '"4e}', "{5}"]
+_ELEMENTS = ["{", "PHG1", "|!!|", "/A=000001", "/A=000001}", "!W12!", '"4e}', "{5}", "|", "||", "|a b", "|!!!!|y"]
 _SMALL, _LARGE = 25_000, 100_000
 _POSITION = "!4903.50N/07201.75W-"
 _SIGNPOST = "!4903.50N\\07201.75Wm"

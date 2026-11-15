@@ -611,3 +611,66 @@ def test_a_voice_offset_is_written_as_tens_of_khz_and_never_rounded(offset: floa
         assert _code(lambda: enc.encode_info(from_neutral(neutral))) is outcome
     else:
         assert enc.encode_info(from_neutral(neutral)).endswith(outcome)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------- R27: telemetry is the last valid block
+
+
+def _comment_of(text: str) -> aprs.PositionReport:
+    packet = aprs.decode_tnc2("N0CALL>APZ001:!5130.00N/00030.00W>" + text)
+    assert isinstance(packet.data, aprs.PositionReport)
+    return packet.data
+
+
+def test_r27_the_telemetry_is_the_last_valid_block_and_bars_around_text_are_text() -> None:
+    live = _comment_of("|!a!'!#|| IGate PCBUnit 2 LoRa |144.190| BW10.4 SF8 CR5")
+    assert live.telemetry is not None
+    assert live.dao is None
+    assert live.comment == "| IGate PCBUnit 2 LoRa |144.190| BW10.4 SF8 CR5"
+    two = _comment_of('x|!!!!|y|!"!#|z')
+    assert two.telemetry is not None
+    assert two.comment == "x|!!!!|yz"
+    for text in ("x||y", "x|a b|", "x|!!!|", "x|!!!!!|"):
+        data = _comment_of(text)
+        assert data.telemetry is None
+        assert data.comment == text
+    assert _comment_of("x||!!!!|").telemetry is not None
+    assert _comment_of("x|y z|!!!!|").comment == "x|y z"
+    assert _comment_of("x|!!!!|y z|").comment == "xy z|"
+
+
+def test_r27_a_dao_after_the_block_is_read_outside_it() -> None:
+    data = _comment_of("x|!!!!|!W12!|a b|")
+    assert data.telemetry == aprs.CommentTelemetry(0, (0,))
+    assert data.dao is not None
+    assert data.comment == "x|a b|"
+    # the pairs slide, so a block-shaped run holding a DAO-shaped one is the last block
+    assert _comment_of("x|!!!!|!W12!y|a b|").dao is None
+
+
+def test_r27_data_without_telemetry_whose_comment_holds_a_block_is_text_reads_as_field() -> None:
+    report = aprs.PositionReport(latitude=51.5, longitude=-0.5, symbol=aprs.Symbol.CAR, comment="x|!!!!|y|a b|")
+    assert _code(lambda: enc.encode_info(report)) is RefusalCode.TEXT_READS_AS_FIELD
+    # with telemetry the comment's block is text and the telemetry the last block
+    with_telemetry = replace(report, telemetry=aprs.CommentTelemetry(1, (2,)))
+    info = enc.encode_info(with_telemetry)
+    again = aprs.decode_tnc2(b"N0CALL>APZ001:" + info).data
+    assert isinstance(again, aprs.PositionReport)
+    assert again.telemetry == with_telemetry.telemetry
+    assert again.comment == report.comment
+
+
+def test_r27_many_bars_are_read_in_linear_time() -> None:
+    import time
+
+    def took(n: int) -> float:
+        line = ("N0CALL>APZ001:!5130.00N/00030.00W>" + "|a" * n).encode()
+        best = 1e9
+        for _ in range(3):
+            t = time.perf_counter()
+            aprs.decode_tnc2(line)
+            best = min(best, time.perf_counter() - t)
+        return best
+
+    small, large = took(20_000), took(80_000)
+    assert large < max(small, 0.004) * 9
