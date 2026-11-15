@@ -342,10 +342,13 @@ def check_encode(case: dict[str, Any]) -> list[str]:
 
 
 def check_build(case: dict[str, Any]) -> list[str]:
-    """Build cases: a recipe through the real builder (as the dump tool's build mode calls it)."""
+    """Build cases: a recipe through the real builder (as the dump tool's build mode calls it), written
+    as a TNC2 line, or with ``"write": "ax25"`` as an AX.25 frame."""
     expect = case["expect"]
+    frame = case["input"].get("write") == "ax25"
     try:
-        line = build(case["input"]["build"]).to_tnc2()
+        packet = build(case["input"]["build"])
+        written = packet.to_ax25() if frame else packet.to_tnc2()
     except UnsupportedError as e:
         return [f"the builder cannot say what the recipe asks: {e}"]
     except EncodeError as e:
@@ -353,9 +356,10 @@ def check_build(case: dict[str, Any]) -> list[str]:
             return _refusal_differences(expect.get("refusal"), e)
         return [f"refused: {e}"]
     if expect.get("refused"):
-        return [f"expected the builder to refuse, it wrote {line!r}"]
-    if line != expect["tnc2"].encode("utf-8"):
-        return [f"wrote {line!r}, expected {expect['tnc2'].encode('utf-8')!r}"]
+        return [f"expected the builder to refuse, it wrote {written!r}"]
+    want = bytes.fromhex(expect["ax25_hex"]) if frame else expect["tnc2"].encode("utf-8")
+    if written != want:
+        return [f"wrote {written!r}, expected {want!r}"]
     return []
 
 
