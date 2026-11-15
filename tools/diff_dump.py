@@ -24,8 +24,10 @@ Encode (``--encode``) reads ``{"n", "data", "exact"}`` lines of neutral data (th
 ``refusal`` code).
 
 Build (``--build``) reads builder recipes (``tools/generate.py --recipes``), calls the
-``Station`` methods as a program would and writes ``{"n", "result", "tnc2", "again"}``, or a
+``Station`` methods as a program would and writes ``{"n", "result", "tnc2", "again", "ax25"}``, or a
 ``reason``; a recipe key the builder cannot express is ``unsupported``, and the reason names it.
+``ax25`` is the same packet written as an AX.25 frame (hex), or ``"refused"`` with ``ax25_refusal``;
+each form reads back its own header, so a path no line (or no frame) can carry as given is refused.
 
 The work is spread over processes; the output keeps the input's order.
 """
@@ -150,8 +152,13 @@ def api_view(packet: Packet) -> dict[str, Any]:
         "third_party": packet.third_party,
         "has_errors": bool(packet.errors),
         "has_warnings": bool(packet.warnings),
-        "tnc2": packet.to_tnc2().hex(),
     }
+    try:
+        view["tnc2"] = packet.to_tnc2().hex()
+    except EncodeError as e:
+        # the header it would write does not read back as the packet's (the vectors' README, Read-back)
+        view["tnc2"] = "refused"
+        view["tnc2_refusal"] = e.code.value
     if q is not None:
         view["q_construct"] = {"construct": q.construct}
         if q.station is not None:
@@ -287,21 +294,32 @@ def build_line(n: int, text: str) -> str:
                 {"n": n, "result": "unsupported", "reason": f"{recipe['report']}: no {e.args[0]} in the recipe"}
             )
         except (EncodeError, ValueError) as e:
-            # the builder or the encoder declined
+            # the builder or the encoder declined, so there is no packet to write as a frame either
             record = {"n": n, "result": "refused", "reason": str(e)}
             if isinstance(e, EncodeError):
                 record["refusal"] = e.code.value
+                record["ax25"] = "refused"
+                record["ax25_refusal"] = e.code.value
             else:
                 record["via"] = "tool"  # the recipe's reader, not the builder, declined
             return dumps(record)
-        line = packet.to_tnc2()
+        # the same packet written both ways: each reads back its own header (Read-back)
+        frame: dict[str, str] = {}
+        try:
+            frame["ax25"] = packet.to_ax25().hex()
+        except EncodeError as e:
+            frame = {"ax25": "refused", "ax25_refusal": e.code.value}
+        try:
+            line = packet.to_tnc2()
+        except EncodeError as e:
+            return dumps({"n": n, "result": "refused", "reason": str(e), "refusal": e.code.value, **frame})
         try:
             again = packet_to_neutral(decode_tnc2(line, LENIENT))
         except HeaderError as e:
             again = {"header_error": [str(d) for d in e.diagnostics]}
     except Exception as e:
         return crash(n, e)
-    return dumps({"n": n, "result": "built", "tnc2": line.hex(), "again": again})
+    return dumps({"n": n, "result": "built", "tnc2": line.hex(), "again": again, **frame})
 
 
 # ---------------------------------------------------------------- driving it

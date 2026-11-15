@@ -28,6 +28,18 @@ def _tnc2_path(path: tuple[PathEntry, ...]) -> str:
     return ",".join(p.address + ("*" if i == last else "") for i, p in enumerate(path))
 
 
+def _skips_a_used_entry(path: tuple[PathEntry, ...]) -> bool:
+    """Whether an entry not marked used comes before one that is: a line and a frame both read the
+    entry used (an entry before a used one is used), so neither can carry such a path as given."""
+    seen_used = False
+    for entry in reversed(path):
+        if entry.used:
+            seen_used = True
+        elif seen_used:
+            return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class PathEntry:
     """One digipeater path entry. ``used``: the packet has been through it (``*`` in TNC2)."""
@@ -95,15 +107,48 @@ class Packet:
 
     @property
     def header(self) -> str:
-        """The TNC2 header, ``SOURCE>DEST,PATH``."""
+        """The TNC2 header, ``SOURCE>DEST,PATH``, with a ``*`` on the last used entry.
+
+        It is read back like any header the library writes: a header that does not read back as
+        this packet's source, destination and path raises :class:`EncodeError` (``tnc2-cannot-carry``
+        for a path with an entry not marked used before one that is)."""
         path = _tnc2_path(self.path)
-        return f"{self.source}>{self.destination}" + ("," + path if path else "")
+        text = f"{self.source}>{self.destination}" + ("," + path if path else "")
+        self._read_back_tnc2_header(text)
+        return text
+
+    def _read_back_tnc2_header(self, text: str) -> None:
+        """The header written, read back: the same source, destination and path (entry by entry, each
+        used exactly when this packet's is) and no diagnostic the packet does not already carry."""
+        from ._decode import Ctx, RejectedError, parse_tnc2_header
+        from .errors import HeaderError
+        from .options import _LENIENT
+
+        ctx = Ctx(_LENIENT)
+        try:
+            source, destination, path = parse_tnc2_header(text, ctx, third_party=self.third_party)
+        except (HeaderError, RejectedError):
+            raise EncodeError(
+                f"the header {text!r} is not one a TNC2 line can carry", RefusalCode.INVALID_ADDRESS
+            ) from None
+        if _skips_a_used_entry(self.path):
+            raise EncodeError(
+                "a path entry not marked used before one that is would read back used in a TNC2 line",
+                RefusalCode.TNC2_CANNOT_CARRY,
+            )
+        # a defect the packet already carries (an empty destination it was decoded with) is its data
+        new = [d for d in ctx.diags if d not in self.diagnostics]
+        if (source, destination, path) != (self.source, self.destination, self.path) or new:
+            raise EncodeError(
+                f"the header {text!r} would not read back as this packet's", RefusalCode.DOES_NOT_READ_BACK
+            )
 
     def to_tnc2(self) -> bytes:
         """The packet as a TNC2 / APRS-IS line (without a line terminator).
 
         This writes out a packet the program already holds, so it is not an encoder: the information
-        field goes through as it stands, with no size check.
+        field goes through as it stands, with no size check. The header it writes is read back
+        (see :attr:`header`).
         """
         return self.header.encode("ascii") + b":" + self.info
 
@@ -121,8 +166,30 @@ class Packet:
         frame += _ax25_address(self.source, last=not path)
         for i, entry in enumerate(path):
             frame += _ax25_address(entry.address, last=i == len(path) - 1, repeated=entry.used)
-        frame += b"\x03\xf0" + self.info
-        return bytes(frame)
+        frame += b"\x03\xf0"
+        self._read_back_ax25_header(bytes(frame))
+        return bytes(frame) + self.info
+
+    def _read_back_ax25_header(self, frame: bytes) -> None:
+        """The addresses written, read back: the same source, destination and path (the H bit set on
+        exactly the entries this packet has used) and no diagnostic the packet does not already carry."""
+        from ._decode import decode_ax25
+        from .errors import HeaderError
+
+        if _skips_a_used_entry(self.path):
+            raise EncodeError(
+                "a path entry not marked used before one that is would read back used in an AX.25 frame",
+                RefusalCode.AX25_CANNOT_CARRY,
+            )
+        try:
+            again = decode_ax25(frame)
+        except HeaderError:
+            raise EncodeError(
+                "the addresses are not ones an AX.25 frame can carry", RefusalCode.AX25_CANNOT_CARRY
+            ) from None
+        new = [d for d in again.diagnostics if d not in self.diagnostics]
+        if (again.source, again.destination, again.path) != (self.source, self.destination, self.path) or new:
+            raise EncodeError("the addresses would not read back as this packet's", RefusalCode.DOES_NOT_READ_BACK)
 
     def to_kiss(self, port: int = 0) -> bytes:
         """The packet as a KISS data frame, with ``FEND`` delimiters, for a KISS TNC.

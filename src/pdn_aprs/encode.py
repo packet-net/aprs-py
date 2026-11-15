@@ -1,11 +1,14 @@
 """Encoding: data into an information field (and, for Mic-E, the destination address).
 
 The encoder writes only what the specification allows and raises :class:`EncodeError`
-otherwise. Free text is checked by decoding what was written: a comment that would read back
-as something else (an altitude, a data extension, a leading delimiter...) gets a ``/`` delimiter
-in front, and is refused if even that does not read back. An information field is at most 256
-bytes (:data:`INFORMATION_FIELD_LIMIT`), and text with a control character is refused as
-``invalid-character``.
+otherwise. Every encoder ends in one read-back, with no condition: it offers the forms it can
+write (a comment as it is, after a ``/`` delimiter, after a space), and the read-back decodes each
+one, leniently, and compares the result with the data given (``_readback.py``); the first that
+matches is written, and when none does the data is refused (``text-reads-as-field`` for free text
+that reads back changed, ``does-not-read-back`` otherwise). Encoders return forms, never bytes, so
+no function here can return bytes that did not pass. An information field is at most 256
+bytes (:data:`INFORMATION_FIELD_LIMIT`), judged after the read-back, and text with a control
+character is refused as ``invalid-character``.
 
 >>> from pdn_aprs import PositionReport, Symbol
 >>> from pdn_aprs.encode import encode_info
@@ -19,14 +22,16 @@ from __future__ import annotations
 import dataclasses
 import math
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, TypeVar, cast
 
 from . import _util
 from ._comment import MICROWAVE_BASE
-from .diagnostics import DiagnosticCode, Severity
+from ._neutral import to_neutral
+from ._readback import mismatch
+from .diagnostics import DiagnosticCode
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -74,7 +79,6 @@ from .model import (
     VoiceFrequency,
     Weather,
 )
-from .options import _LENIENT
 from .packet import Packet, PathEntry, _tnc2_path
 
 __all__ = [
@@ -230,13 +234,13 @@ def _finite(value: Any) -> Any:
     return value
 
 
-def _nan_or_earlier(data: Any, encoder: Callable[[Any], bytes], why: str) -> EncodeError:
+def _nan_or_earlier(data: Any, encoder: Callable[[Any], _Forms], why: str) -> EncodeError:
     """The refusal for data a NaN or infinity made the encoder fail on: ``not-a-number``, unless
     a code that comes before it in the order (a name, a timestamp, an addressee...) applies, which
     is found by encoding the data again with the non-finite values made finite."""
     nan = _refuse(RefusalCode.NOT_A_NUMBER, why)
     try:
-        encoder(_finite(data))
+        _run(_finite(data), encoder)
     except EncodeError as e:
         if _PRIORITY[e.code] < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
             return e
@@ -305,35 +309,55 @@ def _check_timestamp(ts: Timestamp, kinds: tuple[TimestampKind, ...], what: str)
         raise _refuse(RefusalCode.INVALID_TIMESTAMP, f"{what} timestamp {ts.text!r} is out of range")
 
 
-def _shape_differences(a: Any, b: Any, *, numbers: bool = False) -> bool:
-    """True when two neutral values differ other than in numbers (with ``numbers``, in numbers
-    too, beyond the vectors' tolerance)."""
-    if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() != b.keys() or any(_shape_differences(a[k], b[k], numbers=numbers) for k in a)
-    if isinstance(a, list) and isinstance(b, list):
-        return len(a) != len(b) or any(_shape_differences(x, y, numbers=numbers) for x, y in zip(a, b, strict=False))
-    if isinstance(a, bool) or isinstance(b, bool):
-        return a is not b
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return numbers and not _util.number_equal(a, b)
-    return bool(a != b)
+class _Forms:
+    """The ways an encoder offers to write some data, in order, for the read-back to try.
+
+    ``candidates`` are information fields, made lazily; ``destination`` is the address the data is
+    read back under (the one a Mic-E report computed); ``refusal`` makes the refusal for when no
+    form reads back. An encoder returns this and never bytes: the only way from here to bytes is
+    :func:`_read_back`.
+    """
+
+    __slots__ = ("candidates", "destination", "refusal")
+
+    def __init__(
+        self,
+        candidates: Iterable[bytes],
+        refusal: Callable[[], EncodeError],
+        destination: str = DEFAULT_DESTINATION,
+    ) -> None:
+        self.candidates = candidates
+        self.refusal = refusal
+        self.destination = destination
 
 
-def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool = False) -> bool:
-    """Whether ``info`` decodes, leniently and without defects, to data of ``data``'s shape (and,
-    with ``numbers``, the same numbers too)."""
-    from ._decode import Ctx, decode_info
-    from ._neutral import to_neutral
+_PASSED = object()
+"""Held by the read-back alone: what a :class:`_Written` is made with."""
 
-    ctx = Ctx(_LENIENT)
-    decoded = decode_info(info, destination, ctx)
-    if any(d.severity is not Severity.INFO for d in ctx.diags):
-        return False
+
+class _Written:
+    """Bytes that read back as the data they were written from, and the destination they were read
+    back under. Only :func:`_read_back` makes one (anything else is refused), so no public function
+    holds bytes that did not pass the read-back."""
+
+    __slots__ = ("destination", "info")
+
+    def __init__(self, info: bytes, destination: str, passed: object) -> None:
+        if passed is not _PASSED:
+            raise TypeError("bytes are written only by the read-back")
+        self.info = info
+        self.destination = destination
+
+
+def _read_back(data: AprsData, forms: _Forms) -> _Written:
+    """The one read-back every information field ends in, with no condition: the first form that
+    decodes, leniently, to the data given (and the destination it was read back under). Raises the
+    refusal when no form does; bytes that failed are never returned."""
     given = to_neutral(data)
-    if isinstance(data, MicEReport):
-        # a Mic-E report always has a speed: one not given is 0
-        given.setdefault("speed_knots", 0)
-    return not _shape_differences(given, to_neutral(decoded), numbers=numbers)
+    for info in forms.candidates:
+        if mismatch(data, given, info, forms.destination) is None:
+            return _Written(info, forms.destination, _PASSED)
+    raise forms.refusal()
 
 
 def _joins_frequency_fields(comment: str) -> bool:
@@ -345,19 +369,12 @@ def _joins_frequency_fields(comment: str) -> bool:
     return found is not None and found[0] != VoiceFrequency(mhz=144.39)
 
 
-def _with_comment(
-    data: AprsData,
-    comment: str,
-    build: Callable[[str], bytes],
-    destination: str = DEFAULT_DESTINATION,
-    *,
-    after_frequency: bool = False,
-) -> bytes:
-    """The first way of writing the comment that reads back as the data: as it is, then after
-    a ``/`` delimiter, then after a space. After a voice frequency it is written after a space; if a space would make
-    its first words a tone, offset or range field of the frequency, straight after the frequency;
-    else after a space and a ``/`` (only where it would not read back as itself without one: ``X``
-    ending the text would be the device suffix ` X`)."""
+def _comment_forms(comment: str, build: Callable[[str], bytes], *, after_frequency: bool = False) -> Iterator[bytes]:
+    """The ways of writing the comment, in the order the Encoding rule gives them: as it is, then
+    after a ``/`` delimiter, then after a space. After a voice frequency it is written after a
+    space; if a space would make its first words a tone, offset or range field of the frequency,
+    straight after the frequency; else after a space and a ``/`` (only where it would not read back
+    as itself without one: ``X`` ending the text would be the device suffix ` X`)."""
     if not comment:
         candidates = [""]
     elif after_frequency:
@@ -369,43 +386,52 @@ def _with_comment(
         # (//x}), which a space cannot
         candidates = [comment, "/" + comment, " " + comment]
     for candidate in candidates:
-        info = build(candidate)
-        if _reads_back(data, info, destination):
-            return info
-    # free text that reads back changed is text-reads-as-field; with no text, the safety net
-    # cannot say why
-    weather = getattr(data, "weather", None)
-    symbol = getattr(data, "symbol", None)
-    if weather is None and symbol is not None and symbol.code == "_" and not isinstance(data, MicEReport):
-        # a weather symbol with no weather data reads back as a weather report
-        raise _refuse(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
-    free_text = bool(comment) or (weather is not None and bool(weather.software or weather.unit))
-    if isinstance(data, MicEReport):
-        # a Mic-E report's status text is whatever follows its position bytes: the altitude
-        # bytes, a locator and the rest all read back as text
-        free_text = free_text or any(
-            x is not None
-            for x in (
-                data.altitude_feet,
-                data.locator,
-                data.telemetry,
-                data.frequency,
-                data.phg,
-                data.range_miles,
-                data.dfs,
-                data.dao,
-                data.device_suffix,
+        yield build(candidate)
+
+
+def _unreadable(data: AprsData, comment: str) -> Callable[[], EncodeError]:
+    """The refusal for positioned data (and Mic-E) no form of which reads back: free text that reads
+    back changed is ``text-reads-as-field``; with no text, the safety net cannot say why."""
+
+    def refusal() -> EncodeError:
+        weather = getattr(data, "weather", None)
+        symbol = getattr(data, "symbol", None)
+        if weather is None and symbol is not None and symbol.code == "_" and not isinstance(data, MicEReport):
+            # a weather symbol with no weather data reads back as a weather report
+            return _refuse(RefusalCode.SYMBOL_MISMATCH, "the weather symbol _ goes with weather data")
+        free_text = bool(comment) or (weather is not None and bool(weather.software or weather.unit or weather.extra))
+        if isinstance(data, MicEReport):
+            # a Mic-E report's status text is whatever follows its position bytes: the altitude
+            # bytes, a locator and the rest all read back as text
+            free_text = free_text or any(
+                x is not None
+                for x in (
+                    data.altitude_feet,
+                    data.locator,
+                    data.telemetry,
+                    data.frequency,
+                    data.phg,
+                    data.range_miles,
+                    data.dfs,
+                    data.dao,
+                    data.device_suffix,
+                )
             )
-        )
-    code = RefusalCode.TEXT_READS_AS_FIELD if free_text else RefusalCode.DOES_NOT_READ_BACK
-    raise _refuse(code, f"the text {comment!r} would not read back as written")
+        code = RefusalCode.TEXT_READS_AS_FIELD if free_text else RefusalCode.DOES_NOT_READ_BACK
+        return _refuse(code, f"the text {comment!r} would not read back as written")
+
+    return refusal
 
 
-def _checked(data: AprsData, info: str) -> bytes:
-    raw = info.encode("utf-8")
-    if not _reads_back(data, raw, DEFAULT_DESTINATION):
-        raise _refuse(RefusalCode.TEXT_READS_AS_FIELD, "the text would not read back as written")
-    return raw
+def _text_forms(text: str, *, free_text: bool = True) -> _Forms:
+    """The one form of a report whose text has no alternative: ``text`` as UTF-8. If it does not
+    read back, free text is ``text-reads-as-field``, any other field ``does-not-read-back``."""
+    return _one(text.encode("utf-8"), free_text=free_text)
+
+
+def _one(info: bytes, *, free_text: bool = True, code: RefusalCode | None = None) -> _Forms:
+    code = code or (RefusalCode.TEXT_READS_AS_FIELD if free_text else RefusalCode.DOES_NOT_READ_BACK)
+    return _Forms([info], lambda: _refuse(code, "the text would not read back as written"))
 
 
 # ---------------------------------------------------------------- positions
@@ -1067,7 +1093,7 @@ def _position_body(data: PositionedData, f: _Faults) -> Callable[[str], str]:
     return rest
 
 
-def _position(data: PositionReport) -> bytes:
+def _position(data: PositionReport) -> _Forms:
     data = _typed(data)
     f = _Faults()
     if data.timestamp is not None:
@@ -1077,12 +1103,15 @@ def _position(data: PositionReport) -> bytes:
         head = "=" if data.messaging else "!"
     rest = _position_body(data, f)
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _Forms(
+        _comment_forms(
+            data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        ),
+        _unreadable(data, data.comment),
     )
 
 
-def _object(data: ObjectReport) -> bytes:
+def _object(data: ObjectReport) -> _Forms:
     data = _typed(data)
     f = _Faults()
     name = data.name
@@ -1099,12 +1128,15 @@ def _object(data: ObjectReport) -> bytes:
     head = ";" + name.ljust(9) + ("_" if data.killed else "*") + stamp
     rest = _position_body(data, f)
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _Forms(
+        _comment_forms(
+            data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        ),
+        _unreadable(data, data.comment),
     )
 
 
-def _item(data: ItemReport) -> bytes:
+def _item(data: ItemReport) -> _Forms:
     data = _typed(data)
     f = _Faults()
     name = data.name
@@ -1113,8 +1145,11 @@ def _item(data: ItemReport) -> bytes:
     head = ")" + name + ("_" if data.killed else "!")
     rest = _position_body(data, f)
     f.finish()
-    return _with_comment(
-        data, data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+    return _Forms(
+        _comment_forms(
+            data.comment, lambda c: (head + rest(c)).encode("utf-8"), after_frequency=data.frequency is not None
+        ),
+        _unreadable(data, data.comment),
     )
 
 
@@ -1140,16 +1175,11 @@ _MESSAGE_BITS: dict[MicEMessage, tuple[str, int]] = {
 
 
 def mic_e_destination(data: MicEReport) -> str:
-    """The destination address a Mic-E report's latitude, message and flags go into."""
-    f = _Faults()
-    try:
-        call = _mic_e_destination(data, f)
-        f.finish()
-        return call
-    except EncodeError as e:
-        raise _nan_rule(data, e) from None
-    except (ValueError, OverflowError) as e:
-        raise _refuse(RefusalCode.NOT_A_NUMBER, f"cannot encode the Mic-E destination: {e}") from e
+    """The destination address a Mic-E report's latitude, message and flags go into.
+
+    Like :func:`encode_info` it writes only what reads back: the whole report is encoded and read
+    back under the destination computed, and the destination is returned with it."""
+    return _write(data).destination
 
 
 def _mic_e_destination(data: MicEReport, f: _Faults) -> str:
@@ -1227,7 +1257,7 @@ _MIC_E_STATUS_START = "`'>] "
 obsolete telemetry marker, either: that is a control character, so such text is refused.)"""
 
 
-def _mic_e(data: MicEReport) -> bytes:
+def _mic_e(data: MicEReport) -> _Forms:
     f = _Faults()
     f.guard(_check_symbol, data, default=None)
     f.guard(_check_text, data.comment, "comment", default=None)
@@ -1361,7 +1391,11 @@ def _mic_e(data: MicEReport) -> bytes:
     if build(data.comment).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
         raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
-    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq))
+    return _Forms(
+        _comment_forms(data.comment, build, after_frequency=bool(freq)),
+        _unreadable(data, data.comment),
+        destination,
+    )
 
 
 # ---------------------------------------------------------------- messages
@@ -1386,6 +1420,9 @@ def _is_id(text: str) -> bool:
 
 
 def _message_id(msg_id: str | None, reply_ack: str | None) -> str:
+    # an empty message ID is no message ID: the neutral form leaves an empty string out
+    if not msg_id:
+        msg_id = None
     if msg_id is None:
         if reply_ack is not None:
             if reply_ack and not _is_id(reply_ack):
@@ -1411,15 +1448,15 @@ def _message_text(text: str, *, limit: bool = True) -> None:
         raise _refuse(RefusalCode.TOO_LONG, f"message text is over {MESSAGE_TEXT_LIMIT} characters")
 
 
-def _message(data: Message) -> bytes:
+def _message(data: Message) -> _Forms:
     # text to a bulletin or NWS addressee would read back as a bulletin: not the form a message needs
     _check_message_addressee(data.addressee, "a message")
     head = _addressee(data.addressee)
     _message_text(data.text)
-    return _checked(data, head + data.text + _message_id(data.message_id, data.reply_ack))
+    return _text_forms(head + data.text + _message_id(data.message_id, data.reply_ack))
 
 
-def _ack(data: Ack | Reject) -> bytes:
+def _ack(data: Ack | Reject) -> _Forms:
     head = _addressee(data.addressee)
     ident = data.acked_id if isinstance(data, Ack) else data.rejected_id
     if not _is_id(ident):
@@ -1432,10 +1469,10 @@ def _ack(data: Ack | Reject) -> bytes:
                 RefusalCode.INVALID_MESSAGE_ID, f"reply-ack {data.reply_ack!r} is not up to 5 letters and digits"
             )
         text += "}" + data.reply_ack
-    return _checked(data, text)
+    return _text_forms(text, free_text=False)
 
 
-def _bulletin(data: Bulletin) -> bytes:
+def _bulletin(data: Bulletin) -> _Forms:
     a = data.addressee
     if not (a.startswith("BLN") and 4 <= len(a) <= 9 and ("0" <= a[3] <= "9" or "A" <= a[3] <= "Z")):
         raise _refuse(
@@ -1445,15 +1482,15 @@ def _bulletin(data: Bulletin) -> bytes:
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "a group bulletin's identifier is a digit")
     head = _addressee(a)
     _message_text(data.text)
-    return _checked(data, head + data.text + _message_id(data.message_id, None))
+    return _text_forms(head + data.text + _message_id(data.message_id, None))
 
 
-def _nws(data: NwsBulletin) -> bytes:
+def _nws(data: NwsBulletin) -> _Forms:
     if not data.addressee.startswith(("NWS-", "NWS_")):
         raise _refuse(RefusalCode.INVALID_ADDRESSEE, "an NWS bulletin's addressee starts NWS-")
     head = _addressee(data.addressee)
     _message_text(data.text, limit=False)
-    return _checked(data, head + data.text + _message_id(data.message_id, None))
+    return _text_forms(head + data.text + _message_id(data.message_id, None))
 
 
 def _metadata_list(items: tuple[str, ...], limit: int, what: str) -> str:
@@ -1466,7 +1503,7 @@ def _metadata_list(items: tuple[str, ...], limit: int, what: str) -> str:
     return ",".join(items)
 
 
-def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoefficients | TelemetryBits) -> bytes:
+def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoefficients | TelemetryBits) -> _Forms:
     _check_message_addressee(data.addressee, "telemetry metadata")
     head = _addressee(data.addressee)
     if isinstance(data, TelemetryNames):
@@ -1497,13 +1534,13 @@ def _telemetry_metadata(data: TelemetryNames | TelemetryUnits | TelemetryCoeffic
         if len(data.bits) != 8 or any(b not in "01" for b in data.bits):
             raise _refuse(RefusalCode.MALFORMED, "BITS. needs eight 0/1 bits")
         body = "BITS." + data.bits + ("," + data.project if data.project else "")
-    return _checked(data, head + body + _message_id(data.message_id, None))
+    return _text_forms(head + body + _message_id(data.message_id, None))
 
 
 _DEFINED_QUERIES = ("APRSD", "APRSH", "APRSM", "APRSO", "APRSP", "APRSS", "APRST", "PING?")
 
 
-def _directed_query(data: DirectedQuery) -> bytes:
+def _directed_query(data: DirectedQuery) -> _Forms:
     _check_message_addressee(data.addressee, "a directed query")
     head = _addressee(data.addressee)
     qtype = data.query_type
@@ -1518,13 +1555,13 @@ def _directed_query(data: DirectedQuery) -> bytes:
         target = target.ljust(9)
     elif target and qtype not in _DEFINED_QUERIES:
         target = " " + target
-    return _checked(data, head + "?" + qtype + target)
+    return _text_forms(head + "?" + qtype + target, free_text=False)
 
 
 # ---------------------------------------------------------------- the rest
 
 
-def _status(data: StatusReport) -> bytes:
+def _status(data: StatusReport) -> _Forms:
     f = _Faults()
     text = ">"
     if data.timestamp is not None:
@@ -1557,10 +1594,10 @@ def _status(data: StatusReport) -> bytes:
     if data.beam is not None:
         text += "^" + data.beam.heading_code + data.beam.power_code
     f.finish()
-    return _checked(data, text)
+    return _text_forms(text)
 
 
-def _telemetry(data: TelemetryReport) -> bytes:
+def _telemetry(data: TelemetryReport) -> _Forms:
     f = _Faults()
     seq = data.sequence
     if isinstance(seq, NoSequence):
@@ -1602,20 +1639,20 @@ def _telemetry(data: TelemetryReport) -> bytes:
     head = "T#" + seq + ("" if seq == "MIC" else ",")
     text = head + ",".join(values) + ("" if data.bits is None else "," + data.bits) + data.comment
     f.finish()
-    return _checked(data, text)
+    return _text_forms(text)
 
 
-def _positionless_weather(data: PositionlessWeather) -> bytes:
+def _positionless_weather(data: PositionlessWeather) -> _Forms:
     f = _Faults()
     f.guard(_check_timestamp, data.timestamp, (TimestampKind.MDHM,), "weather", default=None)
     if data.comment:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a weather report has no comment")
     text = _weather_text(data.weather, positionless=True, compressed=False, f=f)
     f.finish()
-    return _checked(data, "_" + data.timestamp.text + text)
+    return _text_forms("_" + data.timestamp.text + text)
 
 
-def _raw_weather(data: RawWeather) -> bytes:
+def _raw_weather(data: RawWeather) -> _Forms:
     if not _util.is_printable_ascii(data.data):
         raise _refuse(RefusalCode.INVALID_CHARACTER, "raw weather data is printable ASCII")
     prefix = {
@@ -1624,10 +1661,10 @@ def _raw_weather(data: RawWeather) -> bytes:
         RawWeatherFormat.ULTIMETER_PACKET: "$ULTW",
         RawWeatherFormat.ULTIMETER_LOGGING: "!!",
     }[data.format]
-    return _checked(data, prefix + data.data)
+    return _text_forms(prefix + data.data)
 
 
-def _nmea(data: NmeaSentence) -> bytes:
+def _nmea(data: NmeaSentence) -> _Forms:
     """The sentence, and any comment after its checksum. It must read back as the same data: an
     NMEA 0183 sentence, whose fields say what ``data`` says."""
     s = data.sentence
@@ -1651,36 +1688,20 @@ def _nmea(data: NmeaSentence) -> bytes:
         # only a checksum ends a sentence: written, the comment would read back as part of it
         raise _refuse(RefusalCode.INVALID_NMEA, "a comment goes after the sentence's checksum")
     raw = ("$" + s).encode("ascii") + data.comment.encode("utf-8")
-    if not _nmea_reads_back(data, raw):
-        raise _refuse(RefusalCode.INVALID_NMEA, "the sentence does not read back as the same NMEA data")
-    return raw
+    # a field given that disagrees with the sentence reads back with the sentence's value
+    return _Forms(
+        [raw], lambda: _refuse(RefusalCode.INVALID_NMEA, "the sentence does not read back as the same NMEA data")
+    )
 
 
-def _nmea_reads_back(data: NmeaSentence, raw: bytes) -> bool:
-    """Whether ``raw`` reads back with the sentence and comment as given and every field given
-    agreeing with the sentence: a field left out is the sentence's own (vectors interpretations.md,
-    NMEA data is its sentence)."""
-    from ._decode import Ctx, decode_info
-    from ._neutral import to_neutral
-
-    ctx = Ctx(_LENIENT)
-    decoded = decode_info(raw, DEFAULT_DESTINATION, ctx)
-    if any(d.severity is not Severity.INFO for d in ctx.diags):
-        return False
-    given, found = to_neutral(data), to_neutral(decoded)
-    if found.get("type") != "nmea":
-        return False
-    return not any(_shape_differences(v, found.get(k), numbers=True) for k, v in given.items())
-
-
-def _maidenhead(data: MaidenheadBeacon) -> bytes:
+def _maidenhead(data: MaidenheadBeacon) -> _Forms:
     _check_text(data.comment, "comment")
     if not _util.is_locator(data.locator) or data.locator != data.locator.upper():
         raise _refuse(RefusalCode.MALFORMED, f"{data.locator!r} is not a Maidenhead locator")
-    return _checked(data, "[" + data.locator.upper() + "]" + data.comment)
+    return _text_forms("[" + data.locator.upper() + "]" + data.comment)
 
 
-def _query(data: Query) -> bytes:
+def _query(data: Query) -> _Forms:
     text = "?" + data.query_type + "?"
     if data.footprint is not None:
         f = data.footprint
@@ -1706,10 +1727,10 @@ def _query(data: Query) -> bytes:
                     sent = " " + sent
             numbers.append(sent)
         text += f"{numbers[0]},{numbers[1]},{radius:04d}"
-    return _checked(data, text)
+    return _text_forms(text)
 
 
-def _capabilities(data: Capabilities) -> bytes:
+def _capabilities(data: Capabilities) -> _Forms:
     f = _Faults()
     if not data.capabilities:
         raise _refuse(RefusalCode.MISSING_FIELD, "no capabilities")
@@ -1737,7 +1758,7 @@ def _capabilities(data: Capabilities) -> bytes:
         else:
             items.append(token)
     f.finish()
-    return _checked(data, "<" + ",".join(items))
+    return _text_forms("<" + ",".join(items))
 
 
 _INNER_HEADER_DEFECTS = frozenset(
@@ -1764,7 +1785,7 @@ def _third_party_walk(data: ThirdParty) -> tuple[int, str | None]:
     return depth, None if type(current) in _ENCODERS else type(current).__name__
 
 
-def _third_party(data: ThirdParty) -> bytes:
+def _third_party(data: ThirdParty) -> _Forms:
     from ._decode import _ADDRESS, _THIRD_PARTY_SOURCE
 
     inner = data.packet
@@ -1792,18 +1813,19 @@ def _third_party(data: ThirdParty) -> bytes:
     if used != sorted(used, reverse=True):
         raise _refuse(bad, "in TNC2 a path entry before a used one is used too")
     if writes_data:
-        info = encode_info(inner.data)
-        destination = mic_e_destination(inner.data) if isinstance(inner.data, MicEReport) else inner.destination
+        written = _write(inner.data)
+        info = written.info
+        destination = written.destination if isinstance(inner.data, MicEReport) else inner.destination
     else:
         # the original information field must not be changed (APRS12c ch. 17), even when empty
         info = inner.info
         destination = inner.destination
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
-    return b"}" + header.encode("ascii") + b":" + info
+    return _one(b"}" + header.encode("ascii") + b":" + info, free_text=False)
 
 
-def _user_defined(data: UserDefined) -> bytes:
+def _user_defined(data: UserDefined) -> _Forms:
     if (data.user_id + data.packet_type + data.data).endswith(("\r", "\n")):
         # a line break at the end of a packet is a tolerated defect, not data: it would be dropped
         raise _refuse(
@@ -1817,25 +1839,25 @@ def _user_defined(data: UserDefined) -> bytes:
         ) from None
     if len(data.user_id) != 1 or len(data.packet_type) != 1:
         raise _refuse(RefusalCode.TOO_LONG, "user ID and packet type are one character each")
-    return encoded
+    return _one(encoded)
 
 
-def _test(data: TestData) -> bytes:
+def _test(data: TestData) -> _Forms:
     if "\r" in data.data or "\n" in data.data:
         # test data is not judged for control characters, but a line break would be one
         raise _refuse(RefusalCode.INVALID_CHARACTER, "test data contains a line break")
-    return _checked(data, "," + data.data)
+    return _text_forms("," + data.data)
 
 
-def _agrelo(data: AgreloDf) -> bytes:
+def _agrelo(data: AgreloDf) -> _Forms:
     # a bearing is degrees like a course: rounded to the nearest degree, then range-checked
     bearing = _nearest(data.bearing_degrees)
     if not 0 <= bearing <= 360 or not 0 <= data.quality <= 9:
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "an Agrelo bearing is 0-360 degrees and its quality one digit")
-    return f"%{bearing:03d}/{data.quality}".encode("ascii")
+    return _one(f"%{bearing:03d}/{data.quality}".encode("ascii"), free_text=False)
 
 
-_ENCODERS: dict[type[Any], Callable[[Any], bytes]] = {
+_ENCODERS: dict[type[Any], Callable[[Any], _Forms]] = {
     PositionReport: _position,
     ObjectReport: _object,
     ItemReport: _item,
@@ -1867,7 +1889,16 @@ _ENCODERS: dict[type[Any], Callable[[Any], bytes]] = {
 
 def encode_info(data: AprsData) -> bytes:
     """The information field for ``data``. Raises :class:`EncodeError` when the data cannot be
-    written as the specification allows."""
+    written as the specification allows.
+
+    The bytes returned have been decoded again, leniently, and read back as ``data`` (the vectors'
+    README, Rules, Read-back): the encoder never returns bytes that did not."""
+    return _write(data).info
+
+
+def _write(data: AprsData) -> _Written:
+    """The one way every encoder writes: the data made ready, an encoder's forms, the read-back of
+    them, and last the size check. Every public function that writes bytes from data ends here."""
     encoder = _ENCODERS.get(type(data))
     if encoder is None:
         raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(data).__name__} cannot be encoded")
@@ -1909,9 +1940,16 @@ def encode_info(data: AprsData) -> bytes:
         ) from None
 
 
-def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], bytes]) -> bytes:
+def _run(data: Any, encoder: Callable[[Any], _Forms]) -> _Written:
+    """An encoder's forms, read back, and then (the last check there is) sized."""
+    written = _read_back(data, encoder(data))
+    _sized(written.info)
+    return written
+
+
+def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], _Forms]) -> _Written:
     try:
-        return _sized(encoder(data))
+        return _run(data, encoder)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
     except UnicodeEncodeError:
@@ -2000,7 +2038,7 @@ def build_packet(
     if not isinstance(data, MicEReport):
         _check_header_address(destination, "destination")
     # the information field first: it names the first code that applies across all the data
-    info = encode_info(data)
+    written = _write(data)
     if isinstance(data, MicEReport):
-        destination = mic_e_destination(data)
-    return Packet(source, destination, entries, info, data)
+        destination = written.destination
+    return Packet(source, destination, entries, written.info, data)
