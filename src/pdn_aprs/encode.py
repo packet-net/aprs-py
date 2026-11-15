@@ -339,9 +339,9 @@ def _reads_back(data: AprsData, info: bytes, destination: str, *, numbers: bool 
 def _joins_frequency_fields(comment: str) -> bool:
     """Whether ``comment`` after a space would be read as a tone, offset or range of the voice
     frequency before it."""
-    from ._comment import _frequency
+    from ._comment import Fragments, _frequency
 
-    found = _frequency("144.390MHz " + comment)
+    found = _frequency(Fragments("144.390MHz " + comment))
     return found is not None and found[0] != VoiceFrequency(mhz=144.39)
 
 

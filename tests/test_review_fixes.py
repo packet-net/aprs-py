@@ -428,12 +428,13 @@ def _line_codes(line: str, options: aprs.ParseOptions | None = None) -> list[str
 
 
 @pytest.mark.parametrize("tail", [" DG2MM", " ", " x y"])
-def test_round_5_mic_e_locator_space_is_judged_after_a_lifted_altitude_leaves_telemetry(tail: str) -> None:
-    # the altitude between the bars is lifted, the 14 bytes left are telemetry, so the locator has its space
+def test_round_5_mic_e_telemetry_split_by_a_lifted_altitude_is_text(tail: str) -> None:
+    # the bars either side of the altitude do not join: no telemetry, so the locator's space is missing
     packet = aprs.decode_tnc2(_ALT_TELEMETRY + tail)
-    assert _line_codes(_ALT_TELEMETRY + tail) == ["mic-e-altitude-not-first"]
-    assert packet.data.telemetry is not None
-    # strict leaves the altitude as text: no telemetry, so the locator's space is missing
+    assert sorted(_line_codes(_ALT_TELEMETRY + tail)) == ["mic-e-altitude-not-first", "missing-space-after-locator"]
+    assert packet.data.telemetry is None
+    assert packet.data.comment == "|!:&0hl!Y[/>='p|" + tail
+    # strict reads the altitude as text too
     assert "missing-space-after-locator" in _line_codes(_ALT_TELEMETRY + tail, aprs.ParseOptions.strict())
 
 
@@ -474,12 +475,12 @@ def test_round_5_mic_e_two_spaces_after_the_locator_and_a_later_altitude(tail: s
 
 @pytest.mark.parametrize(
     ("tail", "comment"),
-    [("|!:&0hl!Y[/>\"4e}='p|  x", "x"), ("|!:&0hl!Y[/>\"4e}='p| /x", "x"), ("|!:&0hl!Y[/>\"4e}='p|   x y", " x y")],
+    [("|!:&0hl!Y[/>\"4e}='p|  x", "|!:&0hl!Y[/>='p|  x"), ("|!:&0hl!Y[/>\"4e}='p| /x", "|!:&0hl!Y[/>='p| /x")],
 )
-def test_round_5_mic_e_two_spaces_after_telemetry_left_by_a_lifted_altitude(tail: str, comment: str) -> None:
+def test_round_5_mic_e_text_left_by_a_lifted_altitude_is_not_telemetry(tail: str, comment: str) -> None:
     got, codes = _mic_e_comment(tail)
     assert got == comment
-    assert codes == ["mic-e-altitude-not-first"]
+    assert sorted(codes) == ["mic-e-altitude-not-first", "missing-space-after-locator"]
 
 
 @pytest.mark.parametrize(
@@ -509,6 +510,93 @@ def test_round_5_strict_meets_a_locators_missing_space_before_an_altitude_left_a
     assert errors == ["missing-space-after-locator"]
 
 
-def test_round_5_strict_still_rejects_an_altitude_left_across_a_dao_when_the_locator_has_its_space() -> None:
+def test_round_5_strict_reads_text_left_across_a_dao_when_the_locator_has_its_space() -> None:
     strict = aprs.decode_tnc2('N0CALL>S32UVT:`(_fn"Oj/`IO91/G x!W12!ab}', aprs.ParseOptions.strict())
-    assert [d.code.value for d in strict.diagnostics if d.severity.value == "error"] == ["mic-e-altitude-not-first"]
+    assert [d.code.value for d in strict.diagnostics if d.severity.value == "error"] == []
+    assert isinstance(strict.data, aprs.MicEReport)
+    assert strict.data.comment == "xab}"
+
+
+_R5_POS = "N0CALL>APRS:!4903.50N/07201.75W>"
+
+
+def _r5_data(line: str) -> aprs.AprsData:
+    return aprs.decode_tnc2(line).data
+
+
+def _r5_refused_as_a_field(line: str) -> None:
+    with pytest.raises(EncodeError) as err:
+        encode_info(aprs.decode_tnc2(line).data)
+    assert err.value.code.value == "text-reads-as-field"
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment", "attr"),
+    [
+        ("PH!W12!G3330 x", "PHG3330 x", "phg"),
+        ("RNG00|!:&0'p|11", "RNG0011", "range_miles"),
+        ("DFS3|!:&0'p|330", "DFS3330", "dfs"),
+        ("x/A=00!W12!0123", "x/A=000123", "altitude_feet"),
+    ],
+)
+def test_round_5_a_position_element_split_by_another_is_text(tail: str, comment: str, attr: str) -> None:
+    data = _r5_data(_R5_POS + tail)
+    assert getattr(data, attr) is None
+    assert data.comment == comment
+    _r5_refused_as_a_field(_R5_POS + tail)
+
+
+def test_round_5_telemetry_split_by_a_dao_is_text() -> None:
+    data = _r5_data(_R5_POS + "|!:&0!W12!'p|")
+    assert data.telemetry is None
+    assert data.comment == "|!:&0'p|"
+    _r5_refused_as_a_field(_R5_POS + "|!:&0!W12!'p|")
+
+
+def test_round_5_item_phg_split_by_telemetry_is_text() -> None:
+    line = "N0CALL>APRS:)ITEM!4903.50N/07201.75W>PHG3|!:&0'p|330"
+    data = _r5_data(line)
+    assert data.phg is None
+    assert data.telemetry is not None
+    assert data.comment == "PHG3330"
+    _r5_refused_as_a_field(line)
+
+
+def test_round_5_object_signpost_split_by_an_altitude_is_text() -> None:
+    line = "N0CALL>APRS:;SIGN     *092345z4903.50N\\07201.75Wm{5/A=000100 5}"
+    data = _r5_data(line)
+    assert data.signpost is None
+    assert data.altitude_feet == 100
+    assert data.comment == "{5 5}"
+
+
+def test_round_5_weather_software_and_unit_split_by_telemetry_is_text() -> None:
+    data = _r5_data("N0CALL>APRS:@092345z4903.50N/07201.75W_220/004g005t077X|!:&0'p|yz")
+    assert data.weather.software is None
+    assert data.telemetry is not None
+    assert data.comment == "Xyz"
+    packet = aprs.decode_tnc2("N0CALL>APRS:@092345z4903.50N/07201.75W_220/004g005t077X|!:&0'p|yz")
+    assert "weather-comment" in [d.code.value for d in packet.diagnostics]
+
+
+@pytest.mark.parametrize(
+    ("tail", "tone"),
+    [("/A=000100 T100 x", True), ("/A=000100 -060 x", False), ("|!:&0'p| T100 x", False), ("!W12! T100 x", False)],
+)
+def test_round_5_only_an_altitude_stands_between_a_frequency_and_its_fields(tail: str, tone: bool) -> None:
+    data = _r5_data(_R5_POS + "146.520MHz" + tail)
+    assert data.frequency.mhz == 146.52
+    assert (data.frequency.tone is not None) is tone or data.frequency.offset_khz is not None
+
+
+def test_round_5_a_frequency_split_by_an_altitude_in_a_mic_e_status_is_text() -> None:
+    data = _r5_data('N0CALL>S32UVT:`(_fn"Oj/`146.5/A=00010020MHz T100')
+    assert data.frequency is None
+    assert data.altitude_feet is not None
+    assert data.comment == "146.520MHz T100"
+
+
+def test_round_5_a_mic_e_phg_split_by_telemetry_after_a_locator_is_text() -> None:
+    data = _r5_data("N0CALL>S32UVT:`(_fn\"Oj/`IO91/G PHG3|!:&0'p|330")
+    assert data.phg is None
+    assert data.comment == "PHG3330"

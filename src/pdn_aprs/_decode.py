@@ -16,7 +16,6 @@ from ._comment import (
     CommentParts,
     lift_comment,
     lift_telemetry_dao,
-    lifted_places,
     parse_extension,
     trailing_lifted_start,
 )
@@ -679,11 +678,12 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
         # wind that was not in the cs bytes gets the default compression type
         fields["compression"] = CompressionType()
     parts = CommentParts()
-    text = lift_telemetry_dao(result.text, parts)
+    frags = lift_telemetry_dao(result.text, parts)
     if parts.dao is not None and p.ambiguity:
         # elements lifted out of the comment are met before the text left over is judged
         ctx.defect(C.DAO_WITH_AMBIGUITY)
-    text = weather_tail(text, ctx, weather)
+    # a software type and unit stand whole in one fragment, not across a lifted element
+    text = weather_tail(frags.joined(), ctx, weather, whole=sum(1 for t in frags.texts if t) < 2)
     if text[:1] in (" ", "/"):
         text = text[1:]
     parts.comment = text
@@ -966,7 +966,8 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         fields.update(values)
         rest = rest[consumed:]
     # an altitude later in the text is looked for once a data extension at the start is lifted,
-    # so that its bytes are never read as one (0PH} in PHG3330PH})
+    # so that its bytes are never read as one (0PH} in PHG3330PH}); a strict decoder reads it as
+    # text and nothing joins into one
     cuts: tuple[int, ...] = ()
     if altitude is None:
         found = _MICE_ALTITUDE.search(rest)
@@ -975,23 +976,6 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
             altitude = _util.base91_value(found.group()[:3]) - 10000
             rest = rest[: found.start()] + rest[found.end() :]
             cuts = (found.start(),)
-        elif not ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
-            # the altitude is looked for before telemetry and the !DAO! are lifted; left as text,
-            # lifting them must not join the bytes either side of a place they came from into
-            # one. Only with a later altitude to decline; with none, strict reads as lenient
-            # (vectors README, Mic-E)
-            left, places = lifted_places(rest)
-            if found is not None and any(
-                _MICE_ALTITUDE.match(left, i) and i < place < i + 4
-                for place in places
-                for i in range(max(place - 3, 0), place)
-            ):
-                # the locator's space is at the byte after it and an altitude is whole only at
-                # its }, so a locator without its space is met first (vectors interpretations,
-                # "A packet is read in order")
-                if no_space and left and left[0] != " ":
-                    ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-                ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     parts = lift_comment(

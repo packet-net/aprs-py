@@ -4,13 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Lifting an element never joins the text either side of it. Base-91 telemetry, a `!DAO!`, a PHG, RNG or DFS, a `/A=` altitude, a Mic-E altitude, a voice frequency and each of its fields, signpost or corridor braces, a weather field and the weather software type and unit are recognised only where their bytes stand whole in the text as sent (in Mic-E, once 0xFF padding is removed); the comment is the fragments left, in order. `PHG3` then a `!DAO!` then `330` is the comment `PHG3330` with no PHG, and writing that comment back is refused as `text-reads-as-field`. The one exception is a lifted `/A=`, which does not cut a voice frequency off from its fields (`146.520MHz/A=000100 T100` has the tone).
+- A strict Mic-E decoder reads a later altitude as text and never rejects by `mic-e-altitude-not-first`; the code stays tolerable. The locator's space, the one space after a frequency and its fields, and the comment's leading space or `/` are still judged on the text left.
+
 ### Fixed
 
-- A strict decode of Mic-E status text with a locator missing its space and an altitude left across a lifted `!DAO!` or telemetry now rejects by `missing-space-after-locator`, which is met first, not by `mic-e-altitude-not-first` (`>IO91/G"4"4T}T}!W1|!:&0'p|}`); with the space present the altitude check is unchanged.
-- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at 7aeb723 (packet-net/aprs-vectors#30).
-- A Mic-E report whose later altitude, lifted from between two `|`, leaves base-91 telemetry after the locator no longer gets `missing-space-after-locator`: the locator's space is judged on the text once the altitude and the telemetry are out (`IO91/G|...|` then ` DG2MM`). Strict, which leaves the altitude as text, still rejects.
+- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at 8ce4dac (packet-net/aprs-vectors#30).
 - A Mic-E locator's space is judged on the decoder's own lifting, not a trial removal: a `!DAO!` that exists only by joining text either side of a lifted altitude is not lifted, so `IO91/G!W1"4e}2! hi` keeps `missing-space-after-locator`; and the space that follows once telemetry or an altitude is lifted is the locator's separator, so `IO91/G|...|  x` has the comment `x`, not ` x`.
-- The vectors runner's single-tolerance check no longer skips a case whose `strict` is rejected by another code: it expects a reading that warns of that code, and asserts it ran on every case whose lenient diagnostics name exactly one tolerable code (731).
+- The vectors runner's single-tolerance check no longer skips a case whose `strict` is rejected by another code: it expects a reading that warns of that code, and asserts it ran on every case whose lenient diagnostics name exactly one tolerable code (739).
 
 ## [1.2.0] - 2026-11-14
 

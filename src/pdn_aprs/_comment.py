@@ -5,6 +5,11 @@ telemetry (between the last two ``|``) and a ``!DAO!`` (the last one outside it)
 altitude anywhere; signpost or corridor braces; a data extension later in the text, only when
 none came straight after the symbol; a voice frequency at the start. Last, one leading space or
 ``/`` is dropped from what is left.
+
+Lifting an element never joins the text either side of it. The comment is held as fragments (see
+``Fragments``): each lift splits the fragment it came from, and every element is recognised
+within one fragment, so nothing is read across a place something was lifted from. The one
+exception is a lifted ``/A=``, which does not cut a voice frequency off from its fields.
 """
 
 from __future__ import annotations
@@ -183,6 +188,69 @@ class CommentParts:
     altitude_feet: float | None = None
 
 
+_PLAIN = "lifted"
+_ALT = "altitude"
+
+
+class Fragments:
+    """The text of a comment as the fragments left between the places elements were lifted from.
+
+    ``kinds[i]`` says what was lifted between ``texts[i]`` and ``texts[i + 1]``: ``_ALT`` for a
+    ``/A=`` altitude, which a voice frequency reads across, ``_PLAIN`` for anything else. A
+    fragment may be empty (two lifts side by side)."""
+
+    __slots__ = ("kinds", "texts")
+
+    def __init__(self, text: str, cuts: tuple[int, ...] = ()) -> None:
+        self.texts: list[str] = []
+        self.kinds: list[str] = []
+        previous = 0
+        for cut in sorted(cuts):
+            self.texts.append(text[previous:cut])
+            self.kinds.append(_PLAIN)
+            previous = cut
+        self.texts.append(text[previous:])
+
+    def joined(self) -> str:
+        """The text left, with nothing marking the places lifted from."""
+        return "".join(self.texts)
+
+    def lift(self, index: int, start: int, end: int, kind: str = _PLAIN) -> None:
+        """Take ``start:end`` out of fragment ``index``, leaving two fragments."""
+        text = self.texts[index]
+        self.texts[index : index + 1] = [text[:start], text[end:]]
+        self.kinds.insert(index, kind)
+
+    def lift_span(self, start: int, end: int) -> None:
+        """Take ``start:end`` (offsets in the text left) out of the one fragment that holds it."""
+        base = 0
+        for index, text in enumerate(self.texts):
+            if base <= start and end <= base + len(text):
+                self.lift(index, start - base, end - base)
+                return
+            base += len(text)
+
+    def find(self, pattern: re.Pattern[str]) -> tuple[int, re.Match[str]] | None:
+        """The first match of ``pattern``, searching each fragment in turn."""
+        for index, text in enumerate(self.texts):
+            m = pattern.search(text)
+            if m:
+                return index, m
+        return None
+
+    def drop_leading(self, chars: str) -> None:
+        """Drop the first character of the text left when it is one of ``chars``."""
+        for index, text in enumerate(self.texts):
+            if text:
+                if text[0] in chars:
+                    self.texts[index] = text[1:]
+                return
+
+    def dropped_to(self, index: int, offset: int) -> str:
+        """The text left from ``offset`` in fragment ``index`` onward."""
+        return self.texts[index][offset:] + "".join(self.texts[index + 1 :])
+
+
 def _telemetry(text: str) -> tuple[CommentTelemetry, int, int] | None:
     """Base-91 telemetry between the last two ``|``: the telemetry and its span."""
     end = text.rfind("|")
@@ -240,8 +308,19 @@ def _last_dao(text: str, skip: tuple[int, int] | None, cuts: tuple[int, ...]) ->
     return None
 
 
-def _frequency(text: str) -> tuple[VoiceFrequency, int] | None:
-    """A voice frequency at the start of ``text``, after at most one space or ``/``."""
+def _frequency(frags: Fragments) -> tuple[VoiceFrequency, str] | None:
+    """A voice frequency at the start of the text left, after at most one space or ``/``, with
+    the text after it (and its fields, and one space) left over.
+
+    The frequency stands whole in one fragment. A field (tone, offset, range) is a space and its
+    value; it may stand after a lifted ``/A=`` (and only that: anything else lifted cuts the
+    fields off), and it is complete at a space, the end of its fragment or any place something was
+    lifted from."""
+    texts, kinds = frags.texts, frags.kinds
+    first = next((n for n, t in enumerate(texts) if t), None)
+    if first is None:
+        return None
+    text = texts[first]
     start = 1 if text[:1] in (" ", "/") else 0
     m = _FREQ_KHZ.match(text, start)
     ten_khz = False
@@ -256,13 +335,19 @@ def _frequency(text: str) -> tuple[VoiceFrequency, int] | None:
     else:
         mhz = float(digits)
     values: dict[str, Any] = {"mhz": mhz, "ten_khz_resolution": ten_khz}
-    i = m.end()
+    at = (first, m.end())
 
     def field_at(pattern: re.Pattern[str]) -> re.Match[str] | None:
-        if text[i : i + 1] != " ":
+        nonlocal at
+        n, i = at
+        while i == len(texts[n]) and n + 1 < len(texts) and kinds[n] == _ALT:
+            n, i = n + 1, 0
+        t = texts[n]
+        if t[i : i + 1] != " ":
             return None
-        fm = pattern.match(text, i + 1)
-        if fm and (fm.end() == len(text) or text[fm.end()] == " "):
+        fm = pattern.match(t, i + 1)
+        if fm and (fm.end() == len(t) or t[fm.end()] == " "):
+            at = (n, fm.end())
             return fm
         return None
 
@@ -279,20 +364,18 @@ def _frequency(text: str) -> tuple[VoiceFrequency, int] | None:
         else:
             values["tone"] = ToneType.TONE_BURST
             values["narrow"] = tm.group(4) == "l"
-        i = tm.end()
     om = field_at(_OFFSET)
     if om:
         sign = -1 if om.group(1) == "-" else 1
         values["offset_khz"] = sign * int(om.group(2)) * 10
-        i = om.end()
     rm = field_at(_RANGE)
     if rm:
         values["range"] = int(rm.group(1))
         values["range_km"] = rm.group(2) == "k"
-        i = rm.end()
-    if text[i : i + 1] == " ":
-        i += 1
-    return VoiceFrequency(**values), i
+    rest = frags.dropped_to(*at)
+    if rest[:1] == " ":
+        rest = rest[1:]
+    return VoiceFrequency(**values), rest
 
 
 def lift_comment(
@@ -306,40 +389,22 @@ def lift_comment(
     after_locator: bool = False,
 ) -> CommentParts:
     """Lift the structured elements out of a comment; see the module docstring for the order.
-    ``cuts``: places in ``text`` where something was already taken out, which no ``!DAO!``
-    spans. ``after_locator``: the text follows a Mic-E locator with no space straight after it;
+    ``cuts``: places in ``text`` where something was already taken out, which nothing is read
+    across. ``after_locator``: the text follows a Mic-E locator with no space straight after it;
     the space is judged on what is left once telemetry and the ``!DAO!`` are lifted (a space
     there separates the locator and is not comment, text there is a missing space)."""
     parts = CommentParts()
-    text = lift_telemetry_dao(text, parts, cuts)
-    if after_locator and text:
-        if text[0] == " ":
-            text = text[1:]
+    frags = lift_telemetry_dao(text, parts, cuts)
+    if after_locator and frags.joined():
+        if frags.joined()[0] == " ":
+            frags.drop_leading(" ")
         else:
             ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-    text = _lift_rest(text, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
-    if text[:1] in (" ", "/"):
-        text = text[1:]
-    parts.comment = text
+    left = _lift_rest(frags, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
+    if left[:1] in (" ", "/"):
+        left = left[1:]
+    parts.comment = left
     return parts
-
-
-def lifted_places(text: str, cuts: tuple[int, ...] = ()) -> tuple[str, tuple[int, ...]]:
-    """The text left once base-91 telemetry and a ``!DAO!`` are lifted, and the places in it
-    where something was taken out."""
-    tel = _telemetry(text) if "|" in text else None
-    dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
-    spans = sorted(
-        ([(tel[1], tel[2])] if tel is not None else []) + ([(dao[3], dao[3] + 5)] if dao is not None else [])
-    )
-    places: list[int] = []
-    removed = 0
-    for start, end in spans:
-        places.append(start - removed)
-        removed += end - start
-    for start, end in reversed(spans):
-        text = text[:start] + text[end:]
-    return text, tuple(places)
 
 
 def trailing_lifted_start(text: str) -> int:
@@ -353,13 +418,15 @@ def trailing_lifted_start(text: str) -> int:
     return min(starts, default=len(text))
 
 
-def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> str:
-    """Lift base-91 telemetry and a ``!DAO!`` into ``parts``; returns the text left.
+def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = ()) -> Fragments:
+    """Lift base-91 telemetry and a ``!DAO!`` into ``parts``; returns the fragments left.
 
-    The telemetry is found first, and the DAO is the last one outside it, in the text as sent, so
-    that taking the telemetry out never joins one.
+    The telemetry is found first, and the DAO is the last one outside it, in the text as sent
+    (across no cut): taking the telemetry out never joins one.
     """
     tel = _telemetry(text) if "|" in text else None
+    if tel is not None and any(tel[1] < cut < tel[2] for cut in cuts):
+        tel = None
     dao = _last_dao(text, None if tel is None else (tel[1], tel[2]), cuts) if "!" in text else None
     spans: list[tuple[int, int]] = []
     if tel is not None:
@@ -368,23 +435,25 @@ def lift_telemetry_dao(text: str, parts: CommentParts, cuts: tuple[int, ...] = (
     if dao is not None:
         parts.dao, parts.dao_lat, parts.dao_lon, at = dao
         spans.append((at, at + 5))
+    frags = Fragments(text, cuts)
     for start, end in sorted(spans, reverse=True):
-        text = text[:start] + text[end:]
-    return text
+        frags.lift_span(start, end)
+    return frags
 
 
 def _lift_rest(
-    text: str, ctx: Ctx, parts: CommentParts, *, symbol: Symbol | None, late_extensions: bool, area: object
+    frags: Fragments, ctx: Ctx, parts: CommentParts, *, symbol: Symbol | None, late_extensions: bool, area: object
 ) -> str:
-    """Lift the altitude, braces, a late data extension and a voice frequency."""
-    if "/A=" in text:
-        m = _ALTITUDE.search(text)
-        if m:
-            value = int(m.group(1))
-            parts.fields["altitude_feet"] = value
-            parts.altitude_feet = value
-            text = text[: m.start()] + text[m.end() :]
-    if "{" in text and symbol is not None:
+    """Lift the altitude, braces, a late data extension and a voice frequency; returns the text
+    left."""
+    found = frags.find(_ALTITUDE)
+    if found:
+        index, m = found
+        value = int(m.group(1))
+        parts.fields["altitude_feet"] = value
+        parts.altitude_feet = value
+        frags.lift(index, m.start(), m.end(), _ALT)
+    if symbol is not None and any("{" in t for t in frags.texts):
         # only \m is a signpost: with an overlay, m is an ordinary symbol (APRS12c ch. 11)
         is_signpost = str(symbol) == "\\m"
         is_line = isinstance(area, AreaObject) and area.shape in (
@@ -392,43 +461,48 @@ def _lift_rest(
             AreaShape.LINE_DOWN_LEFT,
         )
         if is_signpost:
-            m = _SIGNPOST.search(text)
-            if m:
+            found = frags.find(_SIGNPOST)
+            if found:
+                index, m = found
                 parts.fields["signpost"] = m.group(1)
-                text = text[: m.start()] + text[m.end() :]
+                frags.lift(index, m.start(), m.end())
         elif is_line and isinstance(area, AreaObject):
-            m = _CORRIDOR.search(text)
-            if m:
+            found = frags.find(_CORRIDOR)
+            if found:
+                index, m = found
                 parts.fields["area"] = AreaObject(
                     area.shape, area.color, area.lat_offset, area.lon_offset, int(m.group(1))
                 )
-                text = text[: m.start()] + text[m.end() :]
+                frags.lift(index, m.start(), m.end())
     if late_extensions:
-        late = _late_extension(text)
+        late = _late_extension(frags)
         if late is not None and ctx.tolerates(C.DATA_EXTENSION_IN_COMMENT):
             ctx.warn(C.DATA_EXTENSION_IN_COMMENT)
-            key, late_value, start, end = late
+            index, key, late_value, start, end = late
             parts.fields[key] = late_value
-            text = text[:start] + text[end:]
-    freq = _frequency(text)
+            frags.lift(index, start, end)
+    freq = _frequency(frags)
     if freq is not None:
         parts.fields["frequency"] = freq[0]
-        text = text[freq[1] :]
-    return text
+        return freq[1]
+    return frags.joined()
 
 
-def _late_extension(text: str) -> tuple[str, object, int, int] | None:
-    """The first PHG anywhere, else the first RNG, else the first DFS."""
-    if "PHG" in text:
-        m = _PHG.search(text)
-        if m:
-            return "phg", _phg(m), m.start(), m.end()
-    if "RNG" in text:
-        m = _RNG.search(text)
-        if m:
-            return "range_miles", int(m.group(1)), m.start(), m.end()
-    if "DFS" in text:
-        m = _DFS.search(text)
-        if m:
-            return "dfs", _dfs(m), m.start(), m.end()
+def _late_extension(frags: Fragments) -> tuple[int, str, object, int, int] | None:
+    """The first PHG anywhere, else the first RNG, else the first DFS, each whole in one
+    fragment."""
+    for word, pattern, key in (("PHG", _PHG, "phg"), ("RNG", _RNG, "range_miles"), ("DFS", _DFS, "dfs")):
+        if not any(word in t for t in frags.texts):
+            continue
+        found = frags.find(pattern)
+        if found:
+            index, m = found
+            value: object
+            if key == "phg":
+                value = _phg(m)
+            elif key == "dfs":
+                value = _dfs(m)
+            else:
+                value = int(m.group(1))
+            return index, key, value, m.start(), m.end()
     return None
