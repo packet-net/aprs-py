@@ -220,14 +220,9 @@ def lenient_single_tolerance(case: dict[str, Any]) -> str | None:
 
 
 def single_tolerance(case: dict[str, Any]) -> str | None:
-    """The one tolerance the tolerance check turns off, or None where it does not run: the case
-    does not name exactly one, or its ``strict`` is rejected by a different code (turning the
-    tolerance off can bring out that other defect, so the check's result is neither lenient nor strict)."""
-    code = lenient_single_tolerance(case)
-    strict = case.get("strict", "same")
-    if code is not None and isinstance(strict, dict) and "rejected_by" in strict and strict["rejected_by"] != code:
-        return None
-    return code
+    """The one tolerance the tolerance check turns off: the case's lenient diagnostics name exactly
+    one tolerable code. The check runs on every such case, none is skipped."""
+    return lenient_single_tolerance(case)
 
 
 # ---------------------------------------------------------------- checks
@@ -244,8 +239,23 @@ def check_strict(case: dict[str, Any]) -> list[str]:
 def check_tolerance(case: dict[str, Any]) -> list[str]:
     code = single_tolerance(case)
     assert code is not None
-    options = ParseOptions.lenient().without(DiagnosticCode(code))
-    return check_strict_expectation(decode_case(case, options), case)
+    outcome = decode_case(case, ParseOptions.lenient().without(DiagnosticCode(code)))
+    strict = case.get("strict", "same")
+    if isinstance(strict, dict) and "rejected_by" in strict and strict["rejected_by"] != code:
+        # strict is rejected by a different code: turning off the one tolerance can bring that
+        # defect out, so the result must be a reading that warns of it (vectors README)
+        want = f"warning:{strict['rejected_by']}"
+        if outcome.packet is None:
+            return [f"unexpected header error {outcome.header_error!r}"]
+        data = to_neutral(outcome.packet.data)
+        found = [str(d) for d in outcome.packet.diagnostics]
+        out = []
+        if data.get("type") == "unrecognized":
+            out.append(f"expected a reading, got {data!r}")
+        if want not in found:
+            out.append(f"diagnostics {found!r} lack {want}")
+        return out
+    return check_strict_expectation(outcome, case)
 
 
 def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:

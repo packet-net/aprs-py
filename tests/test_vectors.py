@@ -56,18 +56,21 @@ def test_strict(case: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("case", _params("tolerance"))
 def test_tolerance(case: dict[str, Any]) -> None:
-    """Turning off only the one tolerance a case used gives the ``strict`` result."""
+    """Turning off only the one tolerance a case used gives the ``strict`` result (or, where strict
+    is rejected by another code, a reading that warns of that code)."""
     _run("tolerance", case)
 
 
-def test_tolerance_check_leaves_only_the_one_case() -> None:
-    """The check runs on every case with one tolerance except the one whose strict rejection is by another code."""
+def test_tolerance_check_runs_on_every_case_with_one_tolerance() -> None:
+    """No case is skipped: the check runs on every case whose lenient diagnostics name exactly one tolerable code."""
     candidates = [c for c in CASES if "encode" not in c["input"] and "build" not in c["input"]]
     named = [c for c in candidates if lenient_single_tolerance(c) is not None]
     ran = [c for c in named if "tolerance" in checks_for(c)]
-    skipped = sorted(c["id"] for c in named if "tolerance" not in checks_for(c))
     print(f"tolerance check runs on {len(ran)} of {len(named)} cases")
-    assert skipped == ["mic-e/telemetry-left-once-an-altitude-is-lifted-then-a-spaced-comment"]
+    assert named
+    assert len(ran) == len(named)
+    skipped_known = [c["id"] for c in ran if f"{c['id']}::tolerance" in KNOWN]
+    assert not skipped_known
 
 
 @pytest.mark.parametrize("case", _params("reencode"))

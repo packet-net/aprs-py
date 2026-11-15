@@ -6,8 +6,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at 201f7b2 (packet-net/aprs-vectors#30).
+- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at 0253b51 (packet-net/aprs-vectors#30).
 - A Mic-E report whose later altitude, lifted from between two `|`, leaves base-91 telemetry after the locator no longer gets `missing-space-after-locator`: the locator's space is judged on the text once the altitude and the telemetry are out (`IO91/G|...|` then ` DG2MM`). Strict, which leaves the altitude as text, still rejects.
+- A Mic-E locator's space is judged on the decoder's own lifting, not a trial removal: a `!DAO!` that exists only by joining text either side of a lifted altitude is not lifted, so `IO91/G!W1"4e}2! hi` keeps `missing-space-after-locator`; and the space that follows once telemetry or an altitude is lifted is the locator's separator, so `IO91/G|...|  x` has the comment `x`, not ` x`.
+- The vectors runner's single-tolerance check no longer skips a case whose `strict` is rejected by another code: it expects a reading that warns of that code, and asserts it ran on every case whose lenient diagnostics name exactly one tolerable code (731).
 
 ## [1.2.0] - 2026-11-14
 

@@ -943,26 +943,25 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         altitude = _util.base91_value(rest[:3]) - 10000
         rest = rest[4:]
     locator: str | None = None
+    no_space = False
     loc = _mic_e_locator(rest)
     if loc is not None:
         locator, consumed = loc
         rest = rest[consumed:]
-        # base-91 telemetry and a !DAO! are lifted out of the status text before the locator is
-        # read, so a locator followed straight by either has no missing space (vectors ruling F16)
-        # (a later Mic-E altitude is lifted first, and the telemetry it leaves counts too)
-        probe = rest
-        if altitude is None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
-            later = _MICE_ALTITUDE.search(probe)
-            if later is not None:
-                probe = probe[: later.start()] + probe[later.end() :]
-        if rest and rest[0] != " " and lift_telemetry_dao(probe, CommentParts())[:1] not in ("", " "):
-            ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-        elif rest[:1] == " ":
+        # a space straight after the locator separates it; with none, the space is judged on the
+        # decoder's own lifting below (vectors README, Mic-E)
+        if rest[:1] == " ":
             rest = rest[1:]
+        else:
+            no_space = bool(rest)
     p = Pos(lat, lon, Symbol(table, code), ambiguity, False, None)
     ext = parse_extension(rest, p.symbol, ctx, mic_e=True)
     ext_kind: str | None = None
     if ext is not None:
+        if no_space:
+            # a PHG or RNG straight after the locator is read in the separator's place
+            ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
+            no_space = False
         ext_kind, consumed, values = ext
         fields.update(values)
         rest = rest[consumed:]
@@ -996,6 +995,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         symbol=p.symbol,
         late_extensions=ext_kind not in ("phg", "range", "dfs"),
         cuts=cuts,
+        after_locator=no_space,
     )
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(

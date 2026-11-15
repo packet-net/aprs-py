@@ -441,3 +441,52 @@ def test_round_5_mic_e_locator_without_telemetry_still_misses_its_space() -> Non
     # nothing left between the bars once the altitude is out, so it is not telemetry
     codes = _line_codes('N0CALL>S32UVT:`(_fn"Oj/`IO91/G|"4e}|DG2MM')
     assert "missing-space-after-locator" in codes
+
+
+_MIC_E_HEAD = 'N0CALL>S32UVT:`(_fn"Oj/`IO91/G'
+
+
+def _mic_e_comment(tail: str) -> tuple[str | None, list[str]]:
+    packet = aprs.decode_tnc2(_MIC_E_HEAD + tail)
+    assert isinstance(packet.data, aprs.MicEReport)
+    return packet.data.comment, [d.code.value for d in packet.diagnostics]
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment"),
+    [('!W1"4e}2! hi', "!W12! hi"), ('!W1"4e}2!', "!W12!"), ('!W1"4e}2!  hi', "!W12!  hi")],
+)
+def test_round_5_mic_e_dao_joined_across_an_altitude_is_text_and_needs_the_space(tail: str, comment: str) -> None:
+    got, codes = _mic_e_comment(tail)
+    assert got == comment
+    assert sorted(codes) == ["mic-e-altitude-not-first", "missing-space-after-locator"]
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment"),
+    [('"4e}  x', "x"), ('"4e}   x', " x"), ('"4e} /x', "x"), ('"4e}  /x', "/x")],
+)
+def test_round_5_mic_e_two_spaces_after_the_locator_and_a_later_altitude(tail: str, comment: str) -> None:
+    got, codes = _mic_e_comment(tail)
+    assert got == comment
+    assert codes == ["mic-e-altitude-not-first"]
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment"),
+    [("|!:&0hl!Y[/>\"4e}='p|  x", "x"), ("|!:&0hl!Y[/>\"4e}='p| /x", "x"), ("|!:&0hl!Y[/>\"4e}='p|   x y", " x y")],
+)
+def test_round_5_mic_e_two_spaces_after_telemetry_left_by_a_lifted_altitude(tail: str, comment: str) -> None:
+    got, codes = _mic_e_comment(tail)
+    assert got == comment
+    assert codes == ["mic-e-altitude-not-first"]
+
+
+@pytest.mark.parametrize(
+    ("tail", "comment"),
+    [("|!:&0'p|  x", "x"), ("|!:&0'p| /x", "x"), ("|!:&0'p|   x", " x"), ("|!:&0'p|  ", "")],
+)
+def test_round_5_mic_e_two_spaces_after_the_locator_and_telemetry(tail: str, comment: str) -> None:
+    got, codes = _mic_e_comment(tail)
+    assert (got or "") == comment
+    assert codes == []

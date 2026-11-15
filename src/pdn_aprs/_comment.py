@@ -303,12 +303,20 @@ def lift_comment(
     late_extensions: bool = True,
     area: object = None,
     cuts: tuple[int, ...] = (),
+    after_locator: bool = False,
 ) -> CommentParts:
     """Lift the structured elements out of a comment; see the module docstring for the order.
     ``cuts``: places in ``text`` where something was already taken out, which no ``!DAO!``
-    spans."""
+    spans. ``after_locator``: the text follows a Mic-E locator with no space straight after it;
+    the space is judged on what is left once telemetry and the ``!DAO!`` are lifted (a space
+    there separates the locator and is not comment, text there is a missing space)."""
     parts = CommentParts()
     text = lift_telemetry_dao(text, parts, cuts)
+    if after_locator and text:
+        if text[0] == " ":
+            text = text[1:]
+        else:
+            ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
     text = _lift_rest(text, ctx, parts, symbol=symbol, late_extensions=late_extensions, area=area)
     if text[:1] in (" ", "/"):
         text = text[1:]
