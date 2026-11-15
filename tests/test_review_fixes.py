@@ -589,6 +589,36 @@ def test_round_5_only_an_altitude_stands_between_a_frequency_and_its_fields(tail
     assert (data.frequency.tone is not None) is tone or data.frequency.offset_khz is not None
 
 
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "/|!:&0'p|146.520MHz T100 x",
+        " |!:&0'p|146.520MHz T100 x",
+        "/!W12!146.520MHz T100 x",
+        " /A=000100146.520MHz T100 x",
+    ],
+)
+def test_round_5_a_frequency_after_a_delimiter_and_a_lifted_element_is_read(tail: str) -> None:
+    data = _r5_data(_R5_POS + tail)
+    assert data.frequency is not None
+    assert data.frequency.mhz == 146.52
+    assert data.frequency.tone_value == 100
+    assert data.comment == "x"
+
+
+def test_round_5_a_mic_e_frequency_after_a_slash_and_a_later_altitude_is_read() -> None:
+    data = _r5_data('N0CALL>S32UVT:`(_fn"Oj/`/"4e}146.520MHz T100 x')
+    assert data.frequency is not None
+    assert data.frequency.mhz == 146.52
+    assert data.altitude_feet is not None
+    assert data.comment == "x"
+
+
+def test_round_5_a_frequency_split_by_a_lifted_element_after_a_delimiter_is_still_text() -> None:
+    data = _r5_data(_R5_POS + "/|!:&0'p|146.5|!:&0'p|20MHz x")
+    assert data.frequency is None
+
+
 def test_round_5_a_frequency_split_by_an_altitude_in_a_mic_e_status_is_text() -> None:
     data = _r5_data('N0CALL>S32UVT:`(_fn"Oj/`146.5/A=00010020MHz T100')
     assert data.frequency is None

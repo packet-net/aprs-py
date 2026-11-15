@@ -310,7 +310,8 @@ def _last_dao(text: str, skip: tuple[int, int] | None, cuts: tuple[int, ...]) ->
 
 def _frequency(frags: Fragments) -> tuple[VoiceFrequency, str] | None:
     """A voice frequency at the start of the text left, after at most one space or ``/``, with
-    the text after it (and its fields, and one space) left over.
+    the text after it (and its fields, and one space) left over. The delimiter, judged on the text
+    left, may be a piece of its own before a lifted element.
 
     The frequency stands whole in one fragment. A field (tone, offset, range) is a space and its
     value; it may stand after a lifted ``/A=`` (and only that: anything else lifted cuts the
@@ -322,6 +323,12 @@ def _frequency(frags: Fragments) -> tuple[VoiceFrequency, str] | None:
         return None
     text = texts[first]
     start = 1 if text[:1] in (" ", "/") else 0
+    if text in (" ", "/"):
+        # the delimiter stands alone before a lifted element: the frequency starts the next
+        # non-empty piece, and the delimiter goes with it
+        nxt = next((n for n in range(first + 1, len(texts)) if texts[n]), None)
+        if nxt is not None:
+            first, text, start = nxt, texts[nxt], 0
     m = _FREQ_KHZ.match(text, start)
     ten_khz = False
     if not m:
