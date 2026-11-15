@@ -354,7 +354,7 @@ def _with_comment(
     after_frequency: bool = False,
 ) -> bytes:
     """The first way of writing the comment that reads back as the data: as it is, then after
-    a ``/`` delimiter. After a voice frequency it is written after a space; if a space would make
+    a ``/`` delimiter, then after a space. After a voice frequency it is written after a space; if a space would make
     its first words a tone, offset or range field of the frequency, straight after the frequency;
     else after a space and a ``/`` (only where it would not read back as itself without one: ``X``
     ending the text would be the device suffix ` X`)."""
@@ -365,7 +365,9 @@ def _with_comment(
         if _joins_frequency_fields(comment):
             candidates.insert(1, comment)
     else:
-        candidates = [comment, "/" + comment]
+        # a space last: a / delimiter can start a Mic-E altitude with the comment's first bytes
+        # (//x}), which a space cannot
+        candidates = [comment, "/" + comment, " " + comment]
     for candidate in candidates:
         info = build(candidate)
         if _reads_back(data, info, destination):

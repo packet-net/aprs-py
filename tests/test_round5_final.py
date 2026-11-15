@@ -95,3 +95,24 @@ def test_decoding_time_grows_in_proportion_to_the_comment(
     small, large = _best(packet(_SMALL), options), _best(packet(_LARGE), options)
     # four times the text: a linear decoder takes about four times as long, a quadratic one sixteen
     assert large < max(small, 0.004) * 9, f"{element!r}: {small:.4f} s at {_SMALL}, {large:.4f} s at {_LARGE}"
+
+
+@pytest.mark.parametrize("comment", ["/x}", "/=}", "/{}WX"])
+def test_a_comment_starting_with_a_slash_after_an_altitude_is_written_after_a_space(comment: str) -> None:
+    report = aprs.MicEReport(
+        latitude=33.427333,
+        longitude=-112.129,
+        symbol=aprs.Symbol("/", "j"),
+        course_degrees=251,
+        speed_knots=20,
+        mic_e_message="returning",
+        type_code=">",
+        altitude_feet=123,
+        comment=comment,
+    )
+    info = aprs.encode_info(report)
+    assert info.decode().endswith("/A=000123 " + comment)
+    back = aprs.decode_tnc2("N0CALL>S32UVT:" + info.decode()).data
+    assert isinstance(back, aprs.MicEReport)
+    assert back.comment == comment
+    assert back.altitude_feet == 123
