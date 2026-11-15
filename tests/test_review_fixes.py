@@ -490,3 +490,25 @@ def test_round_5_mic_e_two_spaces_after_the_locator_and_telemetry(tail: str, com
     got, codes = _mic_e_comment(tail)
     assert (got or "") == comment
     assert codes == []
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        '`io91sx/G"4e}!W12!!W12!}=',
+        '>IO91/G"4"4T}T}!W1|!:&0\'p|}',
+        ">IO91SX/G\"4e}hello|!:&0hl!Y[='p|}",
+        "`IO91/Gx!W12!ab}",
+        "]IO91/G!w3U!}PHG5132=",
+    ],
+)
+def test_round_5_strict_meets_a_locators_missing_space_before_an_altitude_left_across_a_place(info: str) -> None:
+    line = 'N0CALL>S32UVT:`(_fn"Oj/' + info
+    strict = aprs.decode_tnc2(line, aprs.ParseOptions.strict())
+    errors = [d.code.value for d in strict.diagnostics if d.severity.value == "error"]
+    assert errors == ["missing-space-after-locator"]
+
+
+def test_round_5_strict_still_rejects_an_altitude_left_across_a_dao_when_the_locator_has_its_space() -> None:
+    strict = aprs.decode_tnc2('N0CALL>S32UVT:`(_fn"Oj/`IO91/G x!W12!ab}', aprs.ParseOptions.strict())
+    assert [d.code.value for d in strict.diagnostics if d.severity.value == "error"] == ["mic-e-altitude-not-first"]

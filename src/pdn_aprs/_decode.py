@@ -986,6 +986,11 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
                 for place in places
                 for i in range(max(place - 3, 0), place)
             ):
+                # the locator's space is at the byte after it and an altitude is whole only at
+                # its }, so a locator without its space is met first (vectors interpretations,
+                # "A packet is read in order")
+                if no_space and left and left[0] != " ":
+                    ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
                 ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
