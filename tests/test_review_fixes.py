@@ -360,3 +360,60 @@ def test_run_5_mic_e_suffix_like_comment_needs_no_slash_before_a_dao() -> None:
 def test_run_5_mic_e_comment_that_would_join_the_frequency_fields_follows_it_directly() -> None:
     info = _ST.mic_e(8.43, 44.11, speed_kmh=0, comment="-500 T110", frequency=144.39).info
     assert info.endswith(b"144.390MHz-500 T110")
+
+
+# Round 5: a garbled timestamp before an uncompressed position.
+
+_GARBLED_POSITION = "2831.00N/09601.00W>hi"
+
+
+def _garbled(dti: str, stamp: str, rest: str = _GARBLED_POSITION, strict: bool = False) -> aprs.Packet:
+    options = aprs.ParseOptions.strict() if strict else aprs.ParseOptions.lenient()
+    return aprs.decode_tnc2(f"A>APRS:{dti}{stamp}{rest}".encode(), options)
+
+
+def _codes(packet: aprs.Packet) -> list[str]:
+    return [d.code.value for d in packet.diagnostics]
+
+
+@pytest.mark.parametrize("indicator", ["z", "/", "h"])
+@pytest.mark.parametrize("dti", ["/", "@"])
+def test_garbled_timestamp_before_uncompressed_position(dti: str, indicator: str) -> None:
+    stamp = "R30549" + indicator
+    packet = _garbled(dti, stamp)
+    assert isinstance(packet.data, aprs.PositionReport)
+    assert packet.data.latitude == pytest.approx(28.516666666666666)
+    assert packet.data.comment == "hi"
+    assert packet.data.messaging is (dti == "@")
+    assert _codes(packet) == ["malformed-timestamp"]
+    assert aprs.encode_info(packet.data) == (b"=" if dti == "@" else b"!") + _GARBLED_POSITION.encode()
+    strict = _garbled(dti, stamp, strict=True)
+    assert isinstance(strict.data, aprs.Unrecognized)
+    assert _codes(strict) == ["malformed-timestamp"]
+
+
+def test_garbled_timestamp_lowercase_hemisphere_and_ambiguity() -> None:
+    lower = _garbled("@", "R30549z", "2831.00n/09601.00w>hi")
+    assert isinstance(lower.data, aprs.PositionReport)
+    assert _codes(lower) == ["malformed-timestamp", "lowercase-hemisphere", "lowercase-hemisphere"]
+    strict = _garbled("@", "R30549z", "2831.00n/09601.00w>hi", strict=True)
+    assert _codes(strict) == ["malformed-timestamp"]
+    blurred = _garbled("/", "R30549z", "283 .  N/09601.  W>hi")
+    assert isinstance(blurred.data, aprs.PositionReport)
+    assert blurred.data.latitude == pytest.approx(28.583333333333332)
+    assert _codes(blurred) == ["malformed-timestamp"]
+    assert _codes(_garbled("/", "R30549z", "283 .  N/09601.  W>hi", strict=True)) == ["malformed-timestamp"]
+
+
+def test_garbled_timestamp_seventh_byte_not_a_time_indicator_reads_straight_after_dti() -> None:
+    # Two damaged bytes: the seventh is not z, / or h, so the compressed reading at offset 1 stands.
+    packet = _garbled("@", "R30549X")
+    assert isinstance(packet.data, aprs.PositionReport)
+    assert packet.data.comment != "hi"
+    assert _codes(packet) == ["malformed-timestamp"]
+
+
+def test_garbled_timestamp_short_field_does_not_take_the_new_branch() -> None:
+    packet = aprs.decode_tnc2(b"A>APRS:@R30549z")
+    assert _codes(packet) == ["malformed-timestamp"]
+    assert isinstance(packet.data, aprs.Unrecognized)

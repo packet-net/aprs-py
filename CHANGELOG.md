@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- A `/` or `@` report whose seven timestamp bytes are damaged but end in `z`, `/` or `h`, with an uncompressed position after them (`@R30549z2831.00N/09601.00W>`), reads that position with `malformed-timestamp`; before, the damaged bytes could be read as a compressed position straight after the data type indicator. Pinned to aprs-vectors `round-5` at b118424 (packet-net/aprs-vectors#30).
+
 ## [1.2.0] - 2026-11-14
 
 ### Fixed

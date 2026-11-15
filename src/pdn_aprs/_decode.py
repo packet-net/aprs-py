@@ -527,6 +527,9 @@ def _position(s: str, destination: str, ctx: Ctx) -> AprsData:
             if not timestamp.is_valid:
                 ctx.defect(C.INVALID_TIMESTAMP)
             pos = 8
+        elif s[7:8] in ("z", "/", "h") and "0" <= s[8:9] <= "9" and _position_decodes(s, 8, ctx):
+            ctx.defect(C.MALFORMED_TIMESTAMP)
+            pos = 8
         elif _position_decodes(s, 1, ctx):
             ctx.defect(C.MALFORMED_TIMESTAMP)
         elif _position_decodes(s, 8, ctx):
