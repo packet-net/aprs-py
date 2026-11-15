@@ -161,9 +161,9 @@ _ORDER = (
     RefusalCode.VALUE_GIVEN_TWICE,
     RefusalCode.TEXT_READS_AS_FIELD,
     RefusalCode.DOES_NOT_READ_BACK,
+    RefusalCode.INFORMATION_FIELD_TOO_LONG,
     RefusalCode.AX25_CANNOT_CARRY,
     RefusalCode.TNC2_CANNOT_CARRY,
-    RefusalCode.INFORMATION_FIELD_TOO_LONG,
 )
 _PRIORITY = {code: rank for rank, code in enumerate(_ORDER)}
 """The order in which a refusal names its code when the data breaks several rules (the vectors'
