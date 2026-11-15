@@ -352,7 +352,6 @@ def _with_comment(
     destination: str = DEFAULT_DESTINATION,
     *,
     after_frequency: bool = False,
-    separating_space: bool = False,
 ) -> bytes:
     """The first way of writing the comment that reads back as the data: as it is, then after
     a ``/`` delimiter. After a voice frequency it is written after a space; if a space would make
@@ -367,10 +366,6 @@ def _with_comment(
             candidates.insert(1, comment)
     else:
         candidates = [comment, "/" + comment]
-    if comment and separating_space:
-        # a Mic-E comment that would join what comes before it into an altitude run (1{5}) is
-        # held apart by a space, the only clean form (vectors README, Encoding, E12)
-        candidates.append(" " + comment)
     for candidate in candidates:
         info = build(candidate)
         if _reads_back(data, info, destination):
@@ -1364,7 +1359,7 @@ def _mic_e(data: MicEReport) -> bytes:
     if build(data.comment).endswith((b"\r", b"\n")):
         # a field that ends in a line break would lose it on the way back in
         raise _refuse(RefusalCode.INVALID_CHARACTER, "the information field would end in a line break")
-    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq), separating_space=True)
+    return _with_comment(data, data.comment, build, destination, after_frequency=bool(freq))
 
 
 # ---------------------------------------------------------------- messages

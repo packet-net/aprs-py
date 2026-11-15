@@ -830,8 +830,9 @@ def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
 
 
 @pytest.mark.parametrize("comment", ["{5}", "{}", "}:LoRa iGate"])
-def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) -> None:
-    # E12: after /A=001000, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
+def test_mic_e_comment_that_looks_like_an_altitude_after_a_slash_altitude_is_written_straight_on(comment: str) -> None:
+    # round 5: a later Mic-E altitude never uses the bytes of a whole /A=, so {5} after /A=001000
+    # reads back as comment text and needs no separating space
     report = aprs.MicEReport(
         mic_e_message=MicEMessage.OFF_DUTY,
         latitude=33.46,
@@ -842,7 +843,7 @@ def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) ->
         comment=comment,
     )
     packet = aprs.build_packet("M0LTE-9", report)
-    assert packet.info.endswith(b"/A=001000 " + comment.encode())
+    assert packet.info.endswith(b"/A=001000" + comment.encode())
     back = aprs.decode_tnc2(packet.to_tnc2())
     assert not back.diagnostics
     assert isinstance(back.data, aprs.MicEReport)

@@ -13,6 +13,7 @@ from typing import Any, NoReturn
 
 from . import _util
 from ._comment import (
+    _ALTITUDE,
     CommentParts,
     lift_comment,
     lift_telemetry_dao,
@@ -970,7 +971,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
     # text and nothing joins into one
     cuts: tuple[int, ...] = ()
     if altitude is None:
-        found = _MICE_ALTITUDE.search(rest)
+        found = _later_mic_e_altitude(rest)
         if found is not None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
             ctx.warn(C.MIC_E_ALTITUDE_NOT_FIRST)
             altitude = _util.base91_value(found.group()[:3]) - 10000
@@ -998,6 +999,28 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         destination_ssid=ssid,
         **fields,
     )
+
+
+def _later_mic_e_altitude(text: str) -> re.Match[str] | None:
+    """The first run of three base-91 characters and ``}`` in ``text`` that shares no byte with a
+    ``/A=`` altitude standing whole as sent (as a locator's bytes are never used at the start).
+    One pass over the altitudes and one over the candidates, so a long run of either is linear."""
+    if "}" not in text:
+        return None
+    spans = [m.span() for m in _ALTITUDE.finditer(text)] if "/A=" in text else []
+    pos = 0
+    k = 0
+    while True:
+        found = _MICE_ALTITUDE.search(text, pos)
+        if found is None:
+            return None
+        start, end = found.span()
+        while k < len(spans) and spans[k][1] <= start:
+            k += 1
+        if k < len(spans) and spans[k][0] < end:
+            pos = start + 1
+            continue
+        return found
 
 
 def _mic_e_locator(text: str) -> tuple[str, int] | None:
