@@ -373,20 +373,14 @@ def test_a_frame_sets_the_h_bit_of_every_used_entry() -> None:
     assert again.path == packet.path
 
 
-def test_an_entry_not_marked_used_before_a_used_one_cannot_be_carried_by_a_line() -> None:
+def test_an_entry_not_marked_used_before_a_used_one_is_an_invalid_path_in_every_writer() -> None:
     packet = _packet(UNUSED_THEN_USED)
-    for write in (packet.to_tnc2, lambda: packet.header, lambda: str(packet)):
+    for write in (packet.to_tnc2, lambda: packet.header, packet.to_ax25, packet.to_kiss):
         with pytest.raises(EncodeError) as excinfo:
             write()
-        assert excinfo.value.code is RefusalCode.TNC2_CANNOT_CARRY
-
-
-def test_an_entry_not_marked_used_before_a_used_one_cannot_be_carried_by_a_frame() -> None:
-    packet = _packet(UNUSED_THEN_USED)
-    for write in (packet.to_ax25, packet.to_kiss):
-        with pytest.raises(EncodeError) as excinfo:
-            write()
-        assert excinfo.value.code is RefusalCode.AX25_CANNOT_CARRY
+        assert excinfo.value.code is RefusalCode.INVALID_PATH
+    # display is not a writer: it shows the header as held and never refuses
+    assert str(packet) == "N0CALL>APZ001,WIDE1-1,N0CALL-1*:>hi"
 
 
 def test_a_builder_path_entry_ending_in_a_star_is_a_used_entry() -> None:

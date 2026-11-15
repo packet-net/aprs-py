@@ -17,10 +17,13 @@ class RefusalCode(str, Enum):
     codes may be added in later 1.x releases, so allow for one you do not know.
     ``INFORMATION_FIELD_TOO_LONG`` is the whole information field over 256 bytes (``TOO_LONG`` is a
     field over its own limit). ``DOES_NOT_READ_BACK`` is the fallback: the library's own read-back
-    check failed and no rule names why.
+    check failed and no rule names why. ``INVALID_PATH`` is a path with an entry not marked used
+    before one that is: no line or frame reads back as given, so it is a fault of the header, not of
+    a form.
     """
 
     INVALID_ADDRESS = "invalid-address"
+    INVALID_PATH = "invalid-path"
     AX25_CANNOT_CARRY = "ax25-cannot-carry"
     TNC2_CANNOT_CARRY = "tnc2-cannot-carry"
     INVALID_THIRD_PARTY_HEADER = "invalid-third-party-header"

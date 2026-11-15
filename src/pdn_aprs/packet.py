@@ -67,6 +67,10 @@ class Packet:
     it: always present, an :class:`~pdn_aprs.model.Unrecognized` when nothing could be.
     ``diagnostics`` lists everything the decoder noticed, header included. ``third_party`` is
     true for the packet inside a third-party packet (``}``), whose path is kept as sent.
+
+    ``str(packet)`` and ``repr(packet)`` are for display, not for sending: they show the packet as
+    held, are never read back and never raise. Only :attr:`header`, :meth:`to_tnc2`,
+    :meth:`to_ax25` and :meth:`to_kiss` write, and only they can raise :class:`EncodeError`.
     """
 
     source: str
@@ -109,61 +113,90 @@ class Packet:
     def header(self) -> str:
         """The TNC2 header, ``SOURCE>DEST,PATH``, with a ``*`` on the last used entry.
 
-        It is read back like any header the library writes: a header that does not read back as
-        this packet's source, destination and path raises :class:`EncodeError` (``tnc2-cannot-carry``
-        for a path with an entry not marked used before one that is)."""
-        path = _tnc2_path(self.path)
-        text = f"{self.source}>{self.destination}" + ("," + path if path else "")
+        This writes a header, so it is read back as a user's ``decode_tnc2`` of it would read it, by
+        the outer header rules, whatever the packet's origin (a third-party packet's inner packet
+        with a source such as ``a b`` is ``invalid-address``). A header that does not read back as
+        this packet's source, destination and path raises :class:`EncodeError`: ``invalid-address``,
+        ``invalid-path`` for a path with an entry not marked used before one that is, or
+        ``does-not-read-back``."""
+        self._check_header_given()
+        text = self._display_header()
         self._read_back_tnc2_header(text)
         return text
 
+    def _display_header(self) -> str:
+        """The header as held, with no check: for display."""
+        path = _tnc2_path(self.path)
+        return f"{self.source}>{self.destination}" + ("," + path if path else "")
+
+    def _check_header_given(self) -> None:
+        """The faults of the header as given, whichever form is written: an address the outer rules
+        do not hold (``invalid-address``), then a path no line or frame reads back as given
+        (``invalid-path``). An empty destination is a defect a decoded packet may carry, judged by the
+        read-back of the form written."""
+        from ._decode import _ADDRESS
+
+        calls = (self.source, *(p.address for p in self.path))
+        if not all(_ADDRESS.match(call) for call in calls) or (
+            self.destination and not _ADDRESS.match(self.destination)
+        ):
+            raise EncodeError("an address is not 1-9 letters, digits or -", RefusalCode.INVALID_ADDRESS)
+        if _skips_a_used_entry(self.path):
+            raise EncodeError(
+                "a path entry not marked used before one that is would read back used", RefusalCode.INVALID_PATH
+            )
+
     def _read_back_tnc2_header(self, text: str) -> None:
-        """The header written, read back: the same source, destination and path (entry by entry, each
-        used exactly when this packet's is) and no diagnostic the packet does not already carry."""
+        """The header written, read back by the outer rules: the same source, destination and path
+        (entry by entry, each used exactly when this packet's is) and no diagnostic the packet does
+        not already carry. A q-construct is read from the path, so it is not compared."""
         from ._decode import Ctx, RejectedError, parse_tnc2_header
         from .errors import HeaderError
         from .options import _LENIENT
 
         ctx = Ctx(_LENIENT)
         try:
-            source, destination, path = parse_tnc2_header(text, ctx, third_party=self.third_party)
+            source, destination, path = parse_tnc2_header(text, ctx)
         except (HeaderError, RejectedError):
             raise EncodeError(
                 f"the header {text!r} is not one a TNC2 line can carry", RefusalCode.INVALID_ADDRESS
             ) from None
-        if _skips_a_used_entry(self.path):
-            raise EncodeError(
-                "a path entry not marked used before one that is would read back used in a TNC2 line",
-                RefusalCode.TNC2_CANNOT_CARRY,
-            )
         # a defect the packet already carries (an empty destination it was decoded with) is its data
         new = [d for d in ctx.diags if d not in self.diagnostics]
         if (source, destination, path) != (self.source, self.destination, self.path) or new:
-            raise EncodeError(
-                f"the header {text!r} would not read back as this packet's", RefusalCode.DOES_NOT_READ_BACK
-            )
+            # the one diagnostic a header this method writes can read back with is an empty destination
+            code = RefusalCode.INVALID_ADDRESS if not self.destination else RefusalCode.DOES_NOT_READ_BACK
+            raise EncodeError(f"the header {text!r} would not read back as this packet's", code)
 
     def to_tnc2(self) -> bytes:
         """The packet as a TNC2 / APRS-IS line (without a line terminator).
 
         This writes out a packet the program already holds, so it is not an encoder: the information
-        field goes through as it stands, with no size check. The header it writes is read back
-        (see :attr:`header`).
-        """
-        return self.header.encode("ascii") + b":" + self.info
+        field goes through as it stands (a ``Packet`` built by hand has its information field written
+        as held), with no size check. The header it writes is read back (see :attr:`header`), and
+        a line ends at a CR or LF, so an information field holding one other than at its very end
+        (which a decoder takes off) is ``tnc2-cannot-carry``."""
+        header = self.header
+        body = self.info.rstrip(b"\r\n")
+        if b"\r" in body or b"\n" in body:
+            raise EncodeError(
+                "a CR or LF inside the information field would end the line", RefusalCode.TNC2_CANNOT_CARRY
+            )
+        return header.encode("ascii") + b":" + self.info
 
     def to_ax25(self) -> bytes:
         """The packet as an AX.25 UI frame without flags or FCS (a KISS payload).
 
         Every address must be a valid AX.25 address (1-6 upper-case letters and digits, SSID
-        0-15), so an APRS-IS path with a q-construct cannot be written. The information field goes
-        through as it stands: this is not an encoder, and does not check its size.
+        0-15, never empty), so an APRS-IS path with a q-construct cannot be written
+        (``ax25-cannot-carry``). The information field goes through as it stands: this is not an
+        encoder, and does not check its size. A frame carries a CR or LF in it.
         """
+        self._check_header_given()
         path = self.path
         if len(path) > 8:
             raise EncodeError("an AX.25 frame has at most 8 digipeaters", RefusalCode.AX25_CANNOT_CARRY)
-        # an empty destination (a defect the held packet carries) is written as six spaces
-        frame = bytearray(_ax25_address(self.destination, command=True, may_be_empty=True))
+        frame = bytearray(_ax25_address(self.destination, command=True))
         frame += _ax25_address(self.source, last=not path)
         for i, entry in enumerate(path):
             frame += _ax25_address(entry.address, last=i == len(path) - 1, repeated=entry.used)
@@ -177,11 +210,6 @@ class Packet:
         from ._decode import decode_ax25
         from .errors import HeaderError
 
-        if _skips_a_used_entry(self.path):
-            raise EncodeError(
-                "a path entry not marked used before one that is would read back used in an AX.25 frame",
-                RefusalCode.AX25_CANNOT_CARRY,
-            )
         try:
             again = decode_ax25(frame)
         except HeaderError:
@@ -203,14 +231,15 @@ class Packet:
         return b"\xc0" + bytes([port << 4]) + body + b"\xc0"
 
     def __str__(self) -> str:
-        return self.to_tnc2().decode("utf-8", "backslashreplace")
+        """The packet as a line, for display only, not for sending: it shows the header and the
+        information field as held, is never read back and never raises. Use :meth:`to_tnc2` to write
+        a line."""
+        return (self._display_header().encode("ascii", "backslashreplace") + b":" + self.info).decode(
+            "utf-8", "backslashreplace"
+        )
 
 
-def _ax25_address(
-    name: str, *, last: bool = False, command: bool = False, repeated: bool = False, may_be_empty: bool = False
-) -> bytes:
-    if may_be_empty and name == "":
-        return b"\x40" * 6 + bytes([0x60 | (0x80 if command else 0) | (1 if last else 0)])
+def _ax25_address(name: str, *, last: bool = False, command: bool = False, repeated: bool = False) -> bytes:
     call, dash, ssid_text = name.partition("-")
     if dash and not ssid_text:
         # a dash with no SSID would come back from the frame as no dash

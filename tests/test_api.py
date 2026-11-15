@@ -1091,7 +1091,7 @@ def test_encode_error_without_a_code_is_the_fallback() -> None:
         ),
         (lambda: aprs.encode_info(aprs.Unrecognized(aprs.UnrecognizedReason.EMPTY)), "not-encodable"),
         (lambda: aprs.build_packet("bad call", _pos()), "invalid-address"),
-        (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9), "ax25-cannot-carry"),
+        (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9).to_ax25(), "ax25-cannot-carry"),
         (lambda: aprs.encode_info(aprs.Message("BLN1", "hi")), "invalid-addressee"),
         (lambda: aprs.encode_info(aprs.Message("N0CALL", "hi", reply_ack="1")), "missing-field"),
         (lambda: aprs.encode_info(aprs.Capabilities((("bad token",),))), "malformed"),

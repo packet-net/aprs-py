@@ -4,9 +4,11 @@ Every encoder ends in one check (``encode._read_back``): decode the information 
 leniently, and compare the result with the data given. This module is the comparison, stated once
 for every report type (the vectors' README, Rules, Read-back):
 
-* **Diagnostics.** The decode has no warning and no error, and an ``info`` only from a short list
-  (``obsolete-format``, ``mic-e-missing-device-type``, ``invalid-query``,
-  ``invalid-telemetry-metadata``). A third-party packet's inner packet is held to the same for its
+* **Diagnostics.** The decode has no warning and no error, and an ``info`` only where the rules
+  attach it to the form the data itself asks for (``obsolete-format`` on a positionless weather
+  report, raw weather, an NMEA sentence, a Maidenhead beacon and Mic-E Rev 0 telemetry;
+  ``mic-e-missing-device-type`` on a Mic-E report; ``invalid-query`` and
+  ``invalid-telemetry-metadata`` on a message). A third-party packet's inner packet is held to the same for its
   warnings and errors; its ``info`` diagnostics are not compared.
 * **Fields.** In the neutral data form, at every depth, every field given is in the decode with
   the same value and the decode has no field not given. Strings, booleans, integers and
@@ -28,23 +30,40 @@ from ._comment import MICROWAVE_BASE
 from ._decode import Ctx, decode_info
 from ._neutral import to_neutral
 from .diagnostics import DiagnosticCode, Severity
-from .model import AprsData, CompressionType, ThirdParty
+from .model import (
+    AprsData,
+    CompressionType,
+    MaidenheadBeacon,
+    Message,
+    MicEReport,
+    NmeaSentence,
+    PositionlessWeather,
+    RawWeather,
+    ThirdParty,
+)
 from .options import _LENIENT
 
 __all__ = ["mismatch"]
 
 _nearest = _util.round_half_away
 
-_ALLOWED_INFOS = frozenset(
-    {
-        DiagnosticCode.OBSOLETE_FORMAT,
-        DiagnosticCode.MIC_E_MISSING_DEVICE_TYPE,
-        DiagnosticCode.INVALID_QUERY,
-        DiagnosticCode.INVALID_TELEMETRY_METADATA,
-    }
-)
-"""The only ``info`` diagnostics a read-back may carry: each says something about the form the
-data itself asked for."""
+
+def _info_allowed(code: DiagnosticCode, decoded: AprsData) -> bool:
+    """Whether an ``info`` diagnostic is one the rules attach to the form the data itself asks for:
+    ``obsolete-format`` on a positionless weather report, raw weather, an NMEA sentence, a Maidenhead
+    beacon and Mic-E Rev 0 telemetry; ``mic-e-missing-device-type`` on a Mic-E report;
+    ``invalid-query`` and ``invalid-telemetry-metadata`` on a message the rules read as a plain one.
+    An info listed for one form is not accepted on another."""
+    if code is DiagnosticCode.OBSOLETE_FORMAT:
+        return isinstance(decoded, (PositionlessWeather, RawWeather, NmeaSentence, MaidenheadBeacon)) or (
+            isinstance(decoded, MicEReport) and bool(decoded.legacy_telemetry)
+        )
+    if code is DiagnosticCode.MIC_E_MISSING_DEVICE_TYPE:
+        return isinstance(decoded, MicEReport)
+    if code in (DiagnosticCode.INVALID_QUERY, DiagnosticCode.INVALID_TELEMETRY_METADATA):
+        return isinstance(decoded, Message)
+    return False
+
 
 _NMEA_DETERMINED = ("has_checksum", "latitude", "longitude", "fix", "course_degrees", "speed_knots", "altitude_m")
 _NMEA_DETERMINED_TEXT = ("time", "waypoint")
@@ -61,7 +80,7 @@ def mismatch(data: AprsData, given: dict[str, Any], info: bytes, destination: st
     ctx = Ctx(_LENIENT)
     decoded = decode_info(info, destination, ctx)
     for diag in ctx.diags:
-        if diag.severity is not Severity.INFO or diag.code not in _ALLOWED_INFOS:
+        if diag.severity is not Severity.INFO or not _info_allowed(diag.code, decoded):
             return f"it decodes with {diag}"
     found = to_neutral(decoded)
     expected = _clone(given)
@@ -249,6 +268,10 @@ def _positioned(given: dict[str, Any], found: dict[str, Any], decoded: AprsData)
     if _number(altitude):
         if mic_e and not getattr(decoded, "altitude_in_comment", False):
             given["altitude_feet"] = _nearest(altitude / _util.FEET_PER_METRE) * _util.FEET_PER_METRE
+        elif mic_e:
+            # a /A= beside the Mic-E bytes is allowed only where it holds the value exactly (whole feet)
+            if abs(altitude - round(altitude)) <= 1e-6:
+                given["altitude_feet"] = _nearest(altitude)
         elif compressed and source == "gga":
             held = 1.002 ** min(
                 max(_nearest(math.log(altitude) / math.log(1.002)) if altitude >= 1 else 0, 0), 91 * 91 - 1

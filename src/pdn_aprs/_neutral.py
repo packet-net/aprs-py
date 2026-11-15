@@ -316,7 +316,18 @@ def from_neutral(data: dict[str, Any]) -> AprsData:
             raise EncodeError("third-party packets nest at most 4 deep", RefusalCode.INVALID_THIRD_PARTY_HEADER)
         packet = node.get("packet")
         node = packet.get("data") if isinstance(packet, dict) else None
-    return _from_neutral(data)
+    return _from_neutral(_without_absent(data))
+
+
+def _without_absent(value: Any) -> Any:
+    """``value`` with every field given as ``null`` or ``false`` left out, at every depth: both
+    compare as absent (the form writes a boolean only when true). A list's items are values and
+    stay, a ``null`` among them included."""
+    if isinstance(value, dict):
+        return {k: _without_absent(v) for k, v in value.items() if v is not None and v is not False}
+    if isinstance(value, list):
+        return [_without_absent(v) for v in value]
+    return value
 
 
 def _from_neutral(data: dict[str, Any]) -> AprsData:
@@ -351,6 +362,10 @@ def _from_neutral(data: dict[str, Any]) -> AprsData:
         kwargs["sequence"] = NoSequence()  # missing-field, not an empty sequence
     if "addressee" in cls.__dataclass_fields__ and "addressee" not in kwargs:
         kwargs["addressee"] = ""
+    if cls is Ack and "acked_id" not in kwargs:
+        kwargs["acked_id"] = ""  # an ack's ID absent is empty: invalid-message-id
+    if cls is Reject and "rejected_id" not in kwargs:
+        kwargs["rejected_id"] = ""
     if cls in (Message, Bulletin, NwsBulletin) and "text" not in kwargs:
         # empty text is left out of the neutral form
         kwargs["text"] = ""

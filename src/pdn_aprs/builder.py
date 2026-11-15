@@ -3,7 +3,8 @@
 A :class:`Station` holds what stays the same from packet to packet (the callsign, the
 digipeater path, the destination, whether the station can message, its usual symbol), and
 has one method per kind of packet. Each returns a :class:`~pdn_aprs.Packet`, already
-encoded; ``str(packet)`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame.
+encoded; ``packet.to_tnc2()`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame (``str(packet)``
+shows the same line, for display, not for sending: it is never read back and never raises).
 
 >>> from pdn_aprs import Station, Symbol
 >>> m0lte = Station("M0LTE-9", path="WIDE1-1", symbol=Symbol.CAR)
@@ -31,7 +32,7 @@ from fractions import Fraction
 from typing import Any, Literal, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, BuilderAltitude, SizeError, _real, build_packet
+from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _build_packet, _real
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -282,11 +283,14 @@ class Station:
         """Any data as a packet from this station."""
         return self._send(data, [])
 
-    def _send(self, data: AprsData, faults: list[EncodeError]) -> Packet:
+    def _send(self, data: AprsData, faults: list[EncodeError], *, mic_e_first: bool = False) -> Packet:
         """Build the packet; ``faults`` are ones the caller noted while gathering its arguments,
-        named in the Refusal reasons order along with whatever the encoder refuses."""
+        named in the Refusal reasons order along with whatever the encoder refuses. ``mic_e_first``
+        is a Mic-E report's altitude as the program gave it: written in the Mic-E bytes first."""
         try:
-            packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
+            packet = _build_packet(
+                self.callsign, data, destination=self.destination, path=self.path, mic_e_first=mic_e_first
+            )
         except EncodeError as e:
             if faults:
                 from .encode import _PRIORITY, SizeError
@@ -517,7 +521,7 @@ class Station:
             # bytes first and a /A= only where it holds the value exactly, so the value goes on as given
             metres = round_half_away(given if altitude_feet is None else given / FEET_PER_METRE)
             if -10000 <= metres <= 743570:
-                feet = BuilderAltitude(altitude_feet if altitude_feet is not None else given * FEET_PER_METRE)
+                feet = altitude_feet if altitude_feet is not None else given * FEET_PER_METRE
             else:
                 faults.append(
                     EncodeError("a Mic-E altitude is -10000 to 743570 metres", RefusalCode.VALUE_OUT_OF_RANGE)
@@ -537,7 +541,7 @@ class Station:
             dao=Dao("W", DaoPrecision.BASE91) if dao else None,
             type_code="`" if self.messaging else "'",
         )
-        return self._send(data, faults)
+        return self._send(data, faults, mic_e_first=True)
 
     # ------------------------------------------------------------ weather
 

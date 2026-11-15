@@ -8,7 +8,8 @@ matches is written, and when none does the data is refused (``text-reads-as-fiel
 that reads back changed, ``does-not-read-back`` otherwise). Encoders return forms, never bytes, so
 no function here can return bytes that did not pass. An information field is at most 256
 bytes (:data:`INFORMATION_FIELD_LIMIT`), judged after the read-back, and text with a control
-character is refused as ``invalid-character``.
+character is refused as ``invalid-character``. A number in a field held only in whole units or as a code
+(a PHG digit, an area offset, a storm field...) is never rounded: a non-integer is ``value-out-of-range``.
 
 >>> from pdn_aprs import PositionReport, Symbol
 >>> from pdn_aprs.encode import encode_info
@@ -20,6 +21,7 @@ b'=5130.00N/00007.00W>088/036Mobile'
 from __future__ import annotations
 
 import dataclasses
+import functools
 import math
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -31,7 +33,7 @@ from . import _util
 from ._comment import MICROWAVE_BASE
 from ._neutral import to_neutral
 from ._readback import mismatch
-from .diagnostics import DiagnosticCode
+from .diagnostics import DiagnosticCode, Severity
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -79,7 +81,7 @@ from .model import (
     VoiceFrequency,
     Weather,
 )
-from .packet import Packet, PathEntry, _tnc2_path
+from .packet import Packet, PathEntry, _skips_a_used_entry, _tnc2_path
 
 __all__ = [
     "DEFAULT_DESTINATION",
@@ -139,6 +141,7 @@ class SizeError(EncodeError):
 _ORDER = (
     RefusalCode.NOT_ENCODABLE,
     RefusalCode.INVALID_ADDRESS,
+    RefusalCode.INVALID_PATH,
     RefusalCode.INVALID_THIRD_PARTY_HEADER,
     RefusalCode.INVALID_ADDRESSEE,
     RefusalCode.INVALID_NAME,
@@ -710,17 +713,26 @@ def _compressed(data: PositionedData, weather: bool, f: _Faults) -> tuple[str, s
     return f"{table}{y}{x}{data.symbol.code}{cs}{chr(ctype.value + 33)}", altitude_text
 
 
+def _whole(*values: Any) -> bool:
+    """Whether every value is a whole number (``4`` or ``4.0``). A field the form holds only in
+    whole units or as a code is never rounded: a number between its values is out of range."""
+    return all(isinstance(v, int) or (isinstance(v, float) and v.is_integer()) for v in values)
+
+
 def _phg_text(data: PositionedData) -> str:
     phg = data.phg
     if phg is None:
         return ""
-    if not (0 <= phg.power <= 9 and 0 <= phg.gain <= 9 and 0 <= phg.directivity <= 9 and 0 <= phg.height <= 78):
+    if not _whole(phg.power, phg.gain, phg.directivity, phg.height) or not (
+        0 <= phg.power <= 9 and 0 <= phg.gain <= 9 and 0 <= phg.directivity <= 9 and 0 <= phg.height <= 78
+    ):
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "PHG code out of range")
-    text = f"PHG{phg.power}{chr(phg.height + 48)}{phg.gain}{phg.directivity}"
+    text = f"PHG{int(phg.power)}{chr(int(phg.height) + 48)}{int(phg.gain)}{int(phg.directivity)}"
     rate = phg.beacons_per_hour
     if rate is not None:
-        if not 1 <= rate <= 35:
+        if not _whole(rate) or not 1 <= rate <= 35:
             raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "PHG beacons per hour is not 1-35")
+        rate = int(rate)
         text += (str(rate) if rate < 10 else chr(rate - 10 + ord("A"))) + "/"
     return text
 
@@ -729,9 +741,11 @@ def _dfs_text(data: PositionedData) -> str:
     d = data.dfs
     if d is None:
         return ""
-    if not (0 <= d.strength <= 9 and 0 <= d.gain <= 9 and 0 <= d.directivity <= 9 and 0 <= d.height <= 78):
+    if not _whole(d.strength, d.gain, d.directivity, d.height) or not (
+        0 <= d.strength <= 9 and 0 <= d.gain <= 9 and 0 <= d.directivity <= 9 and 0 <= d.height <= 78
+    ):
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "DFS code out of range")
-    return f"DFS{d.strength}{chr(d.height + 48)}{d.gain}{d.directivity}"
+    return f"DFS{int(d.strength)}{chr(int(d.height) + 48)}{int(d.gain)}{int(d.directivity)}"
 
 
 def _range_text(miles: float) -> str:
@@ -754,10 +768,10 @@ def _storm_text(data: PositionedData, f: _Faults) -> str:
             # storm fields are digits: there is no unknown to write
             f.add(RefusalCode.MISSING_FIELD, "storm data needs every field but the whole gale radius")
             return "0" * width
-        if not 0 <= v < 10**width:
+        if not _whole(v) or not 0 <= v < 10**width:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "storm value does not fit its field")
             return "0" * width
-        return f"{v:0{width}d}"
+        return f"{int(v):0{width}d}"
 
     text = (
         f"/{code}/{n(st.sustained_wind_knots, 3)}^{n(st.gust_knots, 3)}/{n(st.central_pressure_mbar, 4)}"
@@ -786,9 +800,12 @@ def _extension(data: PositionedData, f: _Faults) -> str:
             if str(data.symbol) != "/\\":
                 f.add(RefusalCode.SYMBOL_MISMATCH, "DF bearing needs the DF symbol /\\")
             b = data.df_bearing
-            if not (0 <= b.bearing_degrees <= 360 and all(0 <= v <= 9 for v in (b.number, b.range, b.quality))):
+            if not _whole(b.bearing_degrees, b.number, b.range, b.quality) or not (
+                0 <= b.bearing_degrees <= 360 and all(0 <= v <= 9 for v in (b.number, b.range, b.quality))
+            ):
                 f.add(RefusalCode.VALUE_OUT_OF_RANGE, "DF bearing or NRQ out of range")
-            text += f"/{b.bearing_degrees:03d}/{b.number}{b.range}{b.quality}"
+            else:
+                text += f"/{int(b.bearing_degrees):03d}/{int(b.number)}{int(b.range)}{int(b.quality)}"
         if data.df_bearing is not None and data.storm is not None:
             f.add(RefusalCode.EXTENSION_CONFLICT, "a DF bearing and storm data both extend the course and speed")
         if str(data.symbol) == "\\l" and data.area is None and course is not None:
@@ -805,12 +822,14 @@ def _extension(data: PositionedData, f: _Faults) -> str:
         if str(data.symbol) != "\\l":
             f.add(RefusalCode.SYMBOL_MISMATCH, "an area object needs the area symbol \\l, without an overlay")
         a = data.area
-        if not (0 <= a.lat_offset <= 99 and 0 <= a.lon_offset <= 99):
-            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "area offsets are 0-99")
         color = a.color.code
-        parts.append(
-            f"{a.shape.code}{a.lat_offset:02d}{'/' + str(color) if color < 10 else str(color)}{a.lon_offset:02d}"
-        )
+        if not _whole(a.lat_offset, a.lon_offset) or not (0 <= a.lat_offset <= 99 and 0 <= a.lon_offset <= 99):
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "area offsets are 0-99")
+        else:
+            parts.append(
+                f"{a.shape.code}{int(a.lat_offset):02d}{'/' + str(color) if color < 10 else str(color)}"
+                f"{int(a.lon_offset):02d}"
+            )
     if len(parts) > 1:
         f.add(RefusalCode.EXTENSION_CONFLICT, "more than one data extension")
     return parts[0] if parts else ""
@@ -849,11 +868,11 @@ def _frequency_text(fq: VoiceFrequency, f: _Faults) -> str:
         else:
             if fq.tone_value is None:
                 f.add(RefusalCode.MISSING_FIELD, "a tone needs a value of 0-999")
-            elif not 0 <= fq.tone_value <= 999:
+            elif not _whole(fq.tone_value) or not 0 <= fq.tone_value <= 999:
                 f.add(RefusalCode.VALUE_OUT_OF_RANGE, "a tone needs a value of 0-999")
             else:
                 letter = {ToneType.TONE: "T", ToneType.CTCSS: "C", ToneType.DCS: "D"}[fq.tone]
-                text += f" {letter.lower() if fq.narrow else letter}{fq.tone_value:03d}"
+                text += f" {letter.lower() if fq.narrow else letter}{int(fq.tone_value):03d}"
     elif fq.narrow:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "narrow is set by a tone letter")
     if fq.offset_khz is not None:
@@ -863,10 +882,10 @@ def _frequency_text(fq: VoiceFrequency, f: _Faults) -> str:
         else:
             text += f" {'-' if tens < 0 else '+'}{abs(tens):03d}"
     if fq.range is not None:
-        if not 0 <= fq.range <= 999:
+        if not _whole(fq.range) or not 0 <= fq.range <= 999:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "range out of range")
         else:
-            text += f" R{fq.range:02d}{'k' if fq.range_km else 'm'}"
+            text += f" R{int(fq.range):02d}{'k' if fq.range_km else 'm'}"
     return text
 
 
@@ -881,13 +900,13 @@ def _telemetry_text(t: CommentTelemetry | None, f: _Faults) -> str:
     if t.digital is not None:
         if len(t.analog) != 5:
             f.add(RefusalCode.MISSING_FIELD, "comment telemetry digital bits need all five analog values")
-        if not 0 <= t.digital <= 255:
+        if not _whole(t.digital) or not 0 <= t.digital <= 255:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "comment telemetry has eight binary channels, 0-255")
         values.append(t.digital)
-    if any(not 0 <= v <= 8280 for v in values):
-        f.add(RefusalCode.VALUE_OUT_OF_RANGE, "comment telemetry values are 0-8280")
+    if not _whole(*values) or any(not 0 <= v <= 8280 for v in values):
+        f.add(RefusalCode.VALUE_OUT_OF_RANGE, "comment telemetry values are whole numbers 0-8280")
         return ""
-    return "|" + "".join(_util.base91_text(v, 2) for v in values) + "|"
+    return "|" + "".join(_util.base91_text(int(v), 2) for v in values) + "|"
 
 
 def _braces(data: PositionedData, f: _Faults) -> str:
@@ -902,9 +921,10 @@ def _braces(data: PositionedData, f: _Faults) -> str:
     if data.area is not None and data.area.corridor_width_miles is not None:
         if data.area.shape not in (AreaShape.LINE_DOWN_RIGHT, AreaShape.LINE_DOWN_LEFT):
             f.add(RefusalCode.FIELD_NOT_ALLOWED, "only a line has a corridor")
-        if not 0 <= data.area.corridor_width_miles <= 999:
+        if not _whole(data.area.corridor_width_miles) or not 0 <= data.area.corridor_width_miles <= 999:
             f.add(RefusalCode.VALUE_OUT_OF_RANGE, "corridor width is 0-999 miles")
-        text += "{" + str(data.area.corridor_width_miles) + "}"
+        else:
+            text += "{" + str(int(data.area.corridor_width_miles)) + "}"
     return text
 
 
@@ -1224,21 +1244,15 @@ def _mic_e_destination(data: MicEReport, f: _Faults) -> str:
             chars.append("L" if d == " " else d)
     call = "".join(chars)
     ssid = data.destination_ssid
-    if not 0 <= ssid <= 15:
+    if not _whole(ssid) or not 0 <= ssid <= 15:
         f.add(RefusalCode.VALUE_OUT_OF_RANGE, "destination SSID is not 0-15")
+        return call
+    ssid = int(ssid)
     return f"{call}-{ssid}" if ssid else call
 
 
 _MIC_E_ALTITUDE_METRES = (-10000, 743570)
 """The metres the Mic-E altitude bytes hold: three base-91 characters, 10,000 m below sea level."""
-
-
-class BuilderAltitude(float):
-    """An altitude a builder was given, in feet. Neutral data's whole feet that the bytes do not hold
-    exactly go in a ``/A=``; a builder's altitude goes in the Mic-E bytes first (whatever unit it was
-    given in) and takes a ``/A=`` only where the comment would read as an altitude beside the bytes."""
-
-    __slots__ = ()
 
 
 def _near_whole(value: float) -> bool:
@@ -1271,7 +1285,7 @@ _MIC_E_STATUS_START = "`'>] "
 obsolete telemetry marker, either: that is a control character, so such text is refused.)"""
 
 
-def _mic_e(data: MicEReport) -> _Forms:
+def _mic_e(data: MicEReport, *, mic_e_first: bool = False) -> _Forms:
     f = _Faults()
     f.guard(_check_symbol, data, default=None)
     f.guard(_check_text, data.comment, "comment", default=None)
@@ -1359,7 +1373,7 @@ def _mic_e(data: MicEReport) -> _Forms:
         feet = data.altitude_feet
         exact = _near_whole(feet) and -99999 <= round(feet) <= 999999
         # decoded data knows a /A= was where its altitude came from; neutral data's value decides
-        if data.altitude_in_comment or (_altitude_in_text(feet) and not isinstance(feet, BuilderAltitude)):
+        if (data.altitude_in_comment and exact) or (_altitude_in_text(feet) and not mic_e_first):
             altitude_forms = [("", f.guard(_altitude, feet, default=""))]
         else:
             mic = f.guard(_mic_e_altitude, feet, default="")
@@ -1808,6 +1822,9 @@ def _third_party_walk(data: ThirdParty) -> tuple[int, str | None]:
     return depth, None if type(current) in _ENCODERS else type(current).__name__
 
 
+_NO_FORM_WHY = "a third-party inner packet's warning or error is one its written bytes do not read back with"
+
+
 def _third_party(data: ThirdParty) -> _Forms:
     from ._decode import _ADDRESS, _THIRD_PARTY_SOURCE
 
@@ -1836,7 +1853,17 @@ def _third_party(data: ThirdParty) -> _Forms:
     if used != sorted(used, reverse=True):
         raise _refuse(bad, "in TNC2 a path entry before a used one is used too")
     if writes_data:
-        written = _write(inner.data)
+        # an inner warning or error given for data written from its fields is one the bytes written do
+        # not carry (they read back clean, which the read-back below holds them to): no form carries it
+        given = any(d.severity is not Severity.INFO for d in inner.diagnostics)
+        try:
+            written = _write(inner.data)
+        except EncodeError as e:
+            if given and _PRIORITY[e.code] > _PRIORITY[RefusalCode.VALUE_HAS_NO_FORM]:
+                raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY) from None
+            raise
+        if given:
+            raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY)
         info = written.info
         destination = written.destination if isinstance(inner.data, MicEReport) else inner.destination
     else:
@@ -1875,9 +1902,9 @@ def _test(data: TestData) -> _Forms:
 def _agrelo(data: AgreloDf) -> _Forms:
     # a bearing is degrees like a course: rounded to the nearest degree, then range-checked
     bearing = _nearest(data.bearing_degrees)
-    if not 0 <= bearing <= 360 or not 0 <= data.quality <= 9:
+    if not 0 <= bearing <= 360 or not _whole(data.quality) or not 0 <= data.quality <= 9:
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, "an Agrelo bearing is 0-360 degrees and its quality one digit")
-    return _one(f"%{bearing:03d}/{data.quality}".encode("ascii"), free_text=False)
+    return _one(f"%{bearing:03d}/{int(data.quality)}".encode("ascii"), free_text=False)
 
 
 _ENCODERS: dict[type[Any], Callable[[Any], _Forms]] = {
@@ -1919,12 +1946,16 @@ def encode_info(data: AprsData) -> bytes:
     return _write(data).info
 
 
-def _write(data: AprsData) -> _Written:
+def _write(data: AprsData, *, mic_e_first: bool = False) -> _Written:
     """The one way every encoder writes: the data made ready, an encoder's forms, the read-back of
-    them, and last the size check. Every public function that writes bytes from data ends here."""
+    them, and last the size check. Every public function that writes bytes from data ends here.
+    ``mic_e_first`` is a builder's Mic-E altitude (private to :func:`_build_packet`): it goes in the
+    Mic-E bytes first, whatever its value."""
     encoder = _ENCODERS.get(type(data))
     if encoder is None:
         raise _refuse(RefusalCode.NOT_ENCODABLE, f"{type(data).__name__} cannot be encoded")
+    if mic_e_first and encoder is _mic_e:
+        encoder = functools.partial(_mic_e, mic_e_first=True)
     if isinstance(data, ThirdParty):
         # judged in a loop before anything recurses (the NaN rule below walks the data)
         depth, undecoded = _third_party_walk(data)
@@ -2050,19 +2081,42 @@ def build_packet(
     """A packet ready to send: the header, the encoded information field and the data.
 
     For a Mic-E report the destination is computed from the data (with its
-    ``destination_ssid``), and ``destination`` is ignored.
+    ``destination_ssid``), and ``destination`` is ignored. A path entry ending in exactly one ``*``
+    is a used entry (the neutral header form); a header fault of any form is refused before the data
+    is looked at (``invalid-address``, ``invalid-path``).
     """
+    return _build_packet(source, data, destination=destination, path=path, mic_e_first=False)
+
+
+def _build_packet(
+    source: str,
+    data: AprsData,
+    *,
+    destination: str,
+    path: Iterable[str | PathEntry],
+    mic_e_first: bool,
+) -> Packet:
+    """:func:`build_packet`; ``mic_e_first`` is a builder's Mic-E altitude, which goes in the Mic-E
+    bytes first whatever its value (neutral data's decides: the Encoding rule)."""
     _check_header_address(source, "source")
-    entries = tuple(p if isinstance(p, PathEntry) else PathEntry(p.rstrip("*"), p.endswith("*")) for p in path)
+    entries = tuple(_path_entry(p) for p in path)
     for entry in entries:
         _check_header_address(entry.address, "path entry")
-    if len(entries) > 8:
-        raise _refuse(RefusalCode.AX25_CANNOT_CARRY, "at most 8 digipeaters")
     if not isinstance(data, MicEReport):
         _check_header_address(destination, "destination")
+    if _skips_a_used_entry(entries):
+        raise _refuse(RefusalCode.INVALID_PATH, "a path entry not marked used before one that is would read back used")
     # the information field first: it names the first code that applies across all the data; a header
     # the line or the frame cannot carry comes after every data fault, from the call that writes the form
-    written = _write(data)
+    written = _write(data, mic_e_first=mic_e_first)
     if isinstance(data, MicEReport):
         destination = written.destination
     return Packet(source, destination, entries, written.info, data)
+
+
+def _path_entry(entry: str | PathEntry) -> PathEntry:
+    """A path entry as given: exactly one trailing ``*`` marks it used; any other ``*`` is no part
+    of an address (``invalid-address``, when the entry is checked)."""
+    if isinstance(entry, PathEntry):
+        return entry
+    return PathEntry(entry[:-1], True) if entry.endswith("*") else PathEntry(entry, False)
