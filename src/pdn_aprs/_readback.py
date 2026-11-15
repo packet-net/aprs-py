@@ -43,7 +43,7 @@ from .model import (
 )
 from .options import _LENIENT
 
-__all__ = ["mismatch"]
+__all__ = ["mismatch", "same_reading"]
 
 _nearest = _util.round_half_away
 
@@ -86,6 +86,17 @@ def mismatch(data: AprsData, given: dict[str, Any], info: bytes, destination: st
     expected = _clone(given)
     _prepare(expected, found, decoded)
     return _differences(expected, found, "")
+
+
+def same_reading(data: AprsData, info: bytes, destination: str) -> bool:
+    """Whether ``info`` read under ``destination`` is the data held: the decoded data compared with
+    ``data`` by the ordinary comparison (with its rounding allowance), diagnostics aside, since a held
+    packet carries its own."""
+    decoded = decode_info(info, destination, Ctx(_LENIENT))
+    found = to_neutral(decoded)
+    expected = _clone(to_neutral(data))
+    _prepare(expected, found, decoded)
+    return _differences(expected, found, "") is None
 
 
 # ---------------------------------------------------------------- comparing

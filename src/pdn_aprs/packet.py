@@ -24,36 +24,22 @@ def _is_q_construct(call: str) -> bool:
 
 _MIC_E_DATA_TYPES = ("`", "'", "\x1c", "\x1d")
 """The data type identifiers whose reading depends on the destination: the Mic-E ones."""
-_AMBIGUITY_BOX_DEGREES = (1 / 6000, 10 / 6000, 100 / 6000, 1000 / 6000, 6000 / 6000)
 
 
 def _reads_as_given(data: AprsData, info: bytes, destination: str) -> bool:
     """Whether ``info`` read under ``destination`` is the data given. The header changes a reading
     only through a Mic-E destination, so only a field that starts with a Mic-E data type identifier
-    is read again: raw bytes that would become a Mic-E position under it, or a Mic-E report that
-    would lose its position, do not read as given."""
+    is read again, and the decoded data is compared with ``data`` by the read-back's own comparison
+    (rounding allowance included): raw bytes that would become a Mic-E position under it, or a Mic-E
+    report whose latitude digits, message, N/S, longitude offset, W/E or SSID would change, do not
+    read as given."""
     if not info or chr(info[0]) not in _MIC_E_DATA_TYPES:
         return True
-    from ._decode import Ctx, decode_info
-    from .model import MicEReport
-    from .options import _LENIENT
+    from ._readback import same_reading
 
-    again = decode_info(info, destination, Ctx(_LENIENT))
-    if isinstance(data, MicEReport) != isinstance(again, MicEReport):
-        return False
-    if not isinstance(data, MicEReport) or not isinstance(again, MicEReport):
-        return True
-    box = (
-        _AMBIGUITY_BOX_DEGREES[data.ambiguity] if isinstance(data.ambiguity, int) and 0 <= data.ambiguity <= 4 else 1.0
-    )
     try:
-        return (
-            again.mic_e_message == data.mic_e_message
-            and again.destination_ssid == data.destination_ssid
-            and abs(again.latitude - data.latitude) <= box + 1e-6
-            and abs(again.longitude - data.longitude) <= box + 1e-6
-        )
-    except TypeError:
+        return same_reading(data, info, destination)
+    except (TypeError, ValueError, ArithmeticError):
         return False
 
 

@@ -821,3 +821,28 @@ def test_inner_mic_e_data_is_written_under_the_destination_it_computes_and_no_ot
     assert _code(lambda: enc.encode_info(aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", report)))) is (
         RefusalCode.NOT_ENCODABLE
     )
+
+
+def test_a_held_mic_e_report_re_addressed_to_another_mic_e_destination_is_not_encodable() -> None:
+    held = aprs.decode_tnc2(b'N0CALL>S32U6T:`(_fn"Oj/')
+    assert isinstance(held.data, aprs.MicEReport)
+    assert held.to_tnc2() == b'N0CALL>S32U6T:`(_fn"Oj/'
+    for destination in ("S32U7T", "S32U6T-3", "S32V6T", "S32U6U", "T32U6T"):
+        again = replace(held, destination=destination)
+        for write in (again.to_tnc2, again.to_ax25, again.to_kiss):
+            assert _code(write) is RefusalCode.NOT_ENCODABLE, destination
+
+
+def test_a_builder_mic_e_packet_with_a_latitude_between_steps_and_no_ssid_is_written_under_its_destination() -> None:
+    packet = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR).mic_e(
+        51.45751234, -0.98114, speed_knots=12, course_degrees=94
+    )
+    assert packet.to_tnc2()
+    assert packet.to_ax25()
+    assert "-" not in packet.destination
+    report = packet.data
+    assert isinstance(report, aprs.MicEReport)
+    assert replace(packet, data=replace(report, destination_ssid=0)).to_tnc2() == packet.to_tnc2()
+    with_ssid = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR).mic_e(51.4575, -0.9811)
+    assert isinstance(with_ssid.data, aprs.MicEReport)
+    assert _code(replace(with_ssid, destination=with_ssid.destination + "-3").to_tnc2) is RefusalCode.NOT_ENCODABLE
