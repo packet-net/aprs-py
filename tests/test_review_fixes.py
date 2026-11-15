@@ -187,10 +187,12 @@ def test_huge_finite_decimal_is_out_of_range_but_nan_is_not_a_number() -> None:
     assert e.value.code is RefusalCode.NOT_A_NUMBER
 
 
-def test_whole_exact_telemetry_values_keep_their_digits() -> None:
+def test_whole_telemetry_values_past_two_to_the_53_are_the_shortest_decimal_of_the_double() -> None:
     big = 10**25 + 1
     info = _ST.telemetry(1, (Fraction(big), Decimal(big), 2, 3, 4), "00000000").info
-    assert info.startswith(f"T#001,{big},{big},002,003,004,".encode())
+    # past 2**53 a number is the shortest decimal of the same double (vectors 4e558d5)
+    shortest = f"1{'0' * 25}"
+    assert info.startswith(f"T#001,{shortest},{shortest},002,003,004,".encode())
 
 
 def test_telemetry_sequence_type_error_names_the_type() -> None:

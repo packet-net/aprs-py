@@ -145,7 +145,7 @@ def _inner_diagnostics(values: dict[str, Any]) -> list[str]:
 
 
 def _same_number(a: float, b: float) -> bool:
-    if isinstance(a, int) and isinstance(b, int):
+    if isinstance(a, int) and isinstance(b, int) and max(abs(a), abs(b)) <= 2**53:
         return a == b
     try:
         return _util.number_equal(a, b)

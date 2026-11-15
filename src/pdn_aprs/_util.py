@@ -90,7 +90,12 @@ def number_text(value: float) -> str:
     a leading ``0`` before a point and no trailing ``.0``: ``5.2``, ``-32``, ``0.53``, ``190``,
     and 1e61 as ``1`` and 61 zeros (vectors ruling F11)."""
     if isinstance(value, int):
-        return str(value)
+        try:
+            value = float(value) if abs(value) > 2**53 else value
+        except OverflowError:
+            return str(value)  # too big for a double: its own digits
+        if isinstance(value, int):
+            return str(value)
     text = format(Decimal(repr(float(value))), "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
