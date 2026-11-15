@@ -1,4 +1,5 @@
-"""Round 5, the read-back delta: a builder's empty message ID, a data fault before a header the form cannot carry, a frame's empty destination and a builder's Mic-E altitude."""
+"""Round 5, the read-back delta: a builder's empty message ID, a data fault before a header the form cannot carry,
+a frame's empty destination and a builder's Mic-E altitude."""
 
 from __future__ import annotations
 
