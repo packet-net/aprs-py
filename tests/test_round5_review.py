@@ -586,3 +586,28 @@ def test_a_position_one_step_away_in_any_form_is_refused() -> None:
     assert _mismatch(POSITION | {"ambiguity": 2}, b"!5130.50N/00030.00W>") is not None
     assert _mismatch(POSITION | {"latitude": 51.50004}, POSITION_INFO) is None
     assert _mismatch(POSITION | {"latitude": 51.50009}, POSITION_INFO) is not None
+
+
+# ---------------------------------------------------------------- a voice offset is never rounded
+
+
+@pytest.mark.parametrize(
+    ("offset", "outcome"),
+    [
+        (600, b"146.520MHz +060"),
+        (-600, b"146.520MHz -060"),
+        (0, b"146.520MHz +000"),
+        (605, RefusalCode.VALUE_HAS_NO_FORM),
+        (-61, RefusalCode.VALUE_HAS_NO_FORM),
+        (600.4, RefusalCode.VALUE_OUT_OF_RANGE),
+        (600.5, RefusalCode.VALUE_OUT_OF_RANGE),
+        (10000, RefusalCode.VALUE_OUT_OF_RANGE),
+        (605.5, RefusalCode.VALUE_OUT_OF_RANGE),
+    ],
+)
+def test_a_voice_offset_is_written_as_tens_of_khz_and_never_rounded(offset: float, outcome: object) -> None:
+    neutral = POSITION | {"frequency": {"mhz": 146.52, "offset_khz": offset}}
+    if isinstance(outcome, RefusalCode):
+        assert _code(lambda: enc.encode_info(from_neutral(neutral))) is outcome
+    else:
+        assert enc.encode_info(from_neutral(neutral)).endswith(outcome)  # type: ignore[arg-type]

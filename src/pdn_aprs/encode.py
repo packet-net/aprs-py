@@ -876,10 +876,15 @@ def _frequency_text(fq: VoiceFrequency, f: _Faults) -> str:
     elif fq.narrow:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "narrow is set by a tone letter")
     if fq.offset_khz is not None:
-        tens = _nearest(float(fq.offset_khz) / 10)
-        if abs(tens) > 999:
-            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "offset too large")
+        # sent in tens of kHz and never rounded: a fraction is out of range (judged before any step),
+        # and a whole number of kHz that is not a multiple of 10 has no form
+        offset = fq.offset_khz
+        if not _whole(offset) or abs(offset) > 9990:
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "a voice offset is a whole number of kHz, at most 9990")
+        elif int(offset) % 10:
+            f.add(RefusalCode.VALUE_HAS_NO_FORM, "a voice offset is a multiple of 10 kHz")
         else:
+            tens = int(offset) // 10
             text += f" {'-' if tens < 0 else '+'}{abs(tens):03d}"
     if fq.range is not None:
         if not _whole(fq.range) or not 0 <= fq.range <= 999:

@@ -318,9 +318,6 @@ def _frequency(frequency: dict[str, Any], ten_khz: bool) -> None:
                     break
         else:
             frequency["mhz"] = _nearest(float(mhz) * scale) / scale
-    offset = frequency.get("offset_khz")
-    if _number(offset):
-        frequency["offset_khz"] = _nearest(float(offset) / 10) * 10
 
 
 def _snowfall(snow: float) -> float:
