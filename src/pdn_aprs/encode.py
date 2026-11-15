@@ -247,7 +247,7 @@ def _nan_or_earlier(data: Any, encoder: Callable[[Any], _Forms], why: str) -> En
     except EncodeError as e:
         if _PRIORITY[e.code] < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
             return e
-    except (ValueError, OverflowError):
+    except (ValueError, OverflowError, TypeError, AttributeError):
         pass
     return nan
 
@@ -1302,12 +1302,15 @@ def _mic_e(data: MicEReport, *, mic_e_first: bool = False) -> _Forms:
     legacy = b""
     if data.legacy_telemetry:
         # A 255 would be taken for Kenwood 0xFF padding and removed on the way back in.
-        if len(data.legacy_telemetry) != 5 or any(not 0 <= v <= 255 for v in data.legacy_telemetry):
+        values = data.legacy_telemetry
+        if len(values) != 5 or any(not 0 <= v <= 255 for v in values):
             f.add(RefusalCode.MALFORMED, "obsolete Mic-E binary telemetry is 5 values, each 0-254")
-        elif any(v == 255 for v in data.legacy_telemetry):
+        elif not _whole(*values):
+            f.add(RefusalCode.VALUE_OUT_OF_RANGE, "obsolete Mic-E binary telemetry values are whole numbers")
+        elif any(v == 255 for v in values):
             f.add(RefusalCode.VALUE_HAS_NO_FORM, "obsolete Mic-E binary telemetry is 5 values, each 0-254")
         else:
-            legacy = bytes([0x1D, *data.legacy_telemetry])
+            legacy = bytes([0x1D, *(int(v) for v in values)])
     if data.weather is not None or data.area is not None or data.df_bearing or data.storm or data.signpost:
         f.add(RefusalCode.FIELD_NOT_ALLOWED, "a Mic-E report cannot carry weather, area, DF, storm or signpost data")
     a, o, _, lon_units = _dao_digits_in_range(data)
@@ -1898,9 +1901,9 @@ def _user_defined(data: UserDefined) -> _Forms:
 
 
 def _test(data: TestData) -> _Forms:
-    if "\r" in data.data or "\n" in data.data:
-        # test data is not judged for control characters, but a line break would be one
-        raise _refuse(RefusalCode.INVALID_CHARACTER, "test data contains a line break")
+    if data.data.endswith(("\r", "\n")):
+        # a CR or LF at the end of the information field is taken off before it is read
+        raise _refuse(RefusalCode.INVALID_CHARACTER, "test data that ends in a line break would read back without it")
     return _text_forms("," + data.data)
 
 
@@ -2008,6 +2011,10 @@ def _run(data: Any, encoder: Callable[[Any], _Forms]) -> _Written:
 
 def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], _Forms]) -> _Written:
     try:
+        if _has_nonfinite(data):
+            # a NaN or infinity in any numeric field, at any depth, whether or not the encoder writes the
+            # number: refused up front, unless a code that comes before it applies to the rest
+            raise _nan_or_earlier(data, encoder, "a value is NaN or infinite")
         return _run(data, encoder)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
@@ -2018,8 +2025,8 @@ def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], _Forms]) -> _Writt
         if _has_nonfinite(data):
             raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
         raise _refuse(RefusalCode.VALUE_OUT_OF_RANGE, f"cannot encode {type(data).__name__}: {e}") from e
-    except (ValueError, ArithmeticError) as e:
-        # a value no packet can hold, such as a NaN latitude
+    except (ValueError, ArithmeticError, TypeError, AttributeError) as e:
+        # a value no packet can hold, such as a NaN latitude, or one that is no number at all
         raise _nan_or_earlier(data, encoder, f"cannot encode {type(data).__name__}: {e}") from e
 
 

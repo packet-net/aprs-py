@@ -3,9 +3,10 @@ diagnostics the decoder raised."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
+from . import _util
 from .diagnostics import Diagnostic, Severity
 from .errors import EncodeError, RefusalCode
 
@@ -59,7 +60,7 @@ class QConstruct:
     station: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Packet:
     """A decoded APRS packet.
 
@@ -225,10 +226,16 @@ class Packet:
 
         Like :meth:`to_ax25` it writes the information field as it stands, with no size check.
         """
-        if not 0 <= port <= 15:
-            raise ValueError("a KISS port is 0-15")
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 15:
+            raise ValueError("a KISS port is a whole number 0-15")
         body = self.to_ax25().replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc")
         return b"\xc0" + bytes([port << 4]) + body + b"\xc0"
+
+    @_util.depth_capped
+    def __repr__(self) -> str:
+        """The packet as held, for display: total, showing ``...`` for third-party nesting thousands deep."""
+        shown = ", ".join(f"{f.name}={getattr(self, f.name)!r}" for f in fields(self))
+        return f"Packet({shown})"
 
     def __str__(self) -> str:
         """The packet as a line, for display only, not for sending: it shows the header and the

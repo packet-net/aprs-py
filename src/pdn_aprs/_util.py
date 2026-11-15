@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import math
 import re
+import threading
+from collections.abc import Callable
 from decimal import Decimal
 from fractions import Fraction
+from typing import Any
 
 KNOTS_TO_MPH = 1852 / 1609.344
 """Miles per hour in a knot: a nautical mile is 1852 m, a statute mile 1609.344 m."""
@@ -132,6 +135,31 @@ def round_half_away(value: float | Decimal | Fraction) -> int:
 
 
 def number_equal(a: float, b: float) -> bool:
-    """Equal within 1e-9, relative to the larger magnitude (absolute below 1)."""
+    """Equal within 1e-9, relative to the larger magnitude (absolute below 1). A NaN or an infinity
+    is equal to nothing, itself included."""
+    if (isinstance(a, float) and not math.isfinite(a)) or (isinstance(b, float) and not math.isfinite(b)):
+        return False
     scale = max(abs(a), abs(b))
     return abs(a - b) <= 1e-9 * (scale if scale >= 1 else 1)
+
+
+_REPR_DEPTH = threading.local()
+_REPR_LIMIT = 40
+
+
+def depth_capped(fn: Callable[[Any], str]) -> Callable[[Any], str]:
+    """A ``__repr__`` that is total: past ``_REPR_LIMIT`` levels of nesting (a third-party packet in
+    a third-party packet, thousands deep) it shows ``...`` instead of recursing without end."""
+
+    def wrapper(self: Any) -> str:
+        depth = getattr(_REPR_DEPTH, "n", 0)
+        if depth >= _REPR_LIMIT:
+            return "..."
+        _REPR_DEPTH.n = depth + 1
+        try:
+            return fn(self)
+        finally:
+            _REPR_DEPTH.n = depth
+
+    wrapper.__doc__ = fn.__doc__
+    return wrapper

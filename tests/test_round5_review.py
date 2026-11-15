@@ -674,3 +674,105 @@ def test_r27_many_bars_are_read_in_linear_time() -> None:
 
     small, large = took(20_000), took(80_000)
     assert large < max(small, 0.004) * 9
+
+
+# ---------------------------------------------------------------- R28 and the second review
+
+
+def test_r28_an_ambiguity_of_0_is_no_ambiguity() -> None:
+    plain = enc.encode_info(from_neutral(POSITION))
+    assert enc.encode_info(from_neutral(POSITION | {"ambiguity": 0})) == plain
+    assert enc.encode_info(from_neutral(POSITION | {"ambiguity": 0.0})) == plain
+    station = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR)
+    assert station.position(51.5, -0.5, ambiguity=0).info == station.position(51.5, -0.5).info
+    assert station.mic_e(51.5, -0.5, ambiguity=0).info == station.mic_e(51.5, -0.5).info
+
+
+def test_r28_a_trailing_run_of_line_breaks_is_one_warning_and_a_pass_through_carries_it() -> None:
+    held = aprs.decode_tnc2(b"N0CALL>APZ001:>hi\r\n\r\n")
+    assert [str(d) for d in held.diagnostics] == ["warning:trailing-line-break"]
+    assert held.data == aprs.StatusReport(text="hi")
+    assert held.to_tnc2() == b"N0CALL>APZ001:>hi\r\n\r\n"
+    assert aprs.decode_tnc2(b"N0CALL>APZ001:>h\ri\r\n").to_tnc2 is not None
+    inside = aprs.Packet("N0CALL", "APZ001", (), b">h\ri\r\n", aprs.StatusReport(text=""))
+    assert _code(inside.to_tnc2) is RefusalCode.TNC2_CANNOT_CARRY
+
+
+def test_r28_test_and_user_defined_data_with_a_line_break_inside_are_written_as_an_information_field() -> None:
+    for data, info in ((aprs.TestData("a\rb"), b",a\rb"), (aprs.UserDefined("A", "x", "a\nb"), b"{Axa\nb")):
+        assert enc.encode_info(data) == info
+        assert _code(lambda data=data: aprs.build_packet("N0CALL", data).to_tnc2()) is RefusalCode.TNC2_CANNOT_CARRY
+        assert aprs.build_packet("N0CALL", data).to_ax25().endswith(info)
+    for data in (aprs.TestData("ab\n"), aprs.UserDefined("A", "x", "ab\r")):
+        assert _code(lambda data=data: enc.encode_info(data)) is RefusalCode.INVALID_CHARACTER
+
+
+def test_r28_an_out_of_order_inner_path_two_levels_down_is_an_invalid_third_party_header() -> None:
+    bad = (aprs.PathEntry("A"), aprs.PathEntry("B", True))
+    status = aprs.StatusReport(text="hi")
+    one = aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", bad, b"", status))
+    two = aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", one))
+    three = aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", two))
+    for data in (one, two, three):
+        assert _code(lambda data=data: enc.encode_info(data)) is RefusalCode.INVALID_THIRD_PARTY_HEADER
+
+
+def test_r28_a_corridor_on_an_area_that_is_not_a_line_is_field_not_allowed() -> None:
+    area = {"shape": "open-circle", "color": "blue", "lat_offset": 1, "lon_offset": 2, "corridor_width_miles": 3}
+    neutral = POSITION | {"symbol": "\\l", "area": area}
+    assert _code(lambda: enc.encode_info(from_neutral(neutral))) is RefusalCode.FIELD_NOT_ALLOWED
+    line = neutral | {"area": area | {"shape": "line-down-right"}}
+    assert b"{3}" in enc.encode_info(from_neutral(line))
+
+
+def test_n1_an_infinity_in_an_nmea_field_or_an_inner_packet_is_never_written() -> None:
+    sentence = "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47"
+    for field in ("latitude", "longitude", "altitude_m"):
+        data = aprs.NmeaSentence(sentence=sentence, has_checksum=True, **{field: float("inf")})
+        assert _code(lambda data=data: aprs.build_packet("N0CALL", data).to_tnc2()) is RefusalCode.NOT_A_NUMBER
+    held = aprs.decode_tnc2(b"N0CALL>APRS:}X>APRS:!5130.00N/00030.00W>088/036")
+    assert isinstance(held.data, aprs.ThirdParty)
+    inner = held.data.packet
+    assert isinstance(inner.data, aprs.PositionReport)
+    for kw in ({"latitude": float("inf")}, {"course_degrees": float("-inf")}):
+        data = aprs.ThirdParty(replace(inner, data=replace(inner.data, **kw)))
+        assert _code(lambda data=data: enc.encode_info(data)) is RefusalCode.NOT_A_NUMBER
+    bad = aprs.CommentTelemetry(float("inf"), (1,))  # type: ignore[arg-type]
+    report = aprs.PositionReport(latitude=51.5, longitude=-0.5, symbol=aprs.Symbol.CAR, telemetry=bad)
+    telemetry = aprs.ThirdParty(aprs.Packet("X", "APRS", (), b"", report))
+    assert _code(lambda: enc.encode_info(telemetry)) is RefusalCode.NOT_A_NUMBER
+
+
+def test_n2_a_whole_number_given_as_a_float_is_that_number_in_legacy_mic_e_telemetry() -> None:
+    report = from_neutral(MIC_E)
+    assert isinstance(report, aprs.MicEReport)
+    assert enc.encode_info(replace(report, legacy_telemetry=(1.0, 1, 2, 3, 4))) == enc.encode_info(
+        replace(report, legacy_telemetry=(1, 1, 2, 3, 4))
+    )
+    assert _code(lambda: enc.encode_info(replace(report, legacy_telemetry=(0.5, 1, 2, 3, 4)))) is (
+        RefusalCode.VALUE_OUT_OF_RANGE
+    )
+
+
+def test_n3_repr_and_str_are_total_and_show_what_changes_the_bytes() -> None:
+    data: aprs.AprsData = aprs.StatusReport(text="x")
+    for _ in range(3000):
+        data = aprs.ThirdParty(aprs.Packet("N0CALL", "APRS", (), b"", data))
+    assert "..." in repr(data)
+    assert isinstance(repr(aprs.Packet("N0CALL", "APRS", (), b"", data)), str)
+    assert isinstance(str(aprs.Packet("N0CALL", "APRS", (), b"", data)), str)
+    report = from_neutral(MIC_E)
+    assert "altitude_in_comment=True" in repr(replace(report, altitude_in_comment=True))  # type: ignore[type-var]
+
+
+def test_n6_a_kiss_port_is_a_whole_number_and_an_empty_path_entry_is_refused_by_the_station_too() -> None:
+    packet = aprs.Station("N0CALL").status("hi")
+    for port in (1.5, True, "1", None, -1, 16):
+        with pytest.raises(ValueError):  # noqa: PT011
+            packet.to_kiss(port)  # type: ignore[arg-type]
+    assert packet.to_kiss(3)
+    assert _code(lambda: aprs.Station("N0CALL", path="A,,B").status("hi")) is RefusalCode.INVALID_ADDRESS
+    assert _code(lambda: aprs.build_packet("N0CALL", aprs.StatusReport("hi"), path=["A", "", "B"])) is (
+        RefusalCode.INVALID_ADDRESS
+    )
+    assert aprs.Station("N0CALL", path="").status("hi").path == ()

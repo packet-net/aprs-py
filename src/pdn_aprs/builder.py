@@ -142,7 +142,15 @@ def _either(
     if value is not None:
         _twice(faults, what)
         return value
-    converted = metric / per_unit
+    metric = _plain(metric)
+    if isinstance(metric, bool) or not isinstance(metric, (int, float)):
+        faults.append(EncodeError(f"the {what} is not a number", RefusalCode.NOT_A_NUMBER))
+        return None
+    try:
+        converted = metric / per_unit
+    except OverflowError:
+        faults.append(EncodeError(f"the {what} is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
+        return None
     if math.isfinite(metric) and not math.isfinite(converted):
         # a finite value too big for the unit it is converted to is out of range, not a non-number
         faults.append(EncodeError(f"the {what} is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
@@ -272,9 +280,11 @@ class Station:
         messaging: bool = False,
         symbol: Symbol | None = None,
     ) -> None:
-        entries = path.split(",") if isinstance(path, str) else list(path)
+        entries = (path.split(",") if path.strip() else []) if isinstance(path, str) else list(path)
         object.__setattr__(self, "callsign", callsign)
-        object.__setattr__(self, "path", tuple(v.strip() for v in entries if v.strip()))
+        # an empty entry (``"A,,B"``) is kept, and refused as ``invalid-address`` when a packet is built,
+        # as ``build_packet`` refuses it
+        object.__setattr__(self, "path", tuple(v.strip() for v in entries))
         object.__setattr__(self, "destination", destination)
         object.__setattr__(self, "messaging", messaging)
         object.__setattr__(self, "symbol", symbol)
