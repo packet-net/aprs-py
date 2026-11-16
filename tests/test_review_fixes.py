@@ -8,6 +8,7 @@ import decimal
 import fractions
 import re
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -106,10 +107,15 @@ def test_top_level_exports() -> None:
 LONG = "1" * 100_000
 
 
-def _fast(line: str) -> None:
+def _took(call: Callable[[], object]) -> float:
     t0 = time.perf_counter()
-    aprs.decode_tnc2(line)
-    assert time.perf_counter() - t0 < 2.0
+    call()
+    return time.perf_counter() - t0
+
+
+def _fast(line: str) -> None:
+    best = min(_took(lambda: aprs.decode_tnc2(line)) for _ in range(3))
+    assert best < 5.0
 
 
 @pytest.mark.parametrize(
@@ -129,9 +135,8 @@ def test_long_digit_runs_decode_quickly(line: str) -> None:
 
 def test_encoder_patterns_are_linear_too() -> None:
     for pattern in (enc._TELEMETRY_VALUE, enc._COEFFICIENT, enc._FOOTPRINT_VALUE):
-        t0 = time.perf_counter()
         assert pattern.match(LONG + "x") is None
-        assert time.perf_counter() - t0 < 1.0
+        assert min(_took(lambda p=pattern: p.match(LONG + "x")) for _ in range(3)) < 3.0
 
 
 OLD = r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)\Z"

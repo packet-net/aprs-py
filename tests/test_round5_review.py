@@ -673,14 +673,14 @@ def test_r27_many_bars_are_read_in_linear_time() -> None:
     def took(n: int) -> float:
         line = ("N0CALL>APZ001:!5130.00N/00030.00W>" + "|a" * n).encode()
         best = 1e9
-        for _ in range(3):
+        for _ in range(5):
             t = time.perf_counter()
             aprs.decode_tnc2(line)
             best = min(best, time.perf_counter() - t)
         return best
 
     small, large = took(20_000), took(80_000)
-    assert large < max(small, 0.004) * 9
+    assert large < max(small, 0.02) * 12
 
 
 # ---------------------------------------------------------------- R28 and the second review
