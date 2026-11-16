@@ -12,6 +12,7 @@ from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
+from . import _util
 from .symbols import Symbol
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ __all__ = [
 ]
 
 
+@_util.depth_capped
 def _compact_repr(self: object) -> str:
     """The class name and the fields that differ from their defaults."""
     parts = []
@@ -670,9 +672,10 @@ class MicEReport(PositionedData):
     comment. ``old_data`` is set by the ``'`` data type. ``destination_ssid`` is the
     destination address's SSID, which an encoder writes back. ``altitude_in_comment`` says the
     altitude was read from a ``/A=`` (the decoder sets it), so an encoder writes it back as one
-    whatever its value. Without it the altitude goes in the Mic-E altitude bytes, rounded to the
-    metre, unless only a ``/A=`` holds it exactly: whole feet within six digits that are not
-    whole metres (or are outside the bytes' -10,000 to 743,570 m).
+    where the ``/A=`` holds it exactly (whole feet within six digits). Without it the altitude goes
+    in the Mic-E altitude bytes, rounded to the metre, unless only a ``/A=`` holds it exactly:
+    whole feet within six digits that are not whole metres (or are outside the bytes' -10,000 to
+    743,570 m).
     """
 
     kind: ClassVar[str] = "mic-e"
@@ -683,7 +686,7 @@ class MicEReport(PositionedData):
     locator: str | None = None
     legacy_telemetry: tuple[int, ...] = ()
     destination_ssid: int = 0
-    altitude_in_comment: bool = field(default=False, repr=False)
+    altitude_in_comment: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, repr=False)

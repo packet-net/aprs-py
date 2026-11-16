@@ -830,8 +830,9 @@ def test_locator_text_after_a_mic_e_phg_is_comment() -> None:
 
 
 @pytest.mark.parametrize("comment", ["{5}", "{}", "}:LoRa iGate"])
-def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) -> None:
-    # E12: after /A=001000, {5} would read as the Mic-E altitude 1{5}; a space holds it apart
+def test_mic_e_comment_that_looks_like_an_altitude_after_a_slash_altitude_is_written_straight_on(comment: str) -> None:
+    # round 5: a later Mic-E altitude never uses the bytes of a whole /A=, so {5} after /A=001000
+    # reads back as comment text and needs no separating space
     report = aprs.MicEReport(
         mic_e_message=MicEMessage.OFF_DUTY,
         latitude=33.46,
@@ -842,7 +843,7 @@ def test_mic_e_comment_that_would_join_an_altitude_gets_a_space(comment: str) ->
         comment=comment,
     )
     packet = aprs.build_packet("M0LTE-9", report)
-    assert packet.info.endswith(b"/A=001000 " + comment.encode())
+    assert packet.info.endswith(b"/A=001000" + comment.encode())
     back = aprs.decode_tnc2(packet.to_tnc2())
     assert not back.diagnostics
     assert isinstance(back.data, aprs.MicEReport)
@@ -959,15 +960,16 @@ def test_ax25_refuses_a_dash_with_no_ssid() -> None:
         packet.data.packet.to_ax25()
 
 
-def test_strict_mic_e_rejects_only_an_altitude_joined_across_a_lifted_place() -> None:
-    # "3z} was in the bytes already: kept; II!} forms across the place of the DAO lifted: rejected
+def test_strict_mic_e_reads_an_altitude_joined_across_a_lifted_place_as_text() -> None:
     kept = aprs.decode_tnc2('N0CALL>PURWS8:`l(tmz#<X|!wII!}3/"3z}</"3z}', aprs.ParseOptions.strict())
     assert isinstance(kept.data, aprs.MicEReport)
     assert kept.data.dao is not None
     joined = aprs.decode_tnc2(
         "N0CALL>U5TVQS:`0)1839h0654.57S/10742fl!X>/'\";X|!wII!!wII!}3", aprs.ParseOptions.strict()
     )
-    assert isinstance(joined.data, aprs.Unrecognized)
+    assert isinstance(joined.data, aprs.MicEReport)
+    assert joined.data.comment is not None
+    assert not any(d.code.value == "mic-e-altitude-not-first" for d in joined.diagnostics)
 
 
 def test_object_and_item_take_the_position_options() -> None:
@@ -1089,7 +1091,7 @@ def test_encode_error_without_a_code_is_the_fallback() -> None:
         ),
         (lambda: aprs.encode_info(aprs.Unrecognized(aprs.UnrecognizedReason.EMPTY)), "not-encodable"),
         (lambda: aprs.build_packet("bad call", _pos()), "invalid-address"),
-        (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9), "ax25-cannot-carry"),
+        (lambda: aprs.build_packet("N0CALL", _pos(), path=["A"] * 9).to_ax25(), "ax25-cannot-carry"),
         (lambda: aprs.encode_info(aprs.Message("BLN1", "hi")), "invalid-addressee"),
         (lambda: aprs.encode_info(aprs.Message("N0CALL", "hi", reply_ack="1")), "missing-field"),
         (lambda: aprs.encode_info(aprs.Capabilities((("bad token",),))), "malformed"),

@@ -3,7 +3,8 @@
 A :class:`Station` holds what stays the same from packet to packet (the callsign, the
 digipeater path, the destination, whether the station can message, its usual symbol), and
 has one method per kind of packet. Each returns a :class:`~pdn_aprs.Packet`, already
-encoded; ``str(packet)`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame.
+encoded; ``packet.to_tnc2()`` is its TNC2 line, ``packet.to_kiss()`` its KISS frame (``str(packet)``
+shows the same line, for display, not for sending: it is never read back and never raises).
 
 >>> from pdn_aprs import Station, Symbol
 >>> m0lte = Station("M0LTE-9", path="WIDE1-1", symbol=Symbol.CAR)
@@ -31,7 +32,7 @@ from fractions import Fraction
 from typing import Any, Literal, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _real, build_packet
+from .encode import DEFAULT_DESTINATION, SizeError, _build_packet, _rank, _real
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -118,7 +119,7 @@ def _one_unit_each(*pairs: tuple[str, str]) -> Callable[[_F], _F]:
                 except EncodeError as e:
                     found.append(e)
             # a result refused only for the information field's size counts after every other code
-            raise min(found, key=lambda e: (isinstance(e, SizeError), _PRIORITY[e.code]))
+            raise min(found, key=lambda e: (isinstance(e, SizeError), _rank(e)))
 
         return wrapper  # type: ignore[return-value]
 
@@ -141,7 +142,15 @@ def _either(
     if value is not None:
         _twice(faults, what)
         return value
-    converted = metric / per_unit
+    metric = _plain(metric)
+    if isinstance(metric, bool) or not isinstance(metric, (int, float)):
+        faults.append(EncodeError(f"the {what} is not a number", RefusalCode.NOT_A_NUMBER))
+        return None
+    try:
+        converted = metric / per_unit
+    except OverflowError:
+        faults.append(EncodeError(f"the {what} is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
+        return None
     if math.isfinite(metric) and not math.isfinite(converted):
         # a finite value too big for the unit it is converted to is out of range, not a non-number
         faults.append(EncodeError(f"the {what} is too large to use", RefusalCode.VALUE_OUT_OF_RANGE))
@@ -271,9 +280,11 @@ class Station:
         messaging: bool = False,
         symbol: Symbol | None = None,
     ) -> None:
-        entries = path.split(",") if isinstance(path, str) else list(path)
+        entries = (path.split(",") if path.strip() else []) if isinstance(path, str) else list(path)
         object.__setattr__(self, "callsign", callsign)
-        object.__setattr__(self, "path", tuple(v.strip() for v in entries if v.strip()))
+        # an empty entry (``"A,,B"``) is kept, and refused as ``invalid-address`` when a packet is built,
+        # as ``build_packet`` refuses it
+        object.__setattr__(self, "path", tuple(v.strip() for v in entries))
         object.__setattr__(self, "destination", destination)
         object.__setattr__(self, "messaging", messaging)
         object.__setattr__(self, "symbol", symbol)
@@ -282,19 +293,22 @@ class Station:
         """Any data as a packet from this station."""
         return self._send(data, [])
 
-    def _send(self, data: AprsData, faults: list[EncodeError]) -> Packet:
+    def _send(self, data: AprsData, faults: list[EncodeError], *, mic_e_first: bool = False) -> Packet:
         """Build the packet; ``faults`` are ones the caller noted while gathering its arguments,
-        named in the Refusal reasons order along with whatever the encoder refuses."""
+        named in the Refusal reasons order along with whatever the encoder refuses. ``mic_e_first``
+        is a Mic-E report's altitude as the program gave it: written in the Mic-E bytes first."""
         try:
-            packet = build_packet(self.callsign, data, destination=self.destination, path=self.path)
+            packet = _build_packet(
+                self.callsign, data, destination=self.destination, path=self.path, mic_e_first=mic_e_first
+            )
         except EncodeError as e:
             if faults:
-                from .encode import _PRIORITY, SizeError
+                from .encode import SizeError
 
                 # the size is the last check, on bytes actually written: a fault the builder noted
                 # means the bytes are not the ones the program asked for, so it is not measured
                 found = faults if isinstance(e, SizeError) else [e, *faults]
-                raise min(found, key=lambda x: _PRIORITY[x.code]) from None
+                raise min(found, key=_rank) from None
             raise
         if faults:
             raise faults[0]
@@ -496,9 +510,10 @@ class Station:
 
         A course of 0 (or one that rounds to 0) is unknown and north is 360, as APRS has them.
         An altitude, in feet or metres, goes in the Mic-E altitude bytes, whose unit is the metre:
-        rounded once to the nearest metre from the value given (1000 feet is 305 metres). One
-        outside -10000 to 743570 metres is refused (``value-out-of-range``); it is never put in a
-        ``/A=``. Without ``mic_e_message`` the station is off duty."""
+        rounded once to the nearest metre from the value given (1000 feet is 305 metres); a ``/A=`` is
+        written instead only where the comment would read as an altitude beside the bytes and the
+        ``/A=`` holds the value exactly (whole feet). One outside -10000 to 743570 metres is refused
+        (``value-out-of-range``). Without ``mic_e_message`` the station is off duty."""
         faults: list[EncodeError] = []
         if course_degrees is not None and math.isfinite(course_degrees) and round_half_away(course_degrees) == 0:
             course_degrees = None
@@ -512,10 +527,11 @@ class Station:
                 feet = None  # set below, once it is known to be in range (the product could overflow)
         given = altitude_feet if altitude_feet is not None else altitude_m
         if given is not None and math.isfinite(given):
-            # rounded once, from the value as given, to whole metres
+            # judged in whole metres, rounded once from the value as given; the encoder writes the Mic-E
+            # bytes first and a /A= only where it holds the value exactly, so the value goes on as given
             metres = round_half_away(given if altitude_feet is None else given / FEET_PER_METRE)
             if -10000 <= metres <= 743570:
-                feet = metres * FEET_PER_METRE
+                feet = altitude_feet if altitude_feet is not None else given * FEET_PER_METRE
             else:
                 faults.append(
                     EncodeError("a Mic-E altitude is -10000 to 743570 metres", RefusalCode.VALUE_OUT_OF_RANGE)
@@ -535,7 +551,7 @@ class Station:
             dao=Dao("W", DaoPrecision.BASE91) if dao else None,
             type_code="`" if self.messaging else "'",
         )
-        return self._send(data, faults)
+        return self._send(data, faults, mic_e_first=True)
 
     # ------------------------------------------------------------ weather
 
@@ -636,8 +652,14 @@ class Station:
         self, addressee: str, text: str = "", *, message_id: str | None = None, reply_ack: str | None = None
     ) -> Packet:
         """A message to one station. Give a ``message_id`` to ask for an acknowledgement. With no
-        ``text`` the message is empty text, which is refused (``malformed``)."""
-        return self.send(Message(addressee, text, message_id, reply_ack))
+        ``text`` the message is empty text, which is refused (``malformed``). An empty ``message_id``
+        is refused too (``invalid-message-id``): a builder is given a message ID or none (``None``)."""
+        faults: list[EncodeError] = []
+        if message_id == "":
+            faults.append(
+                EncodeError("a message ID is 1-5 letters and digits, not empty", RefusalCode.INVALID_MESSAGE_ID)
+            )
+        return self._send(Message(addressee, text, message_id or None, reply_ack), faults)
 
     def ack(self, addressee: str, message_id: str) -> Packet:
         """Acknowledge message ``message_id`` from ``addressee``."""

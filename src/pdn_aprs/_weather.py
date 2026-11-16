@@ -241,12 +241,13 @@ def raise_field_defects(result: WeatherFields, ctx: Ctx, *, positionless: bool) 
         ctx.defect(C.INCOMPLETE_WEATHER)
 
 
-def weather_tail(rest: str, ctx: Ctx, values: dict[str, Any]) -> str:
+def weather_tail(rest: str, ctx: Ctx, values: dict[str, Any], *, whole: bool = True) -> str:
     """What follows the weather fields: the software type and unit, or else comment text
-    (``weather-comment``), which is returned."""
+    (``weather-comment``), which is returned. ``whole`` is false when the text is made of
+    fragments either side of a lifted element, which are not a software type and unit."""
     if not rest:
         return ""
-    m = _SOFTWARE_UNIT.match(rest)
+    m = _SOFTWARE_UNIT.match(rest) if whole else None
     if m and not m.group(2).isdigit():
         values["software"] = m.group(1)
         values["unit"] = m.group(2)

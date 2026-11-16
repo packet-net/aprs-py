@@ -8,6 +8,7 @@ skipped with their reasons.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from pdn_aprs import (
     MicEReport,
     Packet,
     ParseOptions,
+    PathEntry,
+    ThirdParty,
     decode_ax25,
     decode_tnc2,
 )
@@ -209,7 +212,7 @@ def check_strict_expectation(outcome: Outcome, case: dict[str, Any]) -> list[str
     return check_result(outcome, expect, device=False)
 
 
-def single_tolerance(case: dict[str, Any]) -> str | None:
+def lenient_single_tolerance(case: dict[str, Any]) -> str | None:
     """The one tolerable code a case's lenient decoding used, if exactly one."""
     codes = {
         d.partition(":")[2]
@@ -217,6 +220,12 @@ def single_tolerance(case: dict[str, Any]) -> str | None:
         if d.startswith("warning:") and d.partition(":")[2] in TOLERABLE
     }
     return next(iter(codes)) if len(codes) == 1 else None
+
+
+def single_tolerance(case: dict[str, Any]) -> str | None:
+    """The one tolerance the tolerance check turns off: the case's lenient diagnostics name exactly
+    one tolerable code. The check runs on every such case, none is skipped."""
+    return lenient_single_tolerance(case)
 
 
 # ---------------------------------------------------------------- checks
@@ -233,8 +242,23 @@ def check_strict(case: dict[str, Any]) -> list[str]:
 def check_tolerance(case: dict[str, Any]) -> list[str]:
     code = single_tolerance(case)
     assert code is not None
-    options = ParseOptions.lenient().without(DiagnosticCode(code))
-    return check_strict_expectation(decode_case(case, options), case)
+    outcome = decode_case(case, ParseOptions.lenient().without(DiagnosticCode(code)))
+    strict = case.get("strict", "same")
+    if isinstance(strict, dict) and "rejected_by" in strict and strict["rejected_by"] != code:
+        # strict is rejected by a different code: turning off the one tolerance can bring that
+        # defect out, so the result must be a reading that warns of it (vectors README)
+        want = f"warning:{strict['rejected_by']}"
+        if outcome.packet is None:
+            return [f"unexpected header error {outcome.header_error!r}"]
+        data = to_neutral(outcome.packet.data)
+        found = [str(d) for d in outcome.packet.diagnostics]
+        out = []
+        if data.get("type") == "unrecognized":
+            out.append(f"expected a reading, got {data!r}")
+        if want not in found:
+            out.append(f"diagnostics {found!r} lack {want}")
+        return out
+    return check_strict_expectation(outcome, case)
 
 
 def _refusal_differences(want: str | None, error: EncodeError) -> list[str]:
@@ -321,10 +345,13 @@ def check_encode(case: dict[str, Any]) -> list[str]:
 
 
 def check_build(case: dict[str, Any]) -> list[str]:
-    """Build cases: a recipe through the real builder (as the dump tool's build mode calls it)."""
+    """Build cases: a recipe through the real builder (as the dump tool's build mode calls it), written
+    as a TNC2 line, or with ``"write": "ax25"`` as an AX.25 frame."""
     expect = case["expect"]
+    frame = case["input"].get("write") == "ax25"
     try:
-        line = build(case["input"]["build"]).to_tnc2()
+        packet = build(case["input"]["build"])
+        written = packet.to_ax25() if frame else packet.to_tnc2()
     except UnsupportedError as e:
         return [f"the builder cannot say what the recipe asks: {e}"]
     except EncodeError as e:
@@ -332,10 +359,65 @@ def check_build(case: dict[str, Any]) -> list[str]:
             return _refusal_differences(expect.get("refusal"), e)
         return [f"refused: {e}"]
     if expect.get("refused"):
-        return [f"expected the builder to refuse, it wrote {line!r}"]
-    if line != expect["tnc2"].encode("utf-8"):
-        return [f"wrote {line!r}, expected {expect['tnc2'].encode('utf-8')!r}"]
+        return [f"expected the builder to refuse, it wrote {written!r}"]
+    want = bytes.fromhex(expect["ax25_hex"]) if frame else expect["tnc2"].encode("utf-8")
+    if written != want:
+        return [f"wrote {written!r}, expected {want!r}"]
     return []
+
+
+def _readdressed(packet: Any, header: dict[str, Any] | None) -> Any:
+    """The held packet under another header, as the case's ``header`` says (its information field and data kept)."""
+    if not header:
+        return packet
+    changes: dict[str, Any] = {}
+    for key in ("source", "destination"):
+        if key in header:
+            changes[key] = header[key]
+    if "path" in header:
+        changes["path"] = tuple(PathEntry(p.rstrip("*"), p.endswith("*")) for p in header["path"])
+    return dataclasses.replace(packet, **changes)
+
+
+def _check_written(packet: Any, want: dict[str, Any]) -> list[str]:
+    """A held packet written as a TNC2 line and an AX.25 frame (or the refusal each writer gives)."""
+    packet = _readdressed(packet, want.get("header"))
+    out: list[str] = []
+    for name, writer, key in (("tnc2", packet.to_tnc2, "tnc2"), ("ax25", packet.to_ax25, "ax25_hex")):
+        if key not in want and f"{name}_refusal" not in want:
+            continue
+        try:
+            written: bytes | None = writer()
+        except EncodeError as e:
+            if f"{name}_refusal" not in want:
+                out.append(f"{name} refused: {e}")
+            else:
+                out.extend(_refusal_differences(want[f"{name}_refusal"], e))
+            continue
+        if f"{name}_refusal" in want:
+            out.append(f"{name}: expected a refusal, it wrote {written!r}")
+        else:
+            expected = want[key].encode("utf-8") if key == "tnc2" else bytes.fromhex(want[key])
+            if written != expected:
+                out.append(f"{name} wrote {written!r}, expected {expected!r}")
+    return out
+
+
+def check_pass_through(case: dict[str, Any]) -> list[str]:
+    """The lenient packet written back as a program holds it: its TNC2 line and AX.25 frame (or the
+    refusal each writer gives) as ``pass_through`` says, under the case's ``header`` when it gives one."""
+    outcome = decode_case(case, ParseOptions.lenient())
+    assert outcome.packet is not None
+    return _check_written(outcome.packet, case["pass_through"])
+
+
+def check_pass_through_inner(case: dict[str, Any]) -> list[str]:
+    """The same for a third-party packet's inner packet, taken out of the outer one and written on its own."""
+    outcome = decode_case(case, ParseOptions.lenient())
+    assert outcome.packet is not None
+    data = outcome.packet.data
+    assert isinstance(data, ThirdParty)
+    return _check_written(data.packet, case["pass_through_inner"])
 
 
 CHECKS = {
@@ -345,6 +427,8 @@ CHECKS = {
     "reencode": check_reencode,
     "encode": check_encode,
     "build": check_build,
+    "pass_through": check_pass_through,
+    "pass_through_inner": check_pass_through_inner,
 }
 
 
@@ -358,4 +442,8 @@ def checks_for(case: dict[str, Any]) -> list[str]:
         names.append("tolerance")
     if "reencode" in case:
         names.append("reencode")
+    if "pass_through" in case:
+        names.append("pass_through")
+    if "pass_through_inner" in case:
+        names.append("pass_through_inner")
     return names

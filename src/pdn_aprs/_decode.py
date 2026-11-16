@@ -13,10 +13,10 @@ from typing import Any, NoReturn
 
 from . import _util
 from ._comment import (
+    _ALTITUDE,
     CommentParts,
     lift_comment,
     lift_telemetry_dao,
-    lifted_places,
     parse_extension,
     trailing_lifted_start,
 )
@@ -192,16 +192,14 @@ def parse_tnc2_header(header: str, ctx: Ctx, *, third_party: bool = False) -> tu
     elif not _ADDRESS.match(destination):
         bad(C.INVALID_ADDRESS)
     calls: list[str] = []
-    empty = False
     for entry in parts[1:]:
         if not entry:
-            empty = True
+            # a defect of one entry is listed once for each
+            defect(C.EMPTY_PATH_ENTRY)
             continue
         if not _ADDRESS.match(entry[:-1] if entry.endswith("*") else entry):
             bad(C.INVALID_ADDRESS)
         calls.append(entry)
-    if empty:
-        defect(C.EMPTY_PATH_ENTRY)
     # entries up to the last one marked * are used
     stars = [i for i, call in enumerate(calls) if call.endswith("*")]
     if len(stars) > 1:
@@ -296,8 +294,9 @@ def decode_ax25(frame: bytes, options: ParseOptions = _LENIENT) -> Packet:
     if not destination:
         _header_defect(ctx, C.EMPTY_DESTINATION)
     digis = [_ax25_address(ctx, a) for a in addresses[2:]]
-    if any(not name for name, _ in digis):
-        _header_defect(ctx, C.EMPTY_PATH_ENTRY)
+    for name, _ in digis:
+        if not name:
+            _header_defect(ctx, C.EMPTY_PATH_ENTRY)  # once for each empty entry
     digis = [(name, used) for name, used in digis if name]
     last = max((j for j, (_, used) in enumerate(digis) if used), default=-1)
     path = tuple(PathEntry(name, j <= last) for j, (name, _) in enumerate(digis))
@@ -527,6 +526,9 @@ def _position(s: str, destination: str, ctx: Ctx) -> AprsData:
             if not timestamp.is_valid:
                 ctx.defect(C.INVALID_TIMESTAMP)
             pos = 8
+        elif s[7:8] in ("z", "/", "h") and "0" <= s[8:9] <= "9" and _position_decodes(s, 8, ctx):
+            ctx.defect(C.MALFORMED_TIMESTAMP)
+            pos = 8
         elif _position_decodes(s, 1, ctx):
             ctx.defect(C.MALFORMED_TIMESTAMP)
         elif _position_decodes(s, 8, ctx):
@@ -676,11 +678,12 @@ def _weather_report(rest: str, p: Pos, held: str | None, ctx: Ctx, fields: dict[
         # wind that was not in the cs bytes gets the default compression type
         fields["compression"] = CompressionType()
     parts = CommentParts()
-    text = lift_telemetry_dao(result.text, parts)
+    frags = lift_telemetry_dao(result.text, parts)
     if parts.dao is not None and p.ambiguity:
         # elements lifted out of the comment are met before the text left over is judged
         ctx.defect(C.DAO_WITH_AMBIGUITY)
-    text = weather_tail(text, ctx, weather)
+    # a software type and unit stand whole in one fragment, not across a lifted element
+    text = weather_tail(frags.joined(), ctx, weather, whole=sum(1 for t in frags.texts if t) < 2)
     if text[:1] in (" ", "/"):
         text = text[1:]
     parts.comment = text
@@ -940,45 +943,39 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         altitude = _util.base91_value(rest[:3]) - 10000
         rest = rest[4:]
     locator: str | None = None
+    no_space = False
     loc = _mic_e_locator(rest)
     if loc is not None:
         locator, consumed = loc
         rest = rest[consumed:]
-        # base-91 telemetry and a !DAO! are lifted out of the status text before the locator is
-        # read, so a locator followed straight by either has no missing space (vectors ruling F16)
-        if rest and rest[0] != " " and lift_telemetry_dao(rest, CommentParts())[:1] not in ("", " "):
-            ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
-        elif rest[:1] == " ":
+        # a space straight after the locator separates it; with none, the space is judged on the
+        # decoder's own lifting below (vectors README, Mic-E)
+        if rest[:1] == " ":
             rest = rest[1:]
+        else:
+            no_space = bool(rest)
     p = Pos(lat, lon, Symbol(table, code), ambiguity, False, None)
     ext = parse_extension(rest, p.symbol, ctx, mic_e=True)
     ext_kind: str | None = None
     if ext is not None:
+        if no_space:
+            # a PHG or RNG straight after the locator is read in the separator's place
+            ctx.defect(C.MISSING_SPACE_AFTER_LOCATOR)
+            no_space = False
         ext_kind, consumed, values = ext
         fields.update(values)
         rest = rest[consumed:]
     # an altitude later in the text is looked for once a data extension at the start is lifted,
-    # so that its bytes are never read as one (0PH} in PHG3330PH})
+    # so that its bytes are never read as one (0PH} in PHG3330PH}); a strict decoder reads it as
+    # text and nothing joins into one
     cuts: tuple[int, ...] = ()
     if altitude is None:
-        found = _MICE_ALTITUDE.search(rest)
+        found = _later_mic_e_altitude(rest)
         if found is not None and ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
             ctx.warn(C.MIC_E_ALTITUDE_NOT_FIRST)
             altitude = _util.base91_value(found.group()[:3]) - 10000
             rest = rest[: found.start()] + rest[found.end() :]
             cuts = (found.start(),)
-        elif not ctx.tolerates(C.MIC_E_ALTITUDE_NOT_FIRST):
-            # the altitude is looked for before telemetry and the !DAO! are lifted; left as text,
-            # lifting them must not join the bytes either side of a place they came from into
-            # one. Only with a later altitude to decline; with none, strict reads as lenient
-            # (vectors README, Mic-E)
-            left, places = lifted_places(rest)
-            if found is not None and any(
-                _MICE_ALTITUDE.match(left, i) and i < place < i + 4
-                for place in places
-                for i in range(max(place - 3, 0), place)
-            ):
-                ctx.defect(C.MIC_E_ALTITUDE_NOT_FIRST)
     if altitude is not None:
         fields["altitude_feet"] = altitude * _util.FEET_PER_METRE
     parts = lift_comment(
@@ -987,6 +984,7 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         symbol=p.symbol,
         late_extensions=ext_kind not in ("phg", "range", "dfs"),
         cuts=cuts,
+        after_locator=no_space,
     )
     _apply_parts(parts, p, ctx, fields)
     return MicEReport(
@@ -1000,6 +998,28 @@ def _mic_e(s: str, destination: str, ctx: Ctx) -> AprsData:
         destination_ssid=ssid,
         **fields,
     )
+
+
+def _later_mic_e_altitude(text: str) -> re.Match[str] | None:
+    """The first run of three base-91 characters and ``}`` in ``text`` that shares no byte with a
+    ``/A=`` altitude standing whole as sent (as a locator's bytes are never used at the start).
+    One pass over the altitudes and one over the candidates, so a long run of either is linear."""
+    if "}" not in text:
+        return None
+    spans = [m.span() for m in _ALTITUDE.finditer(text)] if "/A=" in text else []
+    pos = 0
+    k = 0
+    while True:
+        found = _MICE_ALTITUDE.search(text, pos)
+        if found is None:
+            return None
+        start, end = found.span()
+        while k < len(spans) and spans[k][1] <= start:
+            k += 1
+        if k < len(spans) and spans[k][0] < end:
+            pos = start + 1
+            continue
+        return found
 
 
 def _mic_e_locator(text: str) -> tuple[str, int] | None:

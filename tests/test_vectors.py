@@ -9,7 +9,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conformance import CHECKS, VECTORS, checks_for, load_cases, load_known_differences
+from conformance import (
+    CHECKS,
+    VECTORS,
+    checks_for,
+    lenient_single_tolerance,
+    load_cases,
+    load_known_differences,
+)
 
 if not (VECTORS / "cases").is_dir():
     pytest.skip("the vectors submodule is not checked out (git submodule update --init)", allow_module_level=True)
@@ -49,8 +56,21 @@ def test_strict(case: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("case", _params("tolerance"))
 def test_tolerance(case: dict[str, Any]) -> None:
-    """Turning off only the one tolerance a case used gives the ``strict`` result."""
+    """Turning off only the one tolerance a case used gives the ``strict`` result (or, where strict
+    is rejected by another code, a reading that warns of that code)."""
     _run("tolerance", case)
+
+
+def test_tolerance_check_runs_on_every_case_with_one_tolerance() -> None:
+    """No case is skipped: the check runs on every case whose lenient diagnostics name exactly one tolerable code."""
+    candidates = [c for c in CASES if "encode" not in c["input"] and "build" not in c["input"]]
+    named = [c for c in candidates if lenient_single_tolerance(c) is not None]
+    ran = [c for c in named if "tolerance" in checks_for(c)]
+    print(f"tolerance check runs on {len(ran)} of {len(named)} cases")
+    assert named
+    assert len(ran) == len(named)
+    skipped_known = [c["id"] for c in ran if f"{c['id']}::tolerance" in KNOWN]
+    assert not skipped_known
 
 
 @pytest.mark.parametrize("case", _params("reencode"))
@@ -70,3 +90,15 @@ def test_encode(case: dict[str, Any]) -> None:
 def test_build(case: dict[str, Any]) -> None:
     """Build cases: the builder gives the TNC2 line, or the refusal, the case names."""
     _run("build", case)
+
+
+@pytest.mark.parametrize("case", _params("pass_through"))
+def test_pass_through(case: dict[str, Any]) -> None:
+    """Pass-through cases: the lenient packet written back as a TNC2 line and an AX.25 frame, or the refusal."""
+    _run("pass_through", case)
+
+
+@pytest.mark.parametrize("case", _params("pass_through_inner"))
+def test_pass_through_inner(case: dict[str, Any]) -> None:
+    """The inner packet of a third-party packet written on its own, or the refusal, as the case says."""
+    _run("pass_through_inner", case)
