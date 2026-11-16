@@ -205,30 +205,47 @@ class _Faults:
             raise min(self.found, key=_rank)
 
 
-def _has_nonfinite(value: Any) -> bool:
-    """A NaN or infinity anywhere in ``value``, a field the report has no place for and a
-    third-party packet's inner data included: its code is decided by the value alone."""
+_NUMERIC_TYPE = re.compile(r"\b(?:int|float)\b")
+
+
+@functools.cache
+def _numeric_fields(cls: type) -> frozenset[str]:
+    """The names of the fields of a data class that hold a number (or numbers): their annotation says
+    ``int`` or ``float``."""
+    return frozenset(f.name for f in dataclasses.fields(cls) if _NUMERIC_TYPE.search(str(f.type)))
+
+
+def _has_nonfinite(value: Any, numeric: bool = False) -> bool:
+    """A value that is not a number anywhere in ``value``: a NaN or infinity, or a bool (which is not a
+    number here) in a numeric field. A field the report has no place for and a third-party packet's
+    inner data are included: the code is decided by the value alone."""
+    if isinstance(value, bool):
+        return numeric
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
-        return any(_has_nonfinite(v) for v in value)
+        return any(_has_nonfinite(v, numeric) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value))
+        names = _numeric_fields(type(value))
+        return any(_has_nonfinite(getattr(value, f.name), f.name in names) for f in dataclasses.fields(value))
     return False
 
 
-def _finite(value: Any) -> Any:
-    """``value`` with every NaN or infinity in it replaced by 0.0."""
+def _finite(value: Any, numeric: bool = False) -> Any:
+    """``value`` with every NaN or infinity, and every bool in a numeric field, replaced by 0.0."""
+    if isinstance(value, bool):
+        return 0.0 if numeric else value
     if isinstance(value, float):
         return value if math.isfinite(value) else 0.0
     if isinstance(value, tuple):
-        return tuple(_finite(v) for v in value)
+        return tuple(_finite(v, numeric) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        names = _numeric_fields(type(value))
         changes = {}
         for fld in dataclasses.fields(value):
             old = getattr(value, fld.name)
-            new = _finite(old)
-            if new is not old and new != old:
+            new = _finite(old, fld.name in names)
+            if new is not old and (new != old or isinstance(old, bool)):
                 changes[fld.name] = new
         return dataclasses.replace(value, **changes) if changes else value
     return value
@@ -253,7 +270,7 @@ def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
     if _rank(e) > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
-        return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
+        return EncodeError(f"{e} (a value is not a finite number)", RefusalCode.NOT_A_NUMBER)
     return e
 
 
@@ -1881,9 +1898,10 @@ def _third_party(data: ThirdParty) -> _Forms:
         # the original information field must not be changed (APRS12c ch. 17), even when empty
         info = inner.info
         destination = inner.destination
-        if not _reads_as_given(inner.data, info, destination):
+        why = _reads_as_given(inner)
+        if why is not None:
             raise ReadBackError(
-                "the inner field would read as other data under its destination", RefusalCode.NOT_ENCODABLE
+                f"the inner data and its information field disagree under its header: {why}", RefusalCode.NOT_ENCODABLE
             )
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
@@ -2021,7 +2039,7 @@ def _encode_with_nan_rule(data: Any, encoder: Callable[[Any], _Forms]) -> _Writt
         if _has_nonfinite(data):
             # a NaN or infinity in any numeric field, at any depth, whether or not the encoder writes the
             # number: refused up front, unless a code that comes before it applies to the rest
-            raise _nan_or_earlier(data, encoder, "a value is NaN or infinite")
+            raise _nan_or_earlier(data, encoder, "a value is not a finite number")
         return _run(data, encoder)
     except EncodeError as e:
         raise _nan_rule(data, e) from None
@@ -2130,7 +2148,11 @@ def _build_packet(
     written = _write(data, mic_e_first=mic_e_first)
     if isinstance(data, MicEReport):
         destination = written.destination
-    return Packet(source, destination, entries, written.info, data)
+    packet = Packet(source, destination, entries, written.info, data)
+    # the data holds the values as given, which the bytes hold rounded: a later read-back of the held
+    # field allows that rounding, and only for a packet built here
+    object.__setattr__(packet, "_built", True)
+    return packet
 
 
 def _path_entry(entry: str | PathEntry) -> PathEntry:

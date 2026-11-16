@@ -43,7 +43,7 @@ from .model import (
 )
 from .options import _LENIENT
 
-__all__ = ["mismatch", "same_reading"]
+__all__ = ["held_mismatch", "mismatch"]
 
 _nearest = _util.round_half_away
 
@@ -88,15 +88,45 @@ def mismatch(data: AprsData, given: dict[str, Any], info: bytes, destination: st
     return _differences(expected, found, "")
 
 
-def same_reading(data: AprsData, info: bytes, destination: str) -> bool:
-    """Whether ``info`` read under ``destination`` is the data held: the decoded data compared with
-    ``data`` by the ordinary comparison (with its rounding allowance), diagnostics aside, since a held
-    packet carries its own."""
+def held_mismatch(data: AprsData, info: bytes, destination: str, *, built: bool) -> str | None:
+    """Why the information field held with ``data``, read under ``destination``, is not that data, or
+    None when it is (README, Read-back: a held field is compared with the held data down to the level
+    the held data reached). The data of a packet decoded from bytes is compared exactly; the data of a
+    packet the library built from values (``built``) holds them as given, so the ordinary comparison's
+    rounding allowance applies. Diagnostics are the held packet's own and are not compared at the top."""
     decoded = decode_info(info, destination, Ctx(_LENIENT))
     found = to_neutral(decoded)
     expected = _clone(to_neutral(data))
-    _prepare(expected, found, decoded)
-    return _differences(expected, found, "") is None
+    if built:
+        _prepare(expected, found, decoded)
+    _unread_levels(expected, found)
+    return _differences(expected, found, "")
+
+
+def _unread_levels(given: dict[str, Any], found: dict[str, Any]) -> None:
+    """A third-party level held as unrecognized because a fifth ``}`` was not read matches whatever
+    the field decodes to on its own, so the nest taken out of its outer packet reads as held."""
+    while given.get("type") == "third-party" and found.get("type") == "third-party":
+        packet, inner = given.get("packet"), found.get("packet")
+        if not isinstance(packet, dict) or not isinstance(inner, dict):
+            return
+        data = packet.get("data")
+        if (
+            isinstance(data, dict)
+            and data.get("type") == "unrecognized"
+            and data.get("reason") == "malformed"
+            and "error:invalid-third-party" in [str(d) for d in packet.get("diagnostics", [])]
+        ):
+            for key in ("data", "diagnostics"):
+                if key in inner:
+                    packet[key] = inner[key]
+                else:
+                    packet.pop(key, None)
+            return
+        below, found_below = packet.get("data"), inner.get("data")
+        if not isinstance(below, dict) or not isinstance(found_below, dict):
+            return
+        given, found = below, found_below
 
 
 # ---------------------------------------------------------------- comparing
@@ -198,9 +228,6 @@ def _third_party(given: dict[str, Any], found: dict[str, Any], decoded: ThirdPar
         return
     data, found_data = packet.get("data"), inner.get("data")
     if isinstance(data, dict) and isinstance(found_data, dict):
-        if data.get("type") == "mic-e":
-            # a Mic-E report's destination is computed from the data, and read back through the data
-            packet["destination"] = inner.get("destination", packet.get("destination"))
         _prepare(data, found_data, decoded.packet.data)
 
 

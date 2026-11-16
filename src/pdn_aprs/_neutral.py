@@ -92,7 +92,9 @@ class NeutralFormError(AprsError):
     """The neutral form holds something the data model cannot."""
 
 
-_SKIP = frozenset({"analog_text", "coefficients_text", "latitude_text", "longitude_text", "altitude_in_comment"})
+_SKIP = frozenset(
+    {"analog_text", "coefficients_text", "latitude_text", "longitude_text", "altitude_in_comment", "_built"}
+)
 _KEEP_EMPTY = frozenset({"reply_ack"})
 _OMIT_ZERO = frozenset({"ambiguity", "destination_ssid"})
 

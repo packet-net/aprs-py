@@ -3,11 +3,11 @@ diagnostics the decoder raised."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING
 
 from . import _util
-from .diagnostics import Diagnostic, Severity
+from .diagnostics import Diagnostic, DiagnosticCode, Severity
 from .errors import EncodeError, RefusalCode
 
 if TYPE_CHECKING:
@@ -22,25 +22,33 @@ def _is_q_construct(call: str) -> bool:
     return len(call) == 3 and call.startswith("qA") and call[2].isascii() and call[2].isalpha()
 
 
-_MIC_E_DATA_TYPES = ("`", "'", "\x1c", "\x1d")
-"""The data type identifiers whose reading depends on the destination: the Mic-E ones."""
+def _reads_as_given(packet: Packet) -> str | None:
+    """Why the information field of ``packet`` read under its destination is not the data held with
+    it, or None when it is. The header changes a reading only through a Mic-E destination, but data,
+    header and information field held apart may disagree in any way (a position whose latitude was
+    changed, an inner packet whose destination was changed at any depth, other text, other bytes), so
+    every field is read again and compared with the held data (the read-back's comparison, exact for a
+    packet decoded from bytes, with its rounding allowance only for one built from values). Nothing
+    computed is put in place of a value held. A third-party packet held as unrecognized for an unread
+    fifth ``}`` matches whatever its field decodes to on its own."""
+    from ._readback import held_mismatch
+    from .model import Unrecognized, UnrecognizedReason
 
-
-def _reads_as_given(data: AprsData, info: bytes, destination: str) -> bool:
-    """Whether ``info`` read under ``destination`` is the data given. The header changes a reading
-    only through a Mic-E destination, so only a field that starts with a Mic-E data type identifier
-    is read again, and the decoded data is compared with ``data`` by the read-back's own comparison
-    (rounding allowance included): raw bytes that would become a Mic-E position under it, or a Mic-E
-    report whose latitude digits, message, N/S, longitude offset, W/E or SSID would change, do not
-    read as given."""
-    if not info or chr(info[0]) not in _MIC_E_DATA_TYPES:
-        return True
-    from ._readback import same_reading
-
+    data = packet.data
+    if (
+        packet.third_party
+        and packet.info.startswith(b"}")
+        and isinstance(data, Unrecognized)
+        and data.reason is UnrecognizedReason.MALFORMED
+        and any(
+            d.code is DiagnosticCode.INVALID_THIRD_PARTY and d.severity is Severity.ERROR for d in packet.diagnostics
+        )
+    ):
+        return None
     try:
-        return same_reading(data, info, destination)
+        return held_mismatch(data, packet.info, packet.destination, built=packet._built)
     except (TypeError, ValueError, ArithmeticError):
-        return False
+        return "the data cannot be read back"
 
 
 def _tnc2_path(path: tuple[PathEntry, ...]) -> str:
@@ -102,6 +110,7 @@ class Packet:
     data: AprsData
     diagnostics: tuple[Diagnostic, ...] = ()
     third_party: bool = False
+    _built: bool = field(default=False, repr=False, compare=False, kw_only=True)
 
     @property
     def q_construct(self) -> QConstruct | None:
@@ -158,9 +167,10 @@ class Packet:
         read-back of the form written."""
         from ._decode import _ADDRESS
 
-        if not _reads_as_given(self.data, self.info, self.destination):
+        why = _reads_as_given(self)
+        if why is not None:
             raise EncodeError(
-                "the information field would read as other data under this destination", RefusalCode.NOT_ENCODABLE
+                f"the data and the information field disagree under this header: {why}", RefusalCode.NOT_ENCODABLE
             )
         calls = (self.source, *(p.address for p in self.path))
         if not all(_ADDRESS.match(call) for call in calls) or (
@@ -259,7 +269,7 @@ class Packet:
     @_util.depth_capped
     def __repr__(self) -> str:
         """The packet as held, for display: total, showing ``...`` for third-party nesting thousands deep."""
-        shown = ", ".join(f"{f.name}={getattr(self, f.name)!r}" for f in fields(self))
+        shown = ", ".join(f"{f.name}={getattr(self, f.name)!r}" for f in fields(self) if f.repr)
         return f"Packet({shown})"
 
     def __str__(self) -> str:

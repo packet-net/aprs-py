@@ -305,14 +305,21 @@ def test_s4_the_encoder_has_no_class_that_marks_an_altitude() -> None:
     assert "mic_e_first" not in inspect.signature(aprs.encode_info).parameters
 
 
+def _frame(info: bytes) -> bytes:
+    """A frame from N0CALL to APZ001 carrying ``info``, for the data a program would hold for it."""
+    from pdn_aprs.packet import _ax25_address
+
+    return _ax25_address("APZ001", command=True) + _ax25_address("N0CALL", last=True) + b"\x03\xf0" + info
+
+
 def test_s5_a_line_ends_at_a_cr_or_lf_inside_the_information_field() -> None:
     for info in (b">a\rb", b">a\nb", b"\n>x", b">a\r\nb"):
-        held = aprs.Packet("N0CALL", "APZ001", (), info, aprs.StatusReport(text=""))
+        held = aprs.Packet("N0CALL", "APZ001", (), info, aprs.decode_ax25(_frame(info)).data)
         assert _code(held.to_tnc2) is RefusalCode.TNC2_CANNOT_CARRY
         assert held.to_ax25().endswith(info)
         assert held.to_kiss()
     for info in (b">ab\n", b">ab\r\n", b">ab\r"):
-        held = aprs.Packet("N0CALL", "APZ001", (), info, aprs.StatusReport(text=""))
+        held = aprs.Packet("N0CALL", "APZ001", (), info, aprs.decode_ax25(_frame(info)).data)
         assert held.to_tnc2() == b"N0CALL>APZ001:" + info
 
 
@@ -694,7 +701,7 @@ def test_r28_a_trailing_run_of_line_breaks_is_one_warning_and_a_pass_through_car
     assert held.data == aprs.StatusReport(text="hi")
     assert held.to_tnc2() == b"N0CALL>APZ001:>hi\r\n\r\n"
     assert aprs.decode_tnc2(b"N0CALL>APZ001:>h\ri\r\n").to_tnc2 is not None
-    inside = aprs.Packet("N0CALL", "APZ001", (), b">h\ri\r\n", aprs.StatusReport(text=""))
+    inside = aprs.Packet("N0CALL", "APZ001", (), b">h\ri\r\n", aprs.StatusReport(text="h\ri"))
     assert _code(inside.to_tnc2) is RefusalCode.TNC2_CANNOT_CARRY
 
 
