@@ -889,3 +889,33 @@ def test_inner_mic_e_with_a_nan_longitude_is_not_a_number_and_a_mismatch_comes_a
     assert _code(lambda: enc.encode_info(from_neutral({"type": "third-party", "packet": wrong}))) is (
         RefusalCode.VALUE_OUT_OF_RANGE
     )
+
+
+# ---------------------------------------------------------------- a defect of one entry is listed once for each
+
+
+def _codes(packet: aprs.Packet) -> list[str]:
+    return [str(d) for d in packet.diagnostics]
+
+
+def test_a_defect_of_one_path_entry_is_listed_once_for_each_and_a_judgement_of_the_whole_once() -> None:
+    assert _codes(aprs.decode_tnc2(b"N0CALL>APZ001,,A,,B:>x")).count("warning:empty-path-entry") == 2
+    assert _codes(aprs.decode_tnc2(b"N0CALL>APZ001,A,:>x")).count("warning:empty-path-entry") == 1
+    held = aprs.decode_tnc2(b"N0CALL>APRS:}X>Y,,A,,B:>x")
+    assert isinstance(held.data, aprs.ThirdParty)
+    assert _codes(held.data.packet).count("warning:empty-path-entry") == 2
+    # several used markers are one judgement of the path
+    assert _codes(aprs.decode_tnc2(b"N0CALL>APZ001,A*,B*,C*:>x")).count("warning:multiple-used-markers") == 1
+
+    # and in a frame, one for each empty address
+    def address(name: str, *, last: bool = False) -> bytes:
+        return bytes(ord(c) << 1 for c in name.ljust(6)) + bytes([0x60 | (1 if last else 0)])
+
+    frame = (
+        address("APZ001") + address("N0CALL") + address("") + address("WIDE1") + address("", last=True) + b"\x03\xf0>x"
+    )
+    assert _codes(aprs.decode_ax25(frame)).count("warning:empty-path-entry") == 2
+    # strict stops at the first defect it rejects by
+    with pytest.raises(aprs.HeaderError) as caught:
+        aprs.decode_tnc2(b"N0CALL>APZ001,,A,,B:>x", aprs.ParseOptions.strict())
+    assert len(caught.value.diagnostics) == 1

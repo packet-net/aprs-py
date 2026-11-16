@@ -192,16 +192,14 @@ def parse_tnc2_header(header: str, ctx: Ctx, *, third_party: bool = False) -> tu
     elif not _ADDRESS.match(destination):
         bad(C.INVALID_ADDRESS)
     calls: list[str] = []
-    empty = False
     for entry in parts[1:]:
         if not entry:
-            empty = True
+            # a defect of one entry is listed once for each
+            defect(C.EMPTY_PATH_ENTRY)
             continue
         if not _ADDRESS.match(entry[:-1] if entry.endswith("*") else entry):
             bad(C.INVALID_ADDRESS)
         calls.append(entry)
-    if empty:
-        defect(C.EMPTY_PATH_ENTRY)
     # entries up to the last one marked * are used
     stars = [i for i, call in enumerate(calls) if call.endswith("*")]
     if len(stars) > 1:
@@ -296,8 +294,9 @@ def decode_ax25(frame: bytes, options: ParseOptions = _LENIENT) -> Packet:
     if not destination:
         _header_defect(ctx, C.EMPTY_DESTINATION)
     digis = [_ax25_address(ctx, a) for a in addresses[2:]]
-    if any(not name for name, _ in digis):
-        _header_defect(ctx, C.EMPTY_PATH_ENTRY)
+    for name, _ in digis:
+        if not name:
+            _header_defect(ctx, C.EMPTY_PATH_ENTRY)  # once for each empty entry
     digis = [(name, used) for name, used in digis if name]
     last = max((j for j, (_, used) in enumerate(digis) if used), default=-1)
     path = tuple(PathEntry(name, j <= last) for j, (name, _) in enumerate(digis))
