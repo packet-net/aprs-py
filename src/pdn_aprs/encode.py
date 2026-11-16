@@ -133,6 +133,16 @@ def _refuse(code: RefusalCode, why: str) -> EncodeError:
     return EncodeError(why, code)
 
 
+class ReadBackError(EncodeError):
+    """A refusal the read-back found (an inner Mic-E destination other than the one its data computes):
+    it ranks with the read-back's codes, after every rule check, whatever code it carries."""
+
+
+def _rank(e: EncodeError) -> int:
+    """Where a refusal stands in the Refusal reasons order."""
+    return _PRIORITY[RefusalCode.DOES_NOT_READ_BACK] if isinstance(e, ReadBackError) else _PRIORITY[e.code]
+
+
 class SizeError(EncodeError):
     """The information field of otherwise sound data is over 256 bytes: the last check there is,
     so a builder that noted a fault of its own (a left-out field) names that fault instead."""
@@ -192,32 +202,19 @@ class _Faults:
 
     def finish(self) -> None:
         if self.found:
-            raise min(self.found, key=lambda e: _PRIORITY[e.code])
+            raise min(self.found, key=_rank)
 
 
 def _has_nonfinite(value: Any) -> bool:
-    """A NaN or infinity anywhere in ``value``, except in a field that has no place in the data
-    holding it (a third-party packet's inner data included)."""
+    """A NaN or infinity anywhere in ``value``, a field the report has no place for and a
+    third-party packet's inner data included: its code is decided by the value alone."""
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, (tuple, list)):
         return any(_has_nonfinite(v) for v in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        ignore = _no_place(value)
-        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value) if f.name not in ignore)
+        return any(_has_nonfinite(getattr(value, f.name)) for f in dataclasses.fields(value))
     return False
-
-
-def _no_place(data: Any) -> frozenset[str]:
-    """The fields of ``data`` that have no place in it, whose own checks (a NaN among them) do
-    not run: a weather report has no comment to carry an altitude, telemetry or a frequency."""
-    if isinstance(data, PositionedData) and data.weather is not None:
-        gga = data.compressed and data.compression is not None and data.compression.source is CompressionSource.GGA
-        names = {"telemetry", "frequency"}
-        if not gga:
-            names.add("altitude_feet")
-        return frozenset(names)
-    return frozenset()
 
 
 def _finite(value: Any) -> Any:
@@ -245,7 +242,7 @@ def _nan_or_earlier(data: Any, encoder: Callable[[Any], _Forms], why: str) -> En
     try:
         _run(_finite(data), encoder)
     except EncodeError as e:
-        if _PRIORITY[e.code] < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
+        if _rank(e) < _PRIORITY[RefusalCode.NOT_A_NUMBER]:
             return e
     except (ValueError, OverflowError, TypeError, AttributeError):
         pass
@@ -255,7 +252,7 @@ def _nan_or_earlier(data: Any, encoder: Callable[[Any], _Forms], why: str) -> En
 def _nan_rule(data: Any, e: EncodeError) -> EncodeError:
     """A NaN or an infinity anywhere in the data is ``not-a-number`` wherever the refusal came
     from, unless a code that comes before it applies."""
-    if _PRIORITY[e.code] > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
+    if _rank(e) > _PRIORITY[RefusalCode.NOT_A_NUMBER] and _has_nonfinite(data):
         return EncodeError(f"{e} (a value is NaN or infinite)", RefusalCode.NOT_A_NUMBER)
     return e
 
@@ -1867,7 +1864,7 @@ def _third_party(data: ThirdParty) -> _Forms:
         try:
             written = _write(inner.data)
         except EncodeError as e:
-            if given and _PRIORITY[e.code] > _PRIORITY[RefusalCode.VALUE_HAS_NO_FORM]:
+            if given and _rank(e) > _PRIORITY[RefusalCode.VALUE_HAS_NO_FORM]:
                 raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY) from None
             raise
         if given:
@@ -1877,13 +1874,17 @@ def _third_party(data: ThirdParty) -> _Forms:
         if isinstance(inner.data, MicEReport) and inner.destination != written.destination:
             # written under another destination it would not be this report, and the computed one is not
             # the one given
-            raise _refuse(RefusalCode.NOT_ENCODABLE, "inner Mic-E data is written under the destination it computes")
+            raise ReadBackError(
+                "inner Mic-E data is written under the destination it computes", RefusalCode.NOT_ENCODABLE
+            )
     else:
         # the original information field must not be changed (APRS12c ch. 17), even when empty
         info = inner.info
         destination = inner.destination
         if not _reads_as_given(inner.data, info, destination):
-            raise _refuse(RefusalCode.NOT_ENCODABLE, "the inner field would read as other data under its destination")
+            raise ReadBackError(
+                "the inner field would read as other data under its destination", RefusalCode.NOT_ENCODABLE
+            )
     path = _tnc2_path(inner.path)
     header = f"{inner.source}>{destination}" + ("," + path if path else "")
     return _one(b"}" + header.encode("ascii") + b":" + info, free_text=False)
@@ -1999,7 +2000,7 @@ def _write(data: AprsData, *, mic_e_first: bool = False) -> _Written:
         try:
             _encode_with_nan_rule(_normalise(data, _text_without_surrogates), encoder)
         except EncodeError as e2:
-            if _PRIORITY[e2.code] < _PRIORITY[RefusalCode.TEXT_READS_AS_FIELD]:
+            if _rank(e2) < _PRIORITY[RefusalCode.TEXT_READS_AS_FIELD]:
                 raise e2 from None
         except (ValueError, OverflowError):
             pass

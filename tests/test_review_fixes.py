@@ -200,7 +200,7 @@ def test_telemetry_sequence_type_error_names_the_type() -> None:
         _ST.telemetry(Decimal(1), (1, 2, 3, 4, 5))  # type: ignore[arg-type]
 
 
-def test_run_2_non_finite_value_with_no_place_and_gga_altitude() -> None:
+def test_run_2_non_finite_value_with_no_place_is_not_a_number_and_gga_altitude() -> None:
     from pdn_aprs._neutral import from_neutral
 
     weather = {"wind_gust_mph": 0, "temperature_f": 50}
@@ -216,7 +216,7 @@ def test_run_2_non_finite_value_with_no_place_and_gga_altitude() -> None:
     third = {"type": "third-party", "packet": {"source": "A", "destination": "B", "data": inner}}
     with pytest.raises(EncodeError) as e:
         encode_info(from_neutral(third))
-    assert e.value.code is RefusalCode.FIELD_NOT_ALLOWED
+    assert e.value.code is RefusalCode.NOT_A_NUMBER
     gga = {
         "type": "object",
         "name": "147.345",

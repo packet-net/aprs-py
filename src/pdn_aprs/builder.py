@@ -32,7 +32,7 @@ from fractions import Fraction
 from typing import Any, Literal, TypedDict, TypeVar
 
 from ._util import FEET_PER_METRE, KMH_PER_KNOT, MM_PER_INCH, round_half_away
-from .encode import _PRIORITY, DEFAULT_DESTINATION, SizeError, _build_packet, _real
+from .encode import DEFAULT_DESTINATION, SizeError, _build_packet, _rank, _real
 from .errors import EncodeError, RefusalCode
 from .model import (
     Ack,
@@ -119,7 +119,7 @@ def _one_unit_each(*pairs: tuple[str, str]) -> Callable[[_F], _F]:
                 except EncodeError as e:
                     found.append(e)
             # a result refused only for the information field's size counts after every other code
-            raise min(found, key=lambda e: (isinstance(e, SizeError), _PRIORITY[e.code]))
+            raise min(found, key=lambda e: (isinstance(e, SizeError), _rank(e)))
 
         return wrapper  # type: ignore[return-value]
 
@@ -303,12 +303,12 @@ class Station:
             )
         except EncodeError as e:
             if faults:
-                from .encode import _PRIORITY, SizeError
+                from .encode import SizeError
 
                 # the size is the last check, on bytes actually written: a fault the builder noted
                 # means the bytes are not the ones the program asked for, so it is not measured
                 found = faults if isinstance(e, SizeError) else [e, *faults]
-                raise min(found, key=lambda x: _PRIORITY[x.code]) from None
+                raise min(found, key=_rank) from None
             raise
         if faults:
             raise faults[0]

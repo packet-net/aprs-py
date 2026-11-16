@@ -846,3 +846,46 @@ def test_a_builder_mic_e_packet_with_a_latitude_between_steps_and_no_ssid_is_wri
     with_ssid = aprs.Station("N0CALL", symbol=aprs.Symbol.CAR).mic_e(51.4575, -0.9811)
     assert isinstance(with_ssid.data, aprs.MicEReport)
     assert _code(replace(with_ssid, destination=with_ssid.destination + "-3").to_tnc2) is RefusalCode.NOT_ENCODABLE
+
+
+# ---------------------------------------------------------------- the differential run's findings
+
+
+def test_a_non_finite_number_in_a_field_the_report_has_no_place_for_is_not_a_number() -> None:
+    weather = {"wind_direction_degrees": 220, "wind_speed_mph": 4, "temperature_f": 77}
+    base = {"type": "position", "latitude": -62.7, "longitude": 109.9, "symbol": "/_", "weather": weather}
+    nan, inf = float("nan"), float("inf")
+    for extra in (
+        {"altitude_feet": nan, "comment": "\n"},
+        {"telemetry": {"sequence": 8281, "analog": [nan]}},
+        {"telemetry": {"sequence": 1, "analog": [inf]}},
+        {"frequency": {"mhz": inf}},
+    ):
+        assert _code(lambda extra=extra: enc.encode_info(from_neutral(base | extra))) is RefusalCode.NOT_A_NUMBER
+    # a code that comes first in the order still wins
+    named = base | {"altitude_feet": nan}
+    assert _code(lambda: enc.encode_info(from_neutral(named | {"timestamp": "bad"}))) is RefusalCode.INVALID_TIMESTAMP
+
+
+def test_inner_mic_e_with_a_nan_longitude_is_not_a_number_and_a_mismatch_comes_after_the_rules() -> None:
+    inner = {
+        "type": "mic-e",
+        "mic_e_message": "returning",
+        "latitude": 33.42733333333334,
+        "longitude": float("nan"),
+        "symbol": "/j",
+        "course_degrees": 88,
+        "speed_knots": 36,
+    }
+    wrapped = {"type": "third-party", "packet": {"source": "N0CALL", "destination": "S32U6T", "data": inner}}
+    assert _code(lambda: enc.encode_info(from_neutral(wrapped))) is RefusalCode.NOT_A_NUMBER
+    # a mismatch found by the read-back loses to an inner header fault and to a data rule
+    finite = inner | {"longitude": -12.129, "latitude": -90.0}
+    bad_path = {"source": "N0CALL", "destination": "S32U6T", "data": finite, "path": ["TC+IP*"]}
+    assert _code(lambda: enc.encode_info(from_neutral({"type": "third-party", "packet": bad_path}))) is (
+        RefusalCode.INVALID_THIRD_PARTY_HEADER
+    )
+    wrong = {"source": "N0CALL", "destination": "APRS", "data": inner | {"longitude": -12.129, "course_degrees": 400}}
+    assert _code(lambda: enc.encode_info(from_neutral({"type": "third-party", "packet": wrong}))) is (
+        RefusalCode.VALUE_OUT_OF_RANGE
+    )
