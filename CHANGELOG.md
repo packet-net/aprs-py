@@ -26,7 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - A telemetry value or coefficient given as a whole number past 2^53 is written as the shortest decimal of the same double (`-9223372036854775808` as `-9223372036854776000`), not digit for digit, and the read-back compares such numbers as doubles.
 - A weather extra field written beside a position or weather report that reads back as a software type and unit (`A` then `A00`, `x` then `Dvs`) is `text-reads-as-field`, not `does-not-read-back`; a control character in a weather extra field, software type or unit is `invalid-character`; a software type without a unit, or a unit without a software type, is `missing-field`.
 - `mic_e_destination` encodes and reads back the whole report, as `encode_info` does, and returns the destination it computed.
-- The dump tool (`tools/diff_dump.py`) writes `ax25` (hex, or `"refused"` with `ax25_refusal`) beside every build record, and `tnc2` as `"refused"` with `tnc2_refusal` in a decode record's API view where the packet's header does not read back. The vectors runner (`tests/conformance.py`) runs build cases with `"write": "ax25"` and decode cases with `pass_through`. The vectors submodule is at `1490ec9`.
+- The dump tool (`tools/diff_dump.py`) writes `ax25` (hex, or `"refused"` with `ax25_refusal`) beside every build record, and `tnc2` as `"refused"` with `tnc2_refusal` in a decode record's API view where the packet's header does not read back. The vectors runner (`tests/conformance.py`) runs build cases with `"write": "ax25"` and decode cases with `pass_through`. The vectors submodule is at `36fdfe7`.
 
 What the encoder and the packet writers now refuse, which they wrote before:
 
