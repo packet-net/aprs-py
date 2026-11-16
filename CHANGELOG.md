@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
 ### Changed
 
 - Every call that writes bytes from data now ends with one read-back, with no condition. `encode_info`, `mic_e_destination` and `build_packet` (and so every `Station` method) can return bytes only through it: each encoder offers the forms it can write (a comment as it is, after a `/`, after a space), and the one check decodes each form, leniently, under `N0CALL>APZ001` (for Mic-E, the destination it computed) and compares the result with the data given, for every report type, third-party, user-defined, test and Agrelo data included. The comparison is exact. The decode has no warning and no error, and an `info` only where the rules attach it to the form the data asks for (`obsolete-format` on positionless weather, raw weather, NMEA, a Maidenhead beacon and Mic-E Rev 0 telemetry; `mic-e-missing-device-type` on a Mic-E report; `invalid-query` and `invalid-telemetry-metadata` on a message). Every field of the data, at every depth, equals the decode's, and the decode has no field the data does not give. Only three differences are allowed: a number the format holds in steps reads back as the value given rounded once, as the Encoding rule rounds it, to the step of the form written; a value the form must carry where the data leaves it out (the default compression type, a Mic-E speed of 0, the fields an NMEA sentence determines); and empty and absent as one value, `null` and `false` in neutral data included. The bytes are read back before the size check, so bytes over 256 that do not read back are refused with the read-back's code.
@@ -292,7 +294,8 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/packet-net/aprs-py/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/packet-net/aprs-py/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/packet-net/aprs-py/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/packet-net/aprs-py/compare/v1.0.0...v1.0.1
