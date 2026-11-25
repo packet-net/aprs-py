@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Weather: text after the fields that starts like a field (a letter APRS12c defines followed by a digit, or `t` then `-` and a digit) is `weather-comment` text, not a software type and unit: `t2h35` after a repeated `t` is the comment `t2h35` (aprs-vectors#42). Data with such a software type and unit is refused `text-reads-as-field`. Vectors pinned at 1fed74c.
+
 ## [1.3.0] - 2026-11-16
 
 ### Changed

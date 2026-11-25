@@ -51,6 +51,10 @@ _WIND_SPEED: tuple[str, int, _Convert] = ("wind_speed_mph", 3, int)
 _SNOWFALL = "snow_24h_in"
 
 _SOFTWARE_UNIT = re.compile(r"([A-Za-z])([A-Za-z0-9_-]{2,4})\Z")
+# Text that starts like a field is not a software type and unit: a letter APRS12c defines
+# followed by a digit, or t followed by - and a digit (vectors interpretations.md, "Text after
+# the weather fields that starts like a field").
+_LIKE_A_FIELD = re.compile(r"[csgtrpPhbLl][0-9]|t-[0-9]")
 _EXTRA = re.compile(r"[0-9.-]+")
 _SNOW_VALUE = re.compile(r"[0-9.]{1,3}")
 
@@ -248,7 +252,7 @@ def weather_tail(rest: str, ctx: Ctx, values: dict[str, Any], *, whole: bool = T
     if not rest:
         return ""
     m = _SOFTWARE_UNIT.match(rest) if whole else None
-    if m and not m.group(2).isdigit():
+    if m and not m.group(2).isdigit() and not _LIKE_A_FIELD.match(rest):
         values["software"] = m.group(1)
         values["unit"] = m.group(2)
         return ""
