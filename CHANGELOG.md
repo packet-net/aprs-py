@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Weather: text after the fields that starts like a field (a letter APRS12c defines followed by a digit, or `t` then `-` and a digit) is `weather-comment` text, not a software type and unit: `t2h35` after a repeated `t` is the comment `t2h35` (aprs-vectors#42). Data with such a software type and unit is refused `text-reads-as-field`. Vectors pinned at 0c541da.
+- A third-party inner Mic-E report under a destination it does not compute is refused `not-encodable` even where its text would also read back changed (`text-reads-as-field`), as the refusal order says.
+
 ## [1.3.0] - 2026-11-16
 
 ### Changed
