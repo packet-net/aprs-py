@@ -4,9 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-25
+
 ### Changed
 
-- Weather: text after the fields that starts like a field (a letter APRS12c defines followed by a digit, or `t` then `-` and a digit) is `weather-comment` text, not a software type and unit: `t2h35` after a repeated `t` is the comment `t2h35` (aprs-vectors#42). Data with such a software type and unit is refused `text-reads-as-field`. Vectors pinned at 0c541da.
+- Weather: text after the fields that starts like a field (a letter APRS12c defines followed by a digit, or `t` then `-` and a digit) is `weather-comment` text, not a software type and unit: `t2h35` after a repeated `t` is the comment `t2h35` (aprs-vectors#42). Data with such a software type and unit is refused `text-reads-as-field`. Vectors pinned at 85c675b.
 - A third-party inner Mic-E report under a destination it does not compute is refused `not-encodable` even where its text would also read back changed (`text-reads-as-field`), as the refusal order says.
 
 ## [1.3.0] - 2026-11-16
@@ -299,7 +301,8 @@ First release.
 - The aprs-vectors conformance suite as a submodule: all 5,594 checks pass.
 - `tools/diff_dump.py`, the differential dump the vectors' `tools/compare.py` reads. On the 6,879,893-packet APRS-IS capture it agrees with aprs-rs and Packet.Aprs on every packet.
 
-[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/packet-net/aprs-py/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/packet-net/aprs-py/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/packet-net/aprs-py/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/packet-net/aprs-py/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/packet-net/aprs-py/compare/v1.0.1...v1.1.0

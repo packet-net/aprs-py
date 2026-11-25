@@ -76,7 +76,7 @@ from .options import ParseOptions
 from .packet import Packet, PathEntry, QConstruct
 from .symbols import Symbol
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 __all__ = [
     "DATABASE_VERSION",
