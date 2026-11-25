@@ -1883,6 +1883,16 @@ def _third_party(data: ThirdParty) -> _Forms:
         except EncodeError as e:
             if given and _rank(e) > _PRIORITY[RefusalCode.VALUE_HAS_NO_FORM]:
                 raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY) from None
+            # past every rule check, Mic-E data under a destination it does not compute is
+            # not-encodable, which the Refusal reasons order puts before what the read-back found
+            if (
+                isinstance(inner.data, MicEReport)
+                and _rank(e) >= _PRIORITY[RefusalCode.TEXT_READS_AS_FIELD]
+                and _mic_e_destination(inner.data, _Faults()) != inner.destination
+            ):
+                raise ReadBackError(
+                    "inner Mic-E data is written under the destination it computes", RefusalCode.NOT_ENCODABLE
+                ) from None
             raise
         if given:
             raise _refuse(RefusalCode.VALUE_HAS_NO_FORM, _NO_FORM_WHY)
